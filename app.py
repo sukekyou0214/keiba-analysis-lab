@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.14.6')
+st.title('🏇 競馬分析ラボ Ver.15')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -376,7 +376,12 @@ def prepare(data):
     if '日付' in data.columns:
         data['日付'] = pd.to_datetime(data['日付'], errors='coerce')
     # 手元Excelにも同じ分類を付け、数字の根拠がない場合は「不明」にする。
-    diff = data['前後半3F差']
+    # 前後半3Fの数値が妥当な範囲にあり、距離が1200m以上の時だけ分類する。
+    # 最初と最後の600mの比較であり、道中のペースは評価できない。
+    valid_pace = (data['前半3F'].between(29, 45) & data['後半3F'].between(29, 45)
+                  & data['距離_m'].ge(1200))
+    diff = (data['前半3F'] - data['後半3F']).where(valid_pace)
+    data['前後半3F差'] = diff
     data['推定ペース'] = '不明'
     data.loc[diff.notna() & diff.lt(-1.0), '推定ペース'] = 'ハイ寄り'
     data.loc[diff.notna() & diff.between(-1.0, 1.0), '推定ペース'] = 'ミドル寄り'
@@ -638,7 +643,7 @@ recent = st.selectbox('対象レース', ['直近5走', '直近10走', '直近15
 grade_filter = st.selectbox('レース格', ['全レース', '重賞のみ（G1・G2・G3）', 'G1のみ', 'その他（L・OP・条件戦など）'])
 st.caption('格付けが確認できない走は「不明」として保持。重賞・G1・その他の絞り込みから除外します。')
 pace_filter = st.selectbox('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'])
-st.caption('前半3Fと後半3Fの差が±1秒以内をミドル寄り、前半が1秒超速ければハイ寄り、遅ければスロー寄りとする簡易分類。公式のペース判定ではありません。距離や馬場条件で比較し、少数サンプルに注意してください。')
+st.caption('判定は前半600mと後半600mの差のみ（前半−後半）：−1秒未満＝前傾（ハイ寄り）、±1秒以内＝均衡（ミドル寄り）、＋1秒超＝後傾（スロー寄り）。道中のラップ、コース差、距離差は反映しない暫定分類です。')
 st.caption('脚質は4角位置と頭数から便宜的に推定。先頭（4角）＝逃げ確定ではなく、差し追込率は後方位置の割合です。')
 st.caption('集計順序：各馬の全成績から直近○走を確定 → 競馬場・馬場・距離・レース格・ペースで絞り込み。例：直近5走＋G1のみ＝直近5走の中にあるG1だけ。')
 counts = analysis_df['レース格'].value_counts()
@@ -675,16 +680,20 @@ if st.button('分析する', type='primary', use_container_width=True):
         grade_targets = {'重賞のみ（G1・G2・G3）': ['G1', 'G2', 'G3'],
                          'G1のみ': ['G1'], 'その他（L・OP・条件戦など）': ['その他']}
         filtered = filtered[filtered['レース格'].isin(grade_targets[grade_filter])]
+    # 比較用データはペース条件を掛ける直前に確保。距離条件はこの後両方に適用。
+    pace_compare_base = filtered.copy()
     if pace_filter != 'すべて':
         filtered = filtered[filtered['推定ペース'] == pace_filter]
     ranges = {'1200m以下': (0, 1200), '1201〜1600m': (1201, 1600), '1601〜1800m': (1601, 1800), '1801〜2200m': (1801, 2200), '2201〜2400m': (2201, 2400), '2401m以上': (2401, float('inf'))}
     if distance in ranges:
         filtered = filtered[filtered['距離_m'].between(*ranges[distance])]
+        pace_compare_base = pace_compare_base[pace_compare_base['距離_m'].between(*ranges[distance])]
     if mode == '馬を比較':
         if len(selected) < 2:
             st.warning('比較する馬を2頭以上選んでください。')
             st.stop()
         filtered = filtered[filtered['馬名'].isin(selected)]
+        pace_compare_base = pace_compare_base[pace_compare_base['馬名'].isin(selected)]
     st.caption(f'直近走数を先に適用：{len(base)}走 → 条件絞り込み後：{len(filtered)}走（対象 {filtered["馬名"].nunique()}頭）')
     if filtered.empty:
         st.warning('指定した直近走数の範囲内に、条件に一致するレースがありません。対象レースを直近10走・全走に広げて確認してください。')
@@ -759,17 +768,41 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.dataframe(used, hide_index=True, use_container_width=True)
         st.download_button('集計対象レース一覧をCSVで保存', data=used.to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
-    st.subheader('ペース別の成績と4角位置')
-    st.caption('下表は分析条件のうち推定ペース以外の条件にもとづく参考比較ではなく、現在の絞り込み結果のみを使用します。')
-    detail = filtered[filtered['推定ペース'].ne('不明')].copy()
+    st.subheader('ペース別の成績比較（Ver.15）')
+    st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
+    st.warning('これは前半・後半600mの差による暫定区分です。中間ラップを含む実際のレース全体のペースではありません。違う距離・競馬場のデータを混ぜた場合、適性判断は慎重に。')
+    detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
     if detail.empty:
-        st.info('ペースを分類できる成績がありません。過去成績の自動取得を使うと「ペース」列を取り込めます。')
+        st.info('今回の条件ではペースを分類できる成績がありません。')
     else:
-        if mode == '馬を比較':
-            detail = detail[detail['馬名'].isin(selected)]
         detail_rows = []
         for (h, p), g in detail.groupby(['馬名', '推定ペース']):
-            valid_finishes = g['着順_数値'].dropna()
-            detail_rows.append({'馬名': h, '推定ペース': p, '対象走数': len(g), '勝率(%)': round(100 * (valid_finishes == 1).mean(), 1) if len(valid_finishes) else float('nan'), '複勝率(%)': round(100 * (valid_finishes <= 3).mean(), 1) if len(valid_finishes) else float('nan'), '平均4角': round(g['4角順位'].mean(), 2), '平均上がり順位': round(g['上がり順位'].mean(), 2)})
-        st.dataframe(pd.DataFrame(detail_rows).sort_values(['馬名', '推定ペース']), hide_index=True, use_container_width=True)
+            finish = g['着順_数値'].dropna()
+            n = len(finish)
+            detail_rows.append({'馬名': h, '推定ペース': p, '対象走数': len(g), '着順有効走数': n,
+                                'データ量': sample_label(n),
+                                '勝率(%)': round(100 * (finish == 1).sum() / n, 1) if n else float('nan'),
+                                '複勝率(%)': round(100 * (finish <= 3).sum() / n, 1) if n else float('nan'),
+                                '平均4角': round(g['4角順位'].mean(), 2),
+                                '上がり順位対象走数': int(g['上がり順位'].notna().sum()),
+                                '平均上がり順位': round(g['上がり順位'].mean(), 2)})
+        comparison = pd.DataFrame(detail_rows)
+        order = {'ハイ寄り': 0, 'ミドル寄り': 1, 'スロー寄り': 2}
+        comparison['_順'] = comparison['推定ペース'].map(order)
+        comparison = comparison.sort_values(['馬名', '_順']).drop(columns='_順')
+        st.dataframe(comparison, hide_index=True, use_container_width=True,
+                     column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
+        st.download_button('ペース別成績をCSVで保存', comparison.to_csv(index=False).encode('utf-8-sig'),
+                           file_name='keiba_pace_compare_v15.csv', mime='text/csv', use_container_width=True)
+    with st.expander('ペース判定の根拠（レースごとの前後半3F）', expanded=False):
+        st.caption('差＝前半3F−後半3F。負なら前半が速く、正なら後半が速い。各レースの元データと分類を照合できます。')
+        cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '前半3F', '後半3F', '前後半3F差', '推定ペース', '着順_数値']
+        pace_audit = pace_compare_base[[c for c in cols if c in pace_compare_base.columns]].copy()
+        if '日付' in pace_audit.columns:
+            pace_audit['日付'] = pd.to_datetime(pace_audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+        st.write(f'判定可能：{int(pace_audit["推定ペース"].ne("不明").sum())}走 ／ 全{len(pace_audit)}走')
+        st.dataframe(pace_audit, hide_index=True, use_container_width=True,
+                     column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
+        st.download_button('ペース判定根拠をCSVで保存', pace_audit.to_csv(index=False).encode('utf-8-sig'),
+                           file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
     st.download_button('📥 分析結果をCSVで保存', data=result.to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
