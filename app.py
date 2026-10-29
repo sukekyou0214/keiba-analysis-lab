@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.14.5')
+st.title('🏇 競馬分析ラボ Ver.14.6')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -415,6 +415,33 @@ def make_excel(data):
     return out.getvalue()
 
 
+def sample_count_for_metric(group, metric):
+    """指標の分母となる観測走数。値が不明な走は数えない。"""
+    column_map = {
+        '勝率(%)': '着順_数値', '連対率(%)': '着順_数値',
+        '複勝率(%)': '着順_数値', '平均着順': '着順_数値',
+        '平均4角': '4角順位', '平均上がり': '上がり3F_秒',
+        '上がり最速率(%)': '上がり順位',
+        '上がり3位以内率(%)': '上がり順位',
+        '平均上がり順位': '上がり順位',
+    }
+    if metric in column_map:
+        return int(group[column_map[metric]].notna().sum())
+    if metric in ('前方率(%)', '差し追込率(%)'):
+        return int(group['推定脚質'].ne('不明').sum())
+    return len(group)
+
+
+def sample_label(n):
+    if n == 0:
+        return 'データなし'
+    if n <= 2:
+        return '参考（1〜2走）'
+    if n <= 4:
+        return '少数（3〜4走）'
+    return '5走以上'
+
+
 def summarize(group):
     finish = group['着順_数値'].dropna()
     agari = group['上がり順位'].dropna()
@@ -627,7 +654,7 @@ view = st.radio('表示方法', ['スマホ用カード', '横並び表'], horiz
 
 st.header('⑦ 分析する')
 if st.button('分析する', type='primary', use_container_width=True):
-    # Ver.14.5：先に各馬の「直近N走」を確定し、その範囲内で条件を適用する。
+    # Ver.14.6：先に各馬の「直近N走」を確定し、その範囲内で条件を適用する。
     # 日付が取得できない走は末尾に置き、元の並びを保持する。
     base = analysis_df.copy()
     if '日付' in base.columns:
@@ -673,6 +700,10 @@ if st.button('分析する', type='primary', use_container_width=True):
     for name, group in filtered.groupby('馬名'):
         row = summarize(group)
         row['馬名'] = name
+        if mode == 'ランキング':
+            count = sample_count_for_metric(group, metric)
+            row['指標対象走数'] = count
+            row['データ量'] = sample_label(count)
         rows.append(row)
     result = pd.DataFrame(rows)
     if mode == 'ランキング':
@@ -680,6 +711,9 @@ if st.button('分析する', type='primary', use_container_width=True):
         result = result.sort_values(metric, ascending=ascending, na_position='last', kind='stable').reset_index(drop=True)
         result.insert(0, '順位', result[metric].rank(method='min', ascending=ascending, na_option='bottom').astype(int))
         st.subheader(f'🏆 {metric} ランキング')
+        st.caption('指標対象走数＝選択したランキング指標を計算できた走数。1〜2走は参考値、3〜4走は少数例です。順位にはサンプル数による補正を掛けていません。')
+        if int((result['指標対象走数'] <= 2).sum()):
+            st.info(f'今回、{int((result["指標対象走数"] <= 2).sum())}頭が指標対象2走以下。高順位でも参考値として見てください。')
     else:
         result['表示順'] = result['馬名'].apply(selected.index)
         result = result.sort_values('表示順').drop(columns='表示順')
@@ -687,7 +721,7 @@ if st.button('分析する', type='primary', use_container_width=True):
     result = result.round(2)
     if mode == 'ランキング':
         # 順位と馬名を常に先頭に。重要指標を続ける。
-        front = ['順位', '馬名', '出走数', metric]
+        front = ['順位', '馬名', '出走数', '指標対象走数', 'データ量', metric]
         result = result[[c for c in dict.fromkeys(front) if c in result.columns]
                         + [c for c in result.columns if c not in front]]
     else:
@@ -695,7 +729,7 @@ if st.button('分析する', type='primary', use_container_width=True):
     if view == '横並び表':
         if mode == 'ランキング':
             full_table = st.checkbox('詳細指標をすべて表示', value=False)
-            key_cols = ['順位', '馬名', '出走数', metric, '複勝率(%)', '平均4角', '上がり最速率(%)']
+            key_cols = ['順位', '馬名', '出走数', '指標対象走数', 'データ量', metric, '複勝率(%)', '平均4角', '上がり最速率(%)']
             compact_cols = [c for c in dict.fromkeys(key_cols) if c in result.columns]
             show_table = result if full_table else result[compact_cols]
             st.dataframe(show_table, hide_index=True, use_container_width=True,
@@ -710,6 +744,8 @@ if st.button('分析する', type='primary', use_container_width=True):
                     label = f'{int(row["順位"])}位 {label}'
                 st.markdown(f'### {label}')
                 st.caption(f'対象：{int(row["出走数"])}走')
+                if mode == 'ランキング':
+                    st.caption(f'【{metric}】有効データ {int(row["指標対象走数"])}走 ／ {row["データ量"]}')
                 for key in METRICS:
                     value = row[key]
                     shown = 'データなし' if pd.isna(value) else f'{value:.2f}' + ('%' if key.endswith('(%)') else '')
@@ -722,7 +758,7 @@ if st.button('分析する', type='primary', use_container_width=True):
             used['日付'] = pd.to_datetime(used['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         st.dataframe(used, hide_index=True, use_container_width=True)
         st.download_button('集計対象レース一覧をCSVで保存', data=used.to_csv(index=False).encode('utf-8-sig'),
-                           file_name='keiba_used_races_v145.csv', mime='text/csv', use_container_width=True)
+                           file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
     st.subheader('ペース別の成績と4角位置')
     st.caption('下表は分析条件のうち推定ペース以外の条件にもとづく参考比較ではなく、現在の絞り込み結果のみを使用します。')
     detail = filtered[filtered['推定ペース'].ne('不明')].copy()
