@@ -9,7 +9,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.13.1')
+st.title('🏇 競馬分析ラボ Ver.13.2')
 st.caption('過去成績の自動取得・上がり順位の追加分析・Excel比較')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -88,49 +88,70 @@ def get_results(horse_id, horse_name):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_race_agari(race_id):
-    """Race-wide finishing 3F rank keyed by netkeiba horse ID."""
-    url = f'https://db.netkeiba.com/race/{race_id}/'
+    """Return race-wide 3F ranks, keyed by horse ID or exact horse name.
+
+    Uses the result table whose headers include 馬名 and 後3F.
+    Missing / nonnumeric 3F times do not receive a rank.
+    """
+    url = f'https://race.netkeiba.com/race/result.html?race_id={race_id}'
     res = requests.get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
-    res.encoding = 'EUC-JP'
+    res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, 'html.parser')
-
-    table = None
-    columns = None
-    for candidate in soup.select('table'):
-        first_row = candidate.select_one('tr')
-        if first_row is None:
-            continue
-        names = [re.sub(r'\s+', '', c.get_text(' ', strip=True))
-                 for c in first_row.find_all(['th', 'td'], recursive=False)]
-        if '馬名' in names and ('上り' in names or '上がり' in names):
-            table, columns = candidate, names
-            break
+    table = soup.select_one('#All_Result_Table')
     if table is None:
-        raise ValueError('馬名・上り列のある結果表が見つかりません')
+        raise ValueError('結果テーブルが見つかりません')
 
-    horse_col = columns.index('馬名')
-    speed_col = columns.index('上り') if '上り' in columns else columns.index('上がり')
-    speeds = {}
-    for tr in table.select('tr')[1:]:
+    # Header text sometimes contains spaces/newlines; normalize these.
+    header_rows = table.select('thead tr')
+    if not header_rows:
+        header_rows = table.select('tr')[:2]
+    header = None
+    for tr in header_rows:
+        labels = [re.sub(r'\s+', '', cell.get_text(' ', strip=True))
+                  for cell in tr.find_all(['th', 'td'], recursive=False)]
+        if '馬名' in labels and ('後3F' in labels or '上り' in labels):
+            header = labels
+            break
+    if header is None:
+        raise ValueError('馬名・後3Fの列が見つかりません')
+    name_index = header.index('馬名')
+    speed_index = header.index('後3F') if '後3F' in header else header.index('上り')
+
+    rows = table.select('tbody tr')
+    if not rows:
+        rows = table.select('tr')[1:]
+    times = []
+    for tr in rows:
         cells = tr.find_all(['th', 'td'], recursive=False)
-        if len(cells) <= max(horse_col, speed_col):
+        if len(cells) <= max(name_index, speed_index):
             continue
-        horse_cell = cells[horse_col]
-        horse_link = horse_cell.select_one('a[href*="/horse/"]')
-        if horse_link is None:
+        name_cell = cells[name_index]
+        name = name_cell.get_text(' ', strip=True)
+        if not name:
             continue
-        match = re.search(r'/horse/(\d{10})', horse_link.get('href', ''))
-        if not match:
+        raw_time = cells[speed_index].get_text(' ', strip=True)
+        raw_time = re.sub(r'\s+', '', raw_time)
+        # Accept plain numeric seconds only; skip --, empty values, etc.
+        if not re.fullmatch(r'\d{2}\.\d', raw_time):
             continue
-        raw_speed = cells[speed_col].get_text(' ', strip=True)
-        speed = pd.to_numeric(raw_speed, errors='coerce')
-        if pd.notna(speed) and 20 <= float(speed) <= 60:
-            speeds[match.group(1)] = float(speed)
-    if len(speeds) < 2:
-        raise ValueError('上がりタイムを2頭以上取得できません')
-    return {hid: 1 + sum(other < speed for other in speeds.values())
-            for hid, speed in speeds.items()}
+        speed = float(raw_time)
+        if not 20 <= speed <= 60:
+            continue
+        horse_link = name_cell.select_one('a[href*="/horse/"]')
+        match = re.search(r'/horse/(\d{10})', horse_link.get('href', '')) if horse_link else None
+        horse_id = match.group(1) if match else None
+        times.append((horse_id, name, speed))
+
+    if len(times) < 2:
+        raise ValueError('後3Fの数値を2頭以上取得できません')
+    result = {}
+    for horse_id, name, speed in times:
+        rank = 1 + sum(other_speed < speed for _, _, other_speed in times)
+        result[f'name:{name}'] = rank
+        if horse_id:
+            result[horse_id] = rank
+    return result
 
 
 def add_recent_agari_ranks(data, max_per_horse=5):
@@ -158,7 +179,10 @@ def add_recent_agari_ranks(data, max_per_horse=5):
             time.sleep(0.5)
     status.empty()
     for idx, row in work.iterrows():
-        rank = ranks_by_race.get(str(row['レースID']), {}).get(str(row['馬ID']))
+        race_ranks = ranks_by_race.get(str(row['レースID']), {})
+        rank = race_ranks.get(str(row['馬ID']))
+        if rank is None:
+            rank = race_ranks.get(f"name:{row['馬名']}")
         if rank is not None:
             data.at[idx, '上がり順位'] = rank
     return data, len(race_ids), errors
@@ -304,7 +328,7 @@ if horses:
         status.empty()
 
 if st.session_state.auto_df is not None:
-    st.subheader('上がり順位の追加取得（Ver.13.1）')
+    st.subheader('上がり順位の追加取得（Ver.13.2）')
     available = int(st.session_state.auto_df['上がり順位'].notna().sum())
     st.write(f'現在、上がり順位が判明している成績：{available}走')
     st.caption('各馬の直近5走を対象に、レース全体の上がりタイムから同タイム同順位で算出します。レース結果ページの仕様によって取得できない場合があります。')
