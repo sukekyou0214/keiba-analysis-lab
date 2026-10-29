@@ -1,4 +1,6 @@
 import re
+import json
+from pathlib import Path
 import time
 from io import BytesIO
 from urllib.parse import parse_qs, urlparse
@@ -9,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.14')
+st.title('🏇 競馬分析ラボ Ver.14.1')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -17,6 +19,42 @@ VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', 
 METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
 ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質']}
+
+
+# サーバー上の簡易キャッシュ。Streamlit Cloudの再起動・再デプロイで消える場合があります。
+CACHE_DIR = Path('/tmp/keiba_analysis_v141')
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cache_paths(rid):
+    if not re.fullmatch(r'\d{12}', str(rid)):
+        raise ValueError('不正なレースIDです')
+    return CACHE_DIR / f'{rid}.csv.gz', CACHE_DIR / f'{rid}.json'
+
+
+def save_race_cache(rid, horses, data):
+    if not rid or data is None or data.empty:
+        return
+    csv_path, meta_path = cache_paths(rid)
+    temp_csv = csv_path.with_suffix('.tmp')
+    temp_meta = meta_path.with_suffix('.tmp')
+    data.to_csv(temp_csv, index=False, compression='gzip')
+    temp_csv.replace(csv_path)
+    temp_meta.write_text(json.dumps(horses, ensure_ascii=False), encoding='utf-8')
+    temp_meta.replace(meta_path)
+
+
+def load_race_cache(rid):
+    csv_path, meta_path = cache_paths(rid)
+    if not (csv_path.exists() and meta_path.exists()):
+        return None
+    horses = json.loads(meta_path.read_text(encoding='utf-8'))
+    data = pd.read_csv(csv_path, compression='gzip', dtype={'馬ID': str, 'レースID': str})
+    return horses, prepare(data)
+
+
+def saved_race_ids():
+    return sorted([p.stem for p in CACHE_DIR.glob('*.json') if (CACHE_DIR / f'{p.stem}.csv.gz').exists()], reverse=True)
 
 
 def parse_race_id(raw):
@@ -291,8 +329,19 @@ def summarize(group):
 
 
 st.header('① レースを指定')
-race_input = st.text_input('netkeiba出馬表URL または12桁のレースID', placeholder='例：202605041111')
+known_ids = saved_race_ids()
+if 'race_input_v141' not in st.session_state:
+    remembered = st.query_params.get('race_id', '')
+    st.session_state.race_input_v141 = remembered if parse_race_id(remembered) else ''
+if known_ids:
+    cached_choice = st.selectbox('保存済みデータを再開（このサーバーに残っている分）', ['選択しない'] + known_ids)
+    if st.button('保存済みレースを開く', disabled=cached_choice == '選択しない', use_container_width=True):
+        st.session_state.race_input_v141 = cached_choice
+        st.rerun()
+race_input = st.text_input('netkeiba出馬表URL または12桁のレースID', key='race_input_v141', placeholder='例：202605041111')
 race_id = parse_race_id(race_input) if race_input.strip() else ''
+if race_id:
+    st.query_params['race_id'] = race_id
 if race_input.strip():
     if race_id:
         st.success(f'レースID：{race_id}')
@@ -311,6 +360,14 @@ if race_id and st.session_state.auto_race_id != race_id:
     st.session_state.auto_race_id = race_id
     st.session_state.auto_horses = {}
     st.session_state.auto_df = None
+    try:
+        restored = load_race_cache(race_id)
+        if restored is not None:
+            st.session_state.auto_horses, st.session_state.auto_df = restored
+    except Exception as e:
+        st.warning(f'保存済みデータの復元に失敗しました：{e}')
+if race_id and st.session_state.auto_df is not None:
+    st.info(f'保存済みデータを利用中：{len(st.session_state.auto_df)}走。再取得せず分析できます。')
 
 if st.button('出走馬を自動取得', disabled=not race_id, use_container_width=True):
     try:
@@ -341,7 +398,8 @@ if horses:
         if datasets:
             try:
                 st.session_state.auto_df = prepare(convert_auto(pd.concat(datasets, ignore_index=True)))
-                st.success(f'過去成績：{len(st.session_state.auto_df)}走を取得しました')
+                save_race_cache(race_id, horses, st.session_state.auto_df)
+                st.success(f'過去成績：{len(st.session_state.auto_df)}走を取得・一時保存しました')
             except Exception as e:
                 st.error(f'成績の変換に失敗しました：{e}')
         if errors:
@@ -357,6 +415,7 @@ if st.session_state.auto_df is not None:
         try:
             updated, checked, errors = add_recent_agari_ranks(st.session_state.auto_df)
             st.session_state.auto_df = updated
+            save_race_cache(race_id, horses, updated)
             count = int(updated['上がり順位'].notna().sum())
             st.success(f'照合したレース：{checked}件 / 上がり順位を取得済み：{count}走')
             if errors:
@@ -364,7 +423,7 @@ if st.session_state.auto_df is not None:
         except Exception as e:
             st.error(f'上がり順位の取得に失敗：{e}')
 
-st.caption('自動取得は接続先の仕様・アクセス制限によって失敗する場合があります。取得データの利用条件も確認してください。')
+st.caption('取得データはサーバーに一時保存し、同じレースIDなら再利用します。Streamlit Cloudの停止・再起動・再デプロイでは消える場合があります。確実に残すには下のExcelをiPhoneに保存してください。取得データの利用条件も確認してください。')
 manual = st.text_area('手入力する出走馬名（1行に1頭・任意）', height=110, placeholder='自動取得できない場合などに入力')
 target_horses = list(dict.fromkeys([n.strip() for n in manual.splitlines() if n.strip()] or list(horses.values())))
 
@@ -469,8 +528,23 @@ if st.button('分析する', type='primary', use_container_width=True):
         result = result.sort_values('表示順').drop(columns='表示順')
         st.subheader('🐎 馬の成績比較')
     result = result.round(2)
+    if mode == 'ランキング':
+        # 順位と馬名を常に先頭に。重要指標を続ける。
+        front = ['順位', '馬名', '出走数', metric]
+        result = result[[c for c in dict.fromkeys(front) if c in result.columns]
+                        + [c for c in result.columns if c not in front]]
+    else:
+        result = result[['馬名'] + [c for c in result.columns if c != '馬名']]
     if view == '横並び表':
-        st.dataframe(result.set_index('馬名').T if mode == '馬を比較' else result, hide_index=mode == 'ランキング', use_container_width=True)
+        if mode == 'ランキング':
+            full_table = st.checkbox('詳細指標をすべて表示', value=False)
+            key_cols = ['順位', '馬名', '出走数', metric, '複勝率(%)', '平均4角', '上がり最速率(%)']
+            compact_cols = [c for c in dict.fromkeys(key_cols) if c in result.columns]
+            show_table = result if full_table else result[compact_cols]
+            st.dataframe(show_table, hide_index=True, use_container_width=True,
+                         column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
+        else:
+            st.dataframe(result.set_index('馬名').T, use_container_width=True)
     else:
         for _, row in result.iterrows():
             with st.container(border=True):
