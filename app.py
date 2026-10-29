@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.14.4')
+st.title('🏇 競馬分析ラボ Ver.14.5')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -613,7 +613,7 @@ st.caption('格付けが確認できない走は「不明」として保持。�
 pace_filter = st.selectbox('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'])
 st.caption('前半3Fと後半3Fの差が±1秒以内をミドル寄り、前半が1秒超速ければハイ寄り、遅ければスロー寄りとする簡易分類。公式のペース判定ではありません。距離や馬場条件で比較し、少数サンプルに注意してください。')
 st.caption('脚質は4角位置と頭数から便宜的に推定。先頭（4角）＝逃げ確定ではなく、差し追込率は後方位置の割合です。')
-st.caption('直近走数は、競馬場・馬場・距離・レース格・推定ペースで絞り込んだ後に適用します。')
+st.caption('集計順序：各馬の全成績から直近○走を確定 → 競馬場・馬場・距離・レース格・ペースで絞り込み。例：直近5走＋G1のみ＝直近5走の中にあるG1だけ。')
 counts = analysis_df['レース格'].value_counts()
 st.caption('判定済み：' + ' / '.join(f'{g} {int(counts.get(g, 0))}走' for g in ['G1', 'G2', 'G3', 'その他']) + f' / 不明 {int(counts.get("不明", 0))}走')
 if int(counts.get('不明', 0)):
@@ -627,7 +627,17 @@ view = st.radio('表示方法', ['スマホ用カード', '横並び表'], horiz
 
 st.header('⑦ 分析する')
 if st.button('分析する', type='primary', use_container_width=True):
-    filtered = analysis_df.copy()
+    # Ver.14.5：先に各馬の「直近N走」を確定し、その範囲内で条件を適用する。
+    # 日付が取得できない走は末尾に置き、元の並びを保持する。
+    base = analysis_df.copy()
+    if '日付' in base.columns:
+        base = base.sort_values('日付', ascending=False, na_position='last', kind='stable')
+    if recent != '全走':
+        n = int(recent.replace('直近', '').replace('走', ''))
+        base = base.groupby('馬名', sort=False).head(n).copy()
+    base_counts = base.groupby('馬名').size().rename('直近対象走数')
+
+    filtered = base.copy()
     if venue != 'すべて':
         filtered = filtered[filtered['競馬場'] == venue]
     if track != 'すべて':
@@ -643,19 +653,22 @@ if st.button('分析する', type='primary', use_container_width=True):
     ranges = {'1200m以下': (0, 1200), '1201〜1600m': (1201, 1600), '1601〜1800m': (1601, 1800), '1801〜2200m': (1801, 2200), '2201〜2400m': (2201, 2400), '2401m以上': (2401, float('inf'))}
     if distance in ranges:
         filtered = filtered[filtered['距離_m'].between(*ranges[distance])]
-    if '日付' in filtered.columns:
-        filtered = filtered.sort_values('日付', ascending=False, kind='stable')
-    if recent != '全走':
-        n = int(recent.replace('直近', '').replace('走', ''))
-        filtered = filtered.groupby('馬名', sort=False).head(n)
     if mode == '馬を比較':
         if len(selected) < 2:
             st.warning('比較する馬を2頭以上選んでください。')
             st.stop()
         filtered = filtered[filtered['馬名'].isin(selected)]
+    st.caption(f'直近走数を先に適用：{len(base)}走 → 条件絞り込み後：{len(filtered)}走（対象 {filtered["馬名"].nunique()}頭）')
     if filtered.empty:
-        st.warning('条件に一致するレースがありません。')
+        st.warning('指定した直近走数の範囲内に、条件に一致するレースがありません。対象レースを直近10走・全走に広げて確認してください。')
         st.stop()
+    # この内訳はランキングと同じ filtered を使うため、表示・CSVの出走数と一致する。
+    matched_counts = filtered.groupby('馬名').size().rename('条件一致走数')
+    count_check = pd.concat([base_counts, matched_counts], axis=1).fillna(0).astype(int).reset_index()
+    count_check = count_check.sort_values(['条件一致走数', '馬名'], ascending=[False, True])
+    with st.expander('集計対象走数の確認（全馬）', expanded=False):
+        st.caption('「直近対象走数」から、選んだレース格などに一致した「条件一致走数」だけをランキングに使用しています。0走の馬はランキングに出ません。')
+        st.dataframe(count_check, hide_index=True, use_container_width=True)
     rows = []
     for name, group in filtered.groupby('馬名'):
         row = summarize(group)
@@ -702,6 +715,14 @@ if st.button('分析する', type='primary', use_container_width=True):
                     shown = 'データなし' if pd.isna(value) else f'{value:.2f}' + ('%' if key.endswith('(%)') else '')
                     st.write(f'**{key}：** {shown}')
                 st.caption(f'上がり順位：{int(row["上がり対象走数"])}走 / 推定ペース：{int(row["ペース判定対象走数"])}走 / 推定脚質：{int(row["脚質判定対象走数"])}走')
+    with st.expander('今回の集計に入ったレース一覧', expanded=False):
+        show_cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '着順_数値', '推定ペース']
+        used = filtered[[c for c in show_cols if c in filtered.columns]].copy()
+        if '日付' in used.columns:
+            used['日付'] = pd.to_datetime(used['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+        st.dataframe(used, hide_index=True, use_container_width=True)
+        st.download_button('集計対象レース一覧をCSVで保存', data=used.to_csv(index=False).encode('utf-8-sig'),
+                           file_name='keiba_used_races_v145.csv', mime='text/csv', use_container_width=True)
     st.subheader('ペース別の成績と4角位置')
     st.caption('下表は分析条件のうち推定ペース以外の条件にもとづく参考比較ではなく、現在の絞り込み結果のみを使用します。')
     detail = filtered[filtered['推定ペース'].ne('不明')].copy()
