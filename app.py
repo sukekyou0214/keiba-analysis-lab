@@ -9,14 +9,14 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.13.2')
-st.caption('過去成績の自動取得・上がり順位の追加分析・Excel比較')
+st.title('🏇 競馬分析ラボ Ver.14')
+st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
-METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位']
-NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位']
-ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日']}
+METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
+NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
+ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質']}
 
 
 def parse_race_id(raw):
@@ -209,7 +209,13 @@ def convert_auto(raw):
     data['4角順位'] = pd.to_numeric(data['通過'].astype(str).str.extract(r'(\d+)\s*$')[0], errors='coerce')
     data['上がり順位'] = float('nan')
     data['日付'] = pd.to_datetime(data['日付'], errors='coerce')
-    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位']].copy()
+    data['頭数'] = pd.to_numeric(data.get('頭 数'), errors='coerce')
+    # netkeibaの「ペース」は前半3F-後半3Fの表記。距離差があるため目安として扱う。
+    pace_pair = data['ペース'].astype(str).str.extract(r'(\d{2}\.\d)\s*[-－ー〜～]\s*(\d{2}\.\d)') if 'ペース' in data.columns else pd.DataFrame(index=data.index, columns=[0, 1])
+    data['前半3F'] = pd.to_numeric(pace_pair[0], errors='coerce')
+    data['後半3F'] = pd.to_numeric(pace_pair[1], errors='coerce')
+    data['前後半3F差'] = data['前半3F'] - data['後半3F']
+    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']].copy()
 
 
 def prepare(data):
@@ -236,6 +242,21 @@ def prepare(data):
     data = data[data['馬名'].ne('') & data['馬名'].ne('nan')].copy()
     if '日付' in data.columns:
         data['日付'] = pd.to_datetime(data['日付'], errors='coerce')
+    # 手元Excelにも同じ分類を付け、数字の根拠がない場合は「不明」にする。
+    diff = data['前後半3F差']
+    data['推定ペース'] = '不明'
+    data.loc[diff.notna() & diff.lt(-1.0), '推定ペース'] = 'ハイ寄り'
+    data.loc[diff.notna() & diff.between(-1.0, 1.0), '推定ペース'] = 'ミドル寄り'
+    data.loc[diff.notna() & diff.gt(1.0), '推定ペース'] = 'スロー寄り'
+    pos = data['4角順位']
+    field = data['頭数']
+    # 4角位置を頭数で割った便宜的な分類。逃げの確定判定ではない。
+    valid = pos.ge(1) & field.ge(2) & pos.le(field)
+    data['推定脚質'] = '不明'
+    data.loc[valid & pos.eq(1), '推定脚質'] = '先頭（4角）'
+    data.loc[valid & pos.gt(1) & pos.le((field * 0.35).clip(lower=2)), '推定脚質'] = '先行寄り'
+    data.loc[valid & pos.gt((field * 0.35).clip(lower=2)) & pos.le(field * 0.7), '推定脚質'] = '中団寄り'
+    data.loc[valid & pos.gt(field * 0.7), '推定脚質'] = '後方寄り'
     return data
 
 
@@ -266,7 +287,7 @@ def summarize(group):
     agari = group['上がり順位'].dropna()
     def rate(count, denominator):
         return round(count / denominator * 100, 2) if denominator else float('nan')
-    return {'出走数': len(group), '平均着順': finish.mean(), '平均4角': group['4角順位'].mean(), '平均上がり': group['上がり3F_秒'].mean(), '勝率(%)': rate((finish == 1).sum(), len(finish)), '連対率(%)': rate((finish <= 2).sum(), len(finish)), '複勝率(%)': rate((finish <= 3).sum(), len(finish)), '上がり対象走数': len(agari), '上がり最速率(%)': rate((agari == 1).sum(), len(agari)), '上がり3位以内率(%)': rate((agari <= 3).sum(), len(agari)), '平均上がり順位': agari.mean()}
+    return {'出走数': len(group), '平均着順': finish.mean(), '平均4角': group['4角順位'].mean(), '平均上がり': group['上がり3F_秒'].mean(), '勝率(%)': rate((finish == 1).sum(), len(finish)), '連対率(%)': rate((finish <= 2).sum(), len(finish)), '複勝率(%)': rate((finish <= 3).sum(), len(finish)), '上がり対象走数': len(agari), '上がり最速率(%)': rate((agari == 1).sum(), len(agari)), '上がり3位以内率(%)': rate((agari <= 3).sum(), len(agari)), '平均上がり順位': agari.mean(), '前方率(%)': rate(group['推定脚質'].isin(['先頭（4角）', '先行寄り']).sum(), group['推定脚質'].ne('不明').sum()), '差し追込率(%)': rate(group['推定脚質'].eq('後方寄り').sum(), group['推定脚質'].ne('不明').sum()), 'ペース判定対象走数': int(group['推定ペース'].ne('不明').sum()), '脚質判定対象走数': int(group['推定脚質'].ne('不明').sum())}
 
 
 st.header('① レースを指定')
@@ -328,7 +349,7 @@ if horses:
         status.empty()
 
 if st.session_state.auto_df is not None:
-    st.subheader('上がり順位の追加取得（Ver.13.2）')
+    st.subheader('上がり順位の追加取得（Ver.14）')
     available = int(st.session_state.auto_df['上がり順位'].notna().sum())
     st.write(f'現在、上がり順位が判明している成績：{available}走')
     st.caption('各馬の直近5走を対象に、レース全体の上がりタイムから同タイム同順位で算出します。レース結果ページの仕様によって取得できない場合があります。')
@@ -394,7 +415,10 @@ course_options = ['すべて'] + sorted(analysis_df['コース'].dropna().astype
 course = st.selectbox('コース', course_options)
 distance = st.selectbox('距離', ['すべて', '1200m以下', '1201〜1600m', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'])
 recent = st.selectbox('対象レース', ['直近5走', '直近10走', '直近15走', '全走'])
-st.caption('直近走数は、競馬場・馬場・距離などで絞り込んだ後に適用します。')
+pace_filter = st.selectbox('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'])
+st.caption('前半3Fと後半3Fの差が±1秒以内をミドル寄り、前半が1秒超速ければハイ寄り、遅ければスロー寄りとする簡易分類。公式のペース判定ではありません。距離や馬場条件で比較し、少数サンプルに注意してください。')
+st.caption('脚質は4角位置と頭数から便宜的に推定。先頭（4角）＝逃げ確定ではなく、差し追込率は後方位置の割合です。')
+st.caption('直近走数は、競馬場・馬場・距離・推定ペースで絞り込んだ後に適用します。')
 if mode == 'ランキング':
     metric = st.selectbox('ランキング指標', METRICS)
 else:
@@ -411,6 +435,8 @@ if st.button('分析する', type='primary', use_container_width=True):
         filtered = filtered[filtered['馬場状態'] == track]
     if course != 'すべて' and 'コース' in filtered.columns:
         filtered = filtered[filtered['コース'] == course]
+    if pace_filter != 'すべて':
+        filtered = filtered[filtered['推定ペース'] == pace_filter]
     ranges = {'1200m以下': (0, 1200), '1201〜1600m': (1201, 1600), '1601〜1800m': (1601, 1800), '1801〜2200m': (1801, 2200), '2201〜2400m': (2201, 2400), '2401m以上': (2401, float('inf'))}
     if distance in ranges:
         filtered = filtered[filtered['距離_m'].between(*ranges[distance])]
@@ -457,5 +483,18 @@ if st.button('分析する', type='primary', use_container_width=True):
                     value = row[key]
                     shown = 'データなし' if pd.isna(value) else f'{value:.2f}' + ('%' if key.endswith('(%)') else '')
                     st.write(f'**{key}：** {shown}')
-                st.caption(f'上がり順位の集計対象：{int(row["上がり対象走数"])}走')
+                st.caption(f'上がり順位：{int(row["上がり対象走数"])}走 / 推定ペース：{int(row["ペース判定対象走数"])}走 / 推定脚質：{int(row["脚質判定対象走数"])}走')
+    st.subheader('ペース別の成績と4角位置')
+    st.caption('下表は分析条件のうち推定ペース以外の条件にもとづく参考比較ではなく、現在の絞り込み結果のみを使用します。')
+    detail = filtered[filtered['推定ペース'].ne('不明')].copy()
+    if detail.empty:
+        st.info('ペースを分類できる成績がありません。過去成績の自動取得を使うと「ペース」列を取り込めます。')
+    else:
+        if mode == '馬を比較':
+            detail = detail[detail['馬名'].isin(selected)]
+        detail_rows = []
+        for (h, p), g in detail.groupby(['馬名', '推定ペース']):
+            valid_finishes = g['着順_数値'].dropna()
+            detail_rows.append({'馬名': h, '推定ペース': p, '対象走数': len(g), '勝率(%)': round(100 * (valid_finishes == 1).mean(), 1) if len(valid_finishes) else float('nan'), '複勝率(%)': round(100 * (valid_finishes <= 3).mean(), 1) if len(valid_finishes) else float('nan'), '平均4角': round(g['4角順位'].mean(), 2), '平均上がり順位': round(g['上がり順位'].mean(), 2)})
+        st.dataframe(pd.DataFrame(detail_rows).sort_values(['馬名', '推定ペース']), hide_index=True, use_container_width=True)
     st.download_button('📥 分析結果をCSVで保存', data=result.to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
