@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.14.1')
+st.title('🏇 競馬分析ラボ Ver.14.2')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -54,7 +54,50 @@ def load_race_cache(rid):
 
 
 def saved_race_ids():
-    return sorted([p.stem for p in CACHE_DIR.glob('*.json') if (CACHE_DIR / f'{p.stem}.csv.gz').exists()], reverse=True)
+    return sorted([p.stem for p in CACHE_DIR.glob('*.json') if re.fullmatch(r'\d{12}', p.stem) and (CACHE_DIR / f'{p.stem}.csv.gz').exists()], reverse=True)
+
+
+
+
+def get_saved_race_label(rid):
+    """レース名を表示用に取得。元の保存済み成績は変更しない。"""
+    label_file = CACHE_DIR / f'{rid}.label.json'
+    if label_file.exists():
+        try:
+            label = json.loads(label_file.read_text(encoding='utf-8')).get('label', '')
+            if label:
+                return label
+        except (ValueError, OSError, TypeError):
+            pass
+
+    # 古い保存データにも対応。取得できなければIDを併記して識別可能にする。
+    year = rid[:4]
+    fallback = f'{year}年のレース（{rid}）'
+    try:
+        res = requests.get(
+            f'https://race.netkeiba.com/race/shutuba.html?race_id={rid}',
+            headers=HEADERS, timeout=8
+        )
+        res.raise_for_status()
+        res.encoding = res.apparent_encoding
+        soup = BeautifulSoup(res.text, 'html.parser')
+        title = soup.title.get_text(' ', strip=True) if soup.title else ''
+        # 例：「天皇賞(秋)(GI) 出馬表 | 2026年11月1日 ...」
+        race_name = re.split(r'\s*[|｜]\s*|\s+出馬表|\s+結果|\s+予想', title, maxsplit=1)[0].strip()
+        race_name = re.sub(r'\s*[-－–]\s*netkeiba.*$', '', race_name, flags=re.I).strip()
+        if race_name and not any(x in race_name.lower() for x in ['netkeiba', '競馬情報', '競馬データベース', '404', 'エラー']):
+            date_match = re.search(r'(20\d{2})年\s*(\d{1,2})月\s*(\d{1,2})日', title)
+            if date_match:
+                y, m, d = (int(v) for v in date_match.groups())
+                date_label = f'{y}年{m}月{d}日'
+            else:
+                date_label = f'{year}年'
+            label = f'{race_name}｜{date_label}（{rid}）'
+            label_file.write_text(json.dumps({'label': label}, ensure_ascii=False), encoding='utf-8')
+            return label
+    except (requests.RequestException, OSError):
+        pass
+    return fallback
 
 
 def parse_race_id(raw):
@@ -334,7 +377,12 @@ if 'race_input_v141' not in st.session_state:
     remembered = st.query_params.get('race_id', '')
     st.session_state.race_input_v141 = remembered if parse_race_id(remembered) else ''
 if known_ids:
-    cached_choice = st.selectbox('保存済みデータを再開（このサーバーに残っている分）', ['選択しない'] + known_ids)
+    cached_labels = {rid: get_saved_race_label(rid) for rid in known_ids}
+    cached_choice = st.selectbox(
+        '保存済みデータを再開（このサーバーに残っている分）',
+        ['選択しない'] + known_ids,
+        format_func=lambda rid: cached_labels.get(rid, rid) if rid != '選択しない' else rid
+    )
     if st.button('保存済みレースを開く', disabled=cached_choice == '選択しない', use_container_width=True):
         st.session_state.race_input_v141 = cached_choice
         st.rerun()
