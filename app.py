@@ -9,7 +9,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.13')
+st.title('🏇 競馬分析ラボ Ver.13.1')
 st.caption('過去成績の自動取得・上がり順位の追加分析・Excel比較')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -88,41 +88,49 @@ def get_results(horse_id, horse_name):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_race_agari(race_id):
-    """Returns horse-id -> finishing-speed rank, or raises on an unknown layout."""
-    url = f'https://race.netkeiba.com/race/result.html?race_id={race_id}'
+    """Race-wide finishing 3F rank keyed by netkeiba horse ID."""
+    url = f'https://db.netkeiba.com/race/{race_id}/'
     res = requests.get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
-    res.encoding = res.apparent_encoding
+    res.encoding = 'EUC-JP'
     soup = BeautifulSoup(res.text, 'html.parser')
-    table = soup.select_one('table.RaceTable01')
+
+    table = None
+    columns = None
+    for candidate in soup.select('table'):
+        first_row = candidate.select_one('tr')
+        if first_row is None:
+            continue
+        names = [re.sub(r'\s+', '', c.get_text(' ', strip=True))
+                 for c in first_row.find_all(['th', 'td'], recursive=False)]
+        if '馬名' in names and ('上り' in names or '上がり' in names):
+            table, columns = candidate, names
+            break
     if table is None:
-        raise ValueError('レース結果表が見つかりません')
-    header = table.select_one('thead tr')
-    if header is None:
-        raise ValueError('見出しが見つかりません')
-    headings = [re.sub(r'\s+', '', c.get_text(' ', strip=True)) for c in header.select('th,td')]
-    speed_col = next((i for i, name in enumerate(headings) if name in ('上り', '上がり', '上り3F', '上がり3F')), None)
-    horse_col = next((i for i, name in enumerate(headings) if name in ('馬名',)), None)
-    if speed_col is None or horse_col is None:
-        raise ValueError('馬名・上がり列を特定できません')
+        raise ValueError('馬名・上り列のある結果表が見つかりません')
+
+    horse_col = columns.index('馬名')
+    speed_col = columns.index('上り') if '上り' in columns else columns.index('上がり')
     speeds = {}
-    for tr in table.select('tbody tr'):
+    for tr in table.select('tr')[1:]:
         cells = tr.find_all(['th', 'td'], recursive=False)
-        if len(cells) <= max(speed_col, horse_col):
+        if len(cells) <= max(horse_col, speed_col):
             continue
-        a = cells[horse_col].select_one('a[href*="/horse/"]')
-        if a is None:
+        horse_cell = cells[horse_col]
+        horse_link = horse_cell.select_one('a[href*="/horse/"]')
+        if horse_link is None:
             continue
-        match = re.search(r'/horse/(\d{10})', a.get('href', ''))
+        match = re.search(r'/horse/(\d{10})', horse_link.get('href', ''))
         if not match:
             continue
-        speed = pd.to_numeric(cells[speed_col].get_text(' ', strip=True), errors='coerce')
+        raw_speed = cells[speed_col].get_text(' ', strip=True)
+        speed = pd.to_numeric(raw_speed, errors='coerce')
         if pd.notna(speed) and 20 <= float(speed) <= 60:
             speeds[match.group(1)] = float(speed)
     if len(speeds) < 2:
-        raise ValueError('上がりタイムが十分にありません')
-    sorted_speeds = sorted(speeds.values())
-    return {horse_id: 1 + sum(v < speed for v in sorted_speeds) for horse_id, speed in speeds.items()}
+        raise ValueError('上がりタイムを2頭以上取得できません')
+    return {hid: 1 + sum(other < speed for other in speeds.values())
+            for hid, speed in speeds.items()}
 
 
 def add_recent_agari_ranks(data, max_per_horse=5):
@@ -296,7 +304,7 @@ if horses:
         status.empty()
 
 if st.session_state.auto_df is not None:
-    st.subheader('上がり順位の追加取得（Ver.13）')
+    st.subheader('上がり順位の追加取得（Ver.13.1）')
     available = int(st.session_state.auto_df['上がり順位'].notna().sum())
     st.write(f'現在、上がり順位が判明している成績：{available}走')
     st.caption('各馬の直近5走を対象に、レース全体の上がりタイムから同タイム同順位で算出します。レース結果ページの仕様によって取得できない場合があります。')
