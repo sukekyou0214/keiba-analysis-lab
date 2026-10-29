@@ -11,14 +11,14 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.14.2')
+st.title('🏇 競馬分析ラボ Ver.14.3')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
 METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
-ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質']}
+ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード']}
 
 
 # サーバー上の簡易キャッシュ。Streamlit Cloudの再起動・再デプロイで消える場合があります。
@@ -100,6 +100,22 @@ def get_saved_race_label(rid):
     return fallback
 
 
+def classify_grade(text):
+    """レース名とHTML上の明示的な格付け情報だけから判定。推測しない。"""
+    value = str(text or '')
+    normalized = (value.upper().replace('Ｇ', 'G').replace('Ⅰ', 'I').replace('Ⅱ', 'II').replace('Ⅲ', 'III')
+                  .replace('１', '1').replace('２', '2').replace('３', '3'))
+    # G1, GI, ＧⅠ, Jpn1, JpnI, [G2] などに対応
+    hit = re.search(r'(?<![A-Z0-9])(?:G|JPN)\s*[-(（\[]?\s*(III|II|I|[123])(?=[^A-Z0-9]|$)', normalized)
+    if hit:
+        val = hit.group(1)
+        return {'I': 'G1', '1': 'G1', 'II': 'G2', '2': 'G2', 'III': 'G3', '3': 'G3'}[val]
+    # 明示的に重賞以外とわかる表記のみをその他とする
+    if re.search(r'(?:\bOP\b|\bL\b|リステッド|オープン|\d勝クラス|[１２３]勝クラス|未勝利|新馬|特別|障害未勝利|500万下|1000万下|1600万下)', normalized):
+        return 'その他'
+    return '不明'
+
+
 def parse_race_id(raw):
     value = raw.strip()
     if value.isdigit() and len(value) == 12:
@@ -161,6 +177,27 @@ def get_results(horse_id, horse_name):
                     race_id = match.group(1)
                     break
             record['レースID'] = race_id
+            # レース名の文字列だけでなく、アイコン等のtitle/altも参照する。
+            race_cell = None
+            if 'レース名' in columns:
+                cells = row.select('th, td')
+                idx = columns.index('レース名')
+                if idx < len(cells):
+                    race_cell = cells[idx]
+            grade_text = record.get('レース名', '')
+            if race_cell is not None:
+                grade_text += ' ' + ' '.join(
+                    str(tag.get(attr, '')) for tag in race_cell.select('[title], [alt]')
+                    for attr in ('title', 'alt') if tag.get(attr)
+                )
+                # アイコンのCSS classに grade1/grade2 などが明示されていれば利用。
+                grade_text += ' ' + ' '.join(
+                    'G' + match.group(1)
+                    for tag in race_cell.find_all(True)
+                    for match in [re.search(r'(?:gradetype|grade)[_-]?([123])\b', ' '.join(tag.get('class', [])), re.I)]
+                    if match
+                )
+            record['レース格'] = classify_grade(grade_text)
             records.append(record)
     if not records:
         raise ValueError('成績の抽出件数が0件です')
@@ -296,7 +333,7 @@ def convert_auto(raw):
     data['前半3F'] = pd.to_numeric(pace_pair[0], errors='coerce')
     data['後半3F'] = pd.to_numeric(pace_pair[1], errors='coerce')
     data['前後半3F差'] = data['前半3F'] - data['後半3F']
-    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']].copy()
+    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース格']].copy()
 
 
 def prepare(data):
@@ -319,6 +356,16 @@ def prepare(data):
         if c not in data.columns:
             data[c] = '不明'
         data[c] = data[c].fillna('不明').astype(str).str.strip()
+    # 旧CSVはレース格未収録。明示的なレース名があれば判定し、不明なものをその他に混ぜない。
+    if 'レース格' not in data.columns:
+        if 'レース名' in data.columns:
+            data['レース格'] = data['レース名'].apply(classify_grade)
+        else:
+            data['レース格'] = '不明'
+    else:
+        valid_grades = ['G1', 'G2', 'G3', 'その他', '不明']
+        grades = data['レース格'].fillna('').astype(str).str.strip()
+        data['レース格'] = grades.where(grades.isin(valid_grades), grades.apply(classify_grade))
     data['馬名'] = data['馬名'].astype(str).str.strip()
     data = data[data['馬名'].ne('') & data['馬名'].ne('nan')].copy()
     if '日付' in data.columns:
@@ -522,10 +569,16 @@ course_options = ['すべて'] + sorted(analysis_df['コース'].dropna().astype
 course = st.selectbox('コース', course_options)
 distance = st.selectbox('距離', ['すべて', '1200m以下', '1201〜1600m', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'])
 recent = st.selectbox('対象レース', ['直近5走', '直近10走', '直近15走', '全走'])
+grade_filter = st.selectbox('レース格', ['全レース', '重賞のみ（G1・G2・G3）', 'G1のみ', 'その他（L・OP・条件戦など）'])
+st.caption('格付けが確認できない走は「不明」として保持。重賞・G1・その他の絞り込みから除外します。')
 pace_filter = st.selectbox('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'])
 st.caption('前半3Fと後半3Fの差が±1秒以内をミドル寄り、前半が1秒超速ければハイ寄り、遅ければスロー寄りとする簡易分類。公式のペース判定ではありません。距離や馬場条件で比較し、少数サンプルに注意してください。')
 st.caption('脚質は4角位置と頭数から便宜的に推定。先頭（4角）＝逃げ確定ではなく、差し追込率は後方位置の割合です。')
-st.caption('直近走数は、競馬場・馬場・距離・推定ペースで絞り込んだ後に適用します。')
+st.caption('直近走数は、競馬場・馬場・距離・レース格・推定ペースで絞り込んだ後に適用します。')
+counts = analysis_df['レース格'].value_counts()
+st.caption('判定済み：' + ' / '.join(f'{g} {int(counts.get(g, 0))}走' for g in ['G1', 'G2', 'G3', 'その他']) + f' / 不明 {int(counts.get("不明", 0))}走')
+if int(counts.get('不明', 0)):
+    st.info('レース格が不明な成績があります。以前のバージョンで取得したデータは格付け未保存の場合があります。必要に応じて新しく過去成績を取得し直してください。')
 if mode == 'ランキング':
     metric = st.selectbox('ランキング指標', METRICS)
 else:
@@ -542,6 +595,10 @@ if st.button('分析する', type='primary', use_container_width=True):
         filtered = filtered[filtered['馬場状態'] == track]
     if course != 'すべて' and 'コース' in filtered.columns:
         filtered = filtered[filtered['コース'] == course]
+    if grade_filter != '全レース':
+        grade_targets = {'重賞のみ（G1・G2・G3）': ['G1', 'G2', 'G3'],
+                         'G1のみ': ['G1'], 'その他（L・OP・条件戦など）': ['その他']}
+        filtered = filtered[filtered['レース格'].isin(grade_targets[grade_filter])]
     if pace_filter != 'すべて':
         filtered = filtered[filtered['推定ペース'] == pace_filter]
     ranges = {'1200m以下': (0, 1200), '1201〜1600m': (1201, 1600), '1601〜1800m': (1601, 1800), '1801〜2200m': (1801, 2200), '2201〜2400m': (2201, 2400), '2401m以上': (2401, float('inf'))}
