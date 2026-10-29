@@ -9,8 +9,8 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.12')
-st.caption('出走馬・過去成績の自動取得と、Excel・CSVによる比較分析')
+st.title('🏇 競馬分析ラボ Ver.13')
+st.caption('過去成績の自動取得・上がり順位の追加分析・Excel比較')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
@@ -71,10 +71,89 @@ def get_results(horse_id, horse_name):
             record = dict(zip(columns, values))
             record['馬名'] = horse_name
             record['馬ID'] = horse_id
+            links = row.select("a[href*='race_id='], a[href*='/race/']")
+            race_id = ''
+            for link in links:
+                href = link.get('href', '')
+                match = re.search(r'(?:race_id=|/race/)(\d{12})', href)
+                if match:
+                    race_id = match.group(1)
+                    break
+            record['レースID'] = race_id
             records.append(record)
     if not records:
         raise ValueError('成績の抽出件数が0件です')
     return pd.DataFrame(records)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_race_agari(race_id):
+    """Returns horse-id -> finishing-speed rank, or raises on an unknown layout."""
+    url = f'https://race.netkeiba.com/race/result.html?race_id={race_id}'
+    res = requests.get(url, headers=HEADERS, timeout=20)
+    res.raise_for_status()
+    res.encoding = res.apparent_encoding
+    soup = BeautifulSoup(res.text, 'html.parser')
+    table = soup.select_one('table.RaceTable01')
+    if table is None:
+        raise ValueError('レース結果表が見つかりません')
+    header = table.select_one('thead tr')
+    if header is None:
+        raise ValueError('見出しが見つかりません')
+    headings = [re.sub(r'\s+', '', c.get_text(' ', strip=True)) for c in header.select('th,td')]
+    speed_col = next((i for i, name in enumerate(headings) if name in ('上り', '上がり', '上り3F', '上がり3F')), None)
+    horse_col = next((i for i, name in enumerate(headings) if name in ('馬名',)), None)
+    if speed_col is None or horse_col is None:
+        raise ValueError('馬名・上がり列を特定できません')
+    speeds = {}
+    for tr in table.select('tbody tr'):
+        cells = tr.find_all(['th', 'td'], recursive=False)
+        if len(cells) <= max(speed_col, horse_col):
+            continue
+        a = cells[horse_col].select_one('a[href*="/horse/"]')
+        if a is None:
+            continue
+        match = re.search(r'/horse/(\d{10})', a.get('href', ''))
+        if not match:
+            continue
+        speed = pd.to_numeric(cells[speed_col].get_text(' ', strip=True), errors='coerce')
+        if pd.notna(speed) and 20 <= float(speed) <= 60:
+            speeds[match.group(1)] = float(speed)
+    if len(speeds) < 2:
+        raise ValueError('上がりタイムが十分にありません')
+    sorted_speeds = sorted(speeds.values())
+    return {horse_id: 1 + sum(v < speed for v in sorted_speeds) for horse_id, speed in speeds.items()}
+
+
+def add_recent_agari_ranks(data, max_per_horse=5):
+    data = data.copy()
+    if 'レースID' not in data.columns or '馬ID' not in data.columns:
+        raise ValueError('レースID・馬IDがありません。Ver.13で成績を再取得してください。')
+    data['上がり順位'] = pd.to_numeric(data['上がり順位'], errors='coerce')
+    work = data.sort_values('日付', ascending=False, kind='stable').groupby('馬名', sort=False).head(max_per_horse)
+    work = work[work['上がり順位'].isna() & work['レースID'].astype(str).str.fullmatch(r'\d{12}')]
+    race_ids = work['レースID'].astype(str).drop_duplicates().tolist()
+    if not race_ids:
+        return data, 0, []
+    progress = st.progress(0)
+    status = st.empty()
+    ranks_by_race = {}
+    errors = []
+    for i, rid in enumerate(race_ids, 1):
+        status.write(f'上がり順位を照合中：{i}/{len(race_ids)}レース')
+        try:
+            ranks_by_race[rid] = get_race_agari(rid)
+        except Exception as e:
+            errors.append(f'{rid}：{e}')
+        progress.progress(i / len(race_ids))
+        if i < len(race_ids):
+            time.sleep(0.5)
+    status.empty()
+    for idx, row in work.iterrows():
+        rank = ranks_by_race.get(str(row['レースID']), {}).get(str(row['馬ID']))
+        if rank is not None:
+            data.at[idx, '上がり順位'] = rank
+    return data, len(race_ids), errors
 
 
 def venue_name(value):
@@ -98,7 +177,7 @@ def convert_auto(raw):
     data['4角順位'] = pd.to_numeric(data['通過'].astype(str).str.extract(r'(\d+)\s*$')[0], errors='coerce')
     data['上がり順位'] = float('nan')
     data['日付'] = pd.to_datetime(data['日付'], errors='coerce')
-    return data[['馬名', '馬ID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位']].copy()
+    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位']].copy()
 
 
 def prepare(data):
@@ -215,6 +294,22 @@ if horses:
         if errors:
             st.warning('取得できなかった馬：' + ' / '.join(errors))
         status.empty()
+
+if st.session_state.auto_df is not None:
+    st.subheader('上がり順位の追加取得（Ver.13）')
+    available = int(st.session_state.auto_df['上がり順位'].notna().sum())
+    st.write(f'現在、上がり順位が判明している成績：{available}走')
+    st.caption('各馬の直近5走を対象に、レース全体の上がりタイムから同タイム同順位で算出します。レース結果ページの仕様によって取得できない場合があります。')
+    if st.button('直近5走の上がり順位を取得', use_container_width=True):
+        try:
+            updated, checked, errors = add_recent_agari_ranks(st.session_state.auto_df)
+            st.session_state.auto_df = updated
+            count = int(updated['上がり順位'].notna().sum())
+            st.success(f'照合したレース：{checked}件 / 上がり順位を取得済み：{count}走')
+            if errors:
+                st.warning(f'確認できなかったレース：{len(errors)}件。最初の例：{errors[0]}')
+        except Exception as e:
+            st.error(f'上がり順位の取得に失敗：{e}')
 
 st.caption('自動取得は接続先の仕様・アクセス制限によって失敗する場合があります。取得データの利用条件も確認してください。')
 manual = st.text_area('手入力する出走馬名（1行に1頭・任意）', height=110, placeholder='自動取得できない場合などに入力')
