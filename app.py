@@ -11,14 +11,14 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.14.3')
+st.title('🏇 競馬分析ラボ Ver.14.4')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
 METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
-ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード']}
+ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード'], 'レース名': ['レース名'], '格付け根拠': ['格付け根拠']}
 
 
 # サーバー上の簡易キャッシュ。Streamlit Cloudの再起動・再デプロイで消える場合があります。
@@ -197,6 +197,7 @@ def get_results(horse_id, horse_name):
                     for match in [re.search(r'(?:gradetype|grade)[_-]?([123])\b', ' '.join(tag.get('class', [])), re.I)]
                     if match
                 )
+            record['格付け根拠'] = grade_text.strip()
             record['レース格'] = classify_grade(grade_text)
             records.append(record)
     if not records:
@@ -333,7 +334,7 @@ def convert_auto(raw):
     data['前半3F'] = pd.to_numeric(pace_pair[0], errors='coerce')
     data['後半3F'] = pd.to_numeric(pace_pair[1], errors='coerce')
     data['前後半3F差'] = data['前半3F'] - data['後半3F']
-    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース格']].copy()
+    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース名', '格付け根拠', 'レース格']].copy()
 
 
 def prepare(data):
@@ -366,6 +367,10 @@ def prepare(data):
         valid_grades = ['G1', 'G2', 'G3', 'その他', '不明']
         grades = data['レース格'].fillna('').astype(str).str.strip()
         data['レース格'] = grades.where(grades.isin(valid_grades), grades.apply(classify_grade))
+    for audit_col in ['レース名', '格付け根拠']:
+        if audit_col not in data.columns:
+            data[audit_col] = ''
+        data[audit_col] = data[audit_col].fillna('').astype(str).replace('nan', '')
     data['馬名'] = data['馬名'].astype(str).str.strip()
     data = data[data['馬名'].ne('') & data['馬名'].ne('nan')].copy()
     if '日付' in data.columns:
@@ -561,7 +566,41 @@ if analysis_df.empty:
     st.error('分析対象の馬の成績がありません。')
     st.stop()
 
-st.header('⑤ 分析条件')
+st.header('⑤ レース格の判定チェック（Ver.14.4）')
+st.caption('元のレース名と格付け根拠を見ながら、誤判定・判定不明を確認できます。ここで表示するのはフィルター適用前のデータです。')
+audit = analysis_df.copy()
+if '日付' in audit.columns:
+    audit = audit.sort_values(['馬名', '日付'], ascending=[True, False], kind='stable')
+audit_horses = ['全馬'] + sorted(audit['馬名'].unique().tolist())
+with st.expander('過去レースの格付け一覧を確認', expanded=False):
+    audit_horse = st.selectbox('確認する馬', audit_horses, key='audit_horse_v144')
+    audit_grade = st.selectbox('表示する格付け', ['すべて', 'G1', 'G2', 'G3', 'その他', '不明'], key='audit_grade_v144')
+    if audit_horse != '全馬':
+        audit = audit[audit['馬名'] == audit_horse]
+    if audit_grade != 'すべて':
+        audit = audit[audit['レース格'] == audit_grade]
+    audit_cols = ['馬名', '日付', 'レース名', 'レース格', '格付け根拠', '着順_数値', 'レースID']
+    audit_view = audit[[c for c in audit_cols if c in audit.columns]].copy()
+    if '日付' in audit_view.columns:
+        audit_view['日付'] = pd.to_datetime(audit_view['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+    if 'レースID' in audit_view.columns:
+        ids = audit_view['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
+        audit_view['レース結果URL'] = ids.apply(lambda v: f'https://race.netkeiba.com/race/result.html?race_id={v}' if re.fullmatch(r'\d{12}', v) else '')
+        audit_view = audit_view.drop(columns=['レースID'])
+    st.write(f'表示：{len(audit_view)}走（元データ：{len(analysis_df)}走）')
+    st.dataframe(audit_view, hide_index=True, use_container_width=True,
+                 column_config={'馬名': st.column_config.TextColumn('馬名', width='medium'),
+                                'レース名': st.column_config.TextColumn('レース名', width='medium'),
+                                '格付け根拠': st.column_config.TextColumn('格付け根拠', width='large'),
+                                'レース結果URL': st.column_config.LinkColumn('レース結果を確認', display_text='結果を見る')})
+    st.download_button('格付けチェック表をCSVで保存', audit_view.to_csv(index=False).encode('utf-8-sig'),
+                       file_name='keiba_grade_audit.csv', mime='text/csv', use_container_width=True)
+    missing_names = int(analysis_df['レース名'].fillna('').eq('').sum())
+    if missing_names:
+        st.warning(f'レース名がないデータが{missing_names}走あります。旧バージョンの保存データは、レース格を検証するために再取得が必要です。')
+    st.caption('格付け判定は取得ページの表記に依存します。G1・G2・G3と表示されても、根拠欄や実際のレース名と一致しているか確認してください。')
+
+st.header('⑥ 分析条件')
 mode = st.radio('分析モード', ['ランキング', '馬を比較'], horizontal=True)
 venue = st.selectbox('競馬場', ['すべて'] + sorted(analysis_df['競馬場'].unique().tolist()))
 track = st.selectbox('馬場状態', ['すべて'] + sorted(analysis_df['馬場状態'].unique().tolist()))
@@ -586,7 +625,7 @@ else:
     selected = st.multiselect('比較する馬（2〜3頭）', options, default=options[:2], max_selections=3)
 view = st.radio('表示方法', ['スマホ用カード', '横並び表'], horizontal=True)
 
-st.header('⑥ 分析する')
+st.header('⑦ 分析する')
 if st.button('分析する', type='primary', use_container_width=True):
     filtered = analysis_df.copy()
     if venue != 'すべて':
