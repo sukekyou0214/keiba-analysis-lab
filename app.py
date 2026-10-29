@@ -9,68 +9,122 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🏇 競馬分析ラボ Ver.9")
-st.caption("出走馬の過去成績を比較・分析するWebアプリ")
+st.title("🏇 競馬分析ラボ Ver.10")
+st.caption("出走馬の過去成績を比較・分析")
 
-# =================================
-# レースURL・レースIDの入力
-# =================================
+# ===== レース指定 =====
 
-st.subheader("レースを指定")
+st.header("① レースを指定")
 
-race_url = st.text_input(
-    "netkeibaの出馬表URL、または12桁のレースID",
-    placeholder="https://race.sp.netkeiba.com/race/shutuba.html?race_id=..."
+race_input = st.text_input(
+    "netkeiba出馬表URL または12桁のレースID",
+    placeholder="レースID・URLを貼り付け"
 )
 
-if race_url:
-    race_url = race_url.strip()
-    race_id = None
+race_id = ""
 
-    if race_url.isdigit() and len(race_url) == 12:
-        race_id = race_url
+if race_input.strip():
+    value = race_input.strip()
+
+    if value.isdigit() and len(value) == 12:
+        race_id = value
     else:
-        parsed = urlparse(race_url)
+        parsed = urlparse(value)
         host = (parsed.hostname or "").lower()
 
         if host == "netkeiba.com" or host.endswith(".netkeiba.com"):
-            candidate = parse_qs(parsed.query).get("race_id", [""])[0]
+            candidate = parse_qs(
+                parsed.query
+            ).get("race_id", [""])[0]
 
             if candidate.isdigit() and len(candidate) == 12:
                 race_id = candidate
 
     if race_id:
-        st.success(f"レースIDを認識しました：{race_id}")
-        st.info("出走馬の自動取得機能は現在準備中です。")
+        st.success(f"レースID：{race_id}")
     else:
-        st.warning("正しい出馬表URLまたはレースIDを入力してください。")
+        st.warning("URLか12桁のレースIDを確認してください。")
 
-st.divider()
+# ===== 出走馬リスト =====
 
-# =================================
-# Excelデータの読み込み
-# =================================
+st.header("② 出走馬を指定")
 
-st.subheader("過去成績データ")
+tenno_horses = [
+    "エルトンバローズ",
+    "クロワデュノール",
+    "コスモキュランダ",
+    "サクラファレル",
+    "シェイクユアハート",
+    "シャンパンカラー",
+    "ジュンブロッサム",
+    "ジョバンニ",
+    "セイウンハーデス",
+    "タガノデュード",
+    "ダノンデサイル",
+    "ネブラディスク",
+    "ホウオウビスケッツ",
+    "マスカレードボール",
+    "リアライズシリウス",
+    "レガレイラ",
+    "レディネス"
+]
 
-uploaded_file = st.file_uploader(
+preset = (
+    "\n".join(tenno_horses)
+    if race_id == "202605041111"
+    else ""
+)
+
+horse_text = st.text_area(
+    "出走馬の名前（1行に1頭）",
+    value=preset,
+    height=180,
+    help="別のレースなら出走馬名を改行区切りで貼り付け"
+)
+
+target_horses = list(dict.fromkeys(
+    name.strip()
+    for name in horse_text.splitlines()
+    if name.strip()
+))
+
+if target_horses:
+    st.info(f"指定した出走馬：{len(target_horses)}頭")
+else:
+    st.caption("未入力ならExcel内の全馬を分析します。")
+
+st.caption(
+    "現在、URLによる出走馬の自動取得は未対応です。"
+)
+
+# ===== Excel読み込み =====
+
+st.header("③ 過去成績を読み込む")
+
+uploaded = st.file_uploader(
     "分析データを選択",
     type=["xlsx", "csv"]
 )
 
-if uploaded_file is None:
-    st.info("ExcelまたはCSVをアップロードすると分析できます。")
+if uploaded is None:
+    st.info("過去成績のExcel・CSVをアップロードしてください。")
     st.stop()
 
 try:
-    if uploaded_file.name.lower().endswith(".csv"):
+    if uploaded.name.lower().endswith(".csv"):
         try:
-            df = pd.read_csv(uploaded_file, encoding="utf-8-sig")
+            df = pd.read_csv(
+                uploaded,
+                encoding="utf-8-sig"
+            )
         except UnicodeDecodeError:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, encoding="cp932")
+            uploaded.seek(0)
+            df = pd.read_csv(
+                uploaded,
+                encoding="cp932"
+            )
     else:
-        book = pd.ExcelFile(uploaded_file)
+        book = pd.ExcelFile(uploaded)
         sheet = (
             "分析用296走"
             if "分析用296走" in book.sheet_names
@@ -101,38 +155,42 @@ for target, candidates in aliases.items():
     if target not in df.columns:
         for candidate in candidates:
             if candidate in df.columns:
-                df = df.rename(columns={candidate: target})
+                df = df.rename(
+                    columns={candidate: target}
+                )
                 break
 
-required = ["馬名", "着順_数値"]
-missing = [c for c in required if c not in df.columns]
-
-if missing:
-    st.error("必要な列がありません：" + ", ".join(missing))
-    st.write("読み込んだ列名：", list(df.columns))
+if not {"馬名", "着順_数値"}.issubset(df.columns):
+    st.error("Excelに馬名または着順の列がありません。")
+    st.write(list(df.columns))
     st.stop()
 
-numeric_cols = [
+for col in [
     "距離_m",
     "着順_数値",
     "上がり3F_秒",
     "4角順位",
     "上がり順位"
-]
-
-for col in numeric_cols:
+]:
     if col not in df.columns:
         df[col] = float("nan")
-    df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df[col] = pd.to_numeric(
+        df[col], errors="coerce"
+    )
 
 for col in ["競馬場", "馬場状態"]:
     if col not in df.columns:
         df[col] = "不明"
-    df[col] = df[col].fillna("不明").astype(str).str.strip()
+
+    df[col] = df[col].fillna(
+        "不明"
+    ).astype(str).str.strip()
 
 df["馬名"] = df["馬名"].astype(str).str.strip()
 df = df[
-    df["馬名"].ne("") & df["馬名"].ne("nan")
+    df["馬名"].ne("") &
+    df["馬名"].ne("nan")
 ].copy()
 
 if "日付" in df.columns:
@@ -140,18 +198,46 @@ if "日付" in df.columns:
         df["日付"], errors="coerce"
     )
 
-horses = sorted(df["馬名"].unique().tolist())
+total_rows = len(df)
+total_horses = df["馬名"].nunique()
 
 st.success(
-    f"データ読み込み成功！ {len(df)}走 / {len(horses)}頭"
+    f"読み込み成功：{total_rows}走 / {total_horses}頭"
 )
 
-# =================================
-# 分析条件
-# =================================
+# 指定した出走馬に限定
+if target_horses:
+    available = set(df["馬名"].unique())
 
-st.divider()
-st.subheader("分析条件")
+    missing = [
+        horse for horse in target_horses
+        if horse not in available
+    ]
+
+    df = df[
+        df["馬名"].isin(target_horses)
+    ].copy()
+
+    st.write(
+        f"出走馬との照合結果：{df['馬名'].nunique()}頭"
+    )
+
+    if missing:
+        st.warning(
+            "過去成績が見つからない馬："
+            + "、".join(missing)
+        )
+
+if df.empty:
+    st.error(
+        "指定した馬の過去成績がありません。"
+        "別のExcelか馬名を確認してください。"
+    )
+    st.stop()
+
+# ===== 分析条件 =====
+
+st.header("④ 分析条件")
 
 mode = st.radio(
     "分析モード",
@@ -159,37 +245,33 @@ mode = st.radio(
     horizontal=True
 )
 
-c1, c2 = st.columns(2)
+venue = st.selectbox(
+    "競馬場",
+    ["すべて"] + sorted(df["競馬場"].unique())
+)
 
-with c1:
-    venue = st.selectbox(
-        "競馬場",
-        ["すべて"] + sorted(df["競馬場"].unique().tolist())
-    )
+track = st.selectbox(
+    "馬場状態",
+    ["すべて"] + sorted(df["馬場状態"].unique())
+)
 
-    distance = st.selectbox(
-        "距離",
-        [
-            "すべて",
-            "1200m以下",
-            "1201〜1600m",
-            "1601〜1800m",
-            "1801〜2200m",
-            "2201〜2400m",
-            "2401m以上"
-        ]
-    )
+distance = st.selectbox(
+    "距離",
+    [
+        "すべて",
+        "1200m以下",
+        "1201〜1600m",
+        "1601〜1800m",
+        "1801〜2200m",
+        "2201〜2400m",
+        "2401m以上"
+    ]
+)
 
-with c2:
-    track = st.selectbox(
-        "馬場状態",
-        ["すべて"] + sorted(df["馬場状態"].unique().tolist())
-    )
-
-    recent = st.selectbox(
-        "対象レース",
-        ["直近5走", "直近10走", "直近15走", "全走"]
-    )
+recent = st.selectbox(
+    "対象レース",
+    ["直近5走", "直近10走", "直近15走", "全走"]
+)
 
 metrics = [
     "勝率(%)",
@@ -204,12 +286,16 @@ metrics = [
 ]
 
 if mode == "ランキング":
-    metric = st.selectbox("ランキング指標", metrics)
+    metric = st.selectbox(
+        "ランキング指標", metrics
+    )
 else:
+    horse_options = sorted(df["馬名"].unique())
+
     selected = st.multiselect(
         "比較する馬（2〜3頭）",
-        horses,
-        default=horses[:min(2, len(horses))],
+        horse_options,
+        default=horse_options[:2],
         max_selections=3
     )
 
@@ -219,9 +305,7 @@ view = st.radio(
     horizontal=True
 )
 
-# =================================
-# データ絞り込み
-# =================================
+# ===== 絞り込み =====
 
 def filter_data(data):
     data = data.copy()
@@ -249,33 +333,35 @@ def filter_data(data):
 
     if "日付" in data.columns:
         data = data.sort_values(
-            "日付", ascending=False, kind="stable"
+            "日付",
+            ascending=False,
+            kind="stable"
         )
 
     if recent != "全走":
         n = int(
             recent.replace("直近", "").replace("走", "")
         )
+
         data = data.groupby(
             "馬名", sort=False
         ).head(n)
 
     return data
 
-# =================================
-# 集計処理
-# =================================
+# ===== 集計 =====
 
 def summarize(group):
     finish = group["着順_数値"].dropna()
-    agari_rank = group["上がり順位"].dropna()
+    agari = group["上がり順位"].dropna()
 
-    def rate(count, denominator):
-        if denominator == 0:
-            return float("nan")
-        return round(count / denominator * 100, 2)
+    def rate(count, n):
+        return (
+            round(count / n * 100, 2)
+            if n else float("nan")
+        )
 
-    return pd.Series({
+    return {
         "出走数": len(group),
         "平均着順": finish.mean(),
         "平均4角": group["4角順位"].mean(),
@@ -289,19 +375,17 @@ def summarize(group):
         "複勝率(%)": rate(
             (finish <= 3).sum(), len(finish)
         ),
-        "上がり対象走数": len(agari_rank),
+        "上がり対象走数": len(agari),
         "上がり最速率(%)": rate(
-            (agari_rank == 1).sum(), len(agari_rank)
+            (agari == 1).sum(), len(agari)
         ),
         "上がり3位以内率(%)": rate(
-            (agari_rank <= 3).sum(), len(agari_rank)
+            (agari <= 3).sum(), len(agari)
         ),
-        "平均上がり順位": agari_rank.mean()
-    })
+        "平均上がり順位": agari.mean()
+    }
 
-# =================================
-# 分析結果
-# =================================
+# ===== 分析実行 =====
 
 if st.button(
     "分析する",
@@ -310,33 +394,27 @@ if st.button(
 ):
     filtered = filter_data(df)
 
-    if filtered.empty:
-        st.warning("条件に一致するレースがありません。")
-        st.stop()
-
     if mode == "馬を比較":
         if len(selected) < 2:
-            st.warning("比較する馬を2頭以上選んでください。")
+            st.warning("2頭以上選んでください。")
             st.stop()
 
         filtered = filtered[
             filtered["馬名"].isin(selected)
         ]
 
-    results = []
-
-    for horse, group in filtered.groupby("馬名"):
-        row = summarize(group).to_dict()
-        row["馬名"] = horse
-        results.append(row)
-
-    result = pd.DataFrame(results)
-
-    if result.empty:
-        st.warning("分析可能なデータがありません。")
+    if filtered.empty:
+        st.warning("条件に一致するデータがありません。")
         st.stop()
 
-    st.divider()
+    rows = []
+
+    for horse, group in filtered.groupby("馬名"):
+        row = summarize(group)
+        row["馬名"] = horse
+        rows.append(row)
+
+    result = pd.DataFrame(rows)
 
     if mode == "ランキング":
         ascending = metric in [
@@ -351,17 +429,13 @@ if st.button(
             ascending=ascending,
             na_position="last",
             kind="stable"
-        ).reset_index(drop=True)
-
-        result.insert(
-            0,
-            "順位",
-            result[metric].rank(
-                method="min",
-                ascending=ascending,
-                na_option="bottom"
-            ).astype(int)
         )
+
+        result["順位"] = result[metric].rank(
+            method="min",
+            ascending=ascending,
+            na_option="bottom"
+        ).astype(int)
 
         st.subheader(f"🏆 {metric} ランキング")
 
@@ -389,36 +463,38 @@ if st.button(
                 hide_index=True,
                 use_container_width=True
             )
-
     else:
         for _, row in result.iterrows():
             with st.container(border=True):
-                heading = f"🐎 {row['馬名']}"
+                label = f"🐎 {row['馬名']}"
 
                 if mode == "ランキング":
-                    heading = (
-                        f"{int(row['順位'])}位  {heading}"
+                    label = (
+                        f"{int(row['順位'])}位 {label}"
                     )
 
-                st.markdown(f"### {heading}")
+                st.markdown(f"### {label}")
                 st.caption(
                     f"対象：{int(row['出走数'])}走"
                 )
 
                 for key in metrics:
-                    value = row[key]
+                    val = row[key]
 
-                    if pd.isna(value):
+                    if pd.isna(val):
                         shown = "データなし"
                     else:
-                        shown = f"{value:.2f}"
+                        shown = f"{val:.2f}"
 
                         if key.endswith("(%)"):
                             shown += "%"
 
-                    st.write(
-                        f"**{key}：** {shown}"
-                    )
+                    st.write(f"**{key}：** {shown}")
+
+                st.caption(
+                    "上がり順位の割合は、"
+                    f"記録のある{int(row['上がり対象走数'])}走が分母"
+                )
 
     csv_data = result.to_csv(
         index=False
