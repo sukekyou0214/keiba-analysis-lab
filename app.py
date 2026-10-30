@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.9.1')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.10.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2163,7 +2163,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.9.1')
+    st.caption('競馬分析ラボ Ver.20.10.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2335,6 +2335,39 @@ if selected_page208 in ('🏇 総合診断', '🐎 各馬の特徴'):
                 {'馬名':'馬番＋正式馬名','走りの総合診断':'強み・走り方',
                  '展開':'好走展開','信頼度':'根拠の信頼度','好走走数':'好走走数'})
             st.caption('信頼度はデータの充実度の目安で、予測的中率ではありません。')
+            # Ver.20.10: 計算結果を変えず、根拠となる有効データと欠測を監査する。
+            with st.expander('分析の信頼性チェック（全馬）', expanded=False):
+                audit210 = quick_result171[['馬名','対象走数','好走走数','ラップ確認走数',
+                                             '位置取得','上がり取得','信頼度']].copy()
+                count_cols210 = ['対象走数','好走走数','ラップ確認走数','位置取得','上がり取得']
+                for col210 in count_cols210:
+                    audit210[col210] = pd.to_numeric(audit210[col210], errors='coerce').fillna(0).astype(int)
+                audit210['検証結果'] = audit210.apply(
+                    lambda r: '要確認：走数不整合'
+                    if (r['好走走数'] > r['対象走数']
+                        or r['ラップ確認走数'] > r['対象走数']
+                        or r['位置取得'] > r['対象走数']
+                        or r['上がり取得'] > r['対象走数'])
+                    else ('参考：対象2走以下' if r['対象走数'] <= 2
+                          else '注意：ラップ確認0走' if r['ラップ確認走数'] == 0
+                          else '注意：ラップ確認少数' if r['ラップ確認走数'] <= 2
+                          else 'データ量を確認'), axis=1)
+                audit_display210 = display_horse_column(audit210, horses, st.session_state.auto_numbers)
+                fixed_order_table_v209(
+                    audit_display210,
+                    ['馬名','対象走数','好走走数','ラップ確認走数','位置取得','上がり取得','信頼度','検証結果'],
+                    {'馬名':'馬番＋正式馬名','対象走数':'重賞対象','好走走数':'3着内',
+                     'ラップ確認走数':'ラップ有効','位置取得':'4角有効',
+                     '上がり取得':'上がり有効','信頼度':'既存の信頼度','検証結果':'監査メモ'},
+                    max_height=560)
+                issues210 = int(audit210['検証結果'].eq('要確認：走数不整合').sum())
+                st.caption(f'走数不整合：{issues210}頭。対象走数が少ない馬やラップ未確認の馬は評価を参考扱いにしてください。')
+                st.caption('これはデータ量と整合性の監査です。S/M/H判定自体の正確性や、実際のレースでの予測精度は検証していません。')
+                st.download_button('信頼性チェックをCSV保存',
+                                   audit_display210.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_reliability_audit_v2010.csv',
+                                   mime='text/csv', width='stretch')
+
             # Ver.18: 実際のnetkeiba S/M/H実績から、選択した展開での好走率を比較。
             # レース全体のペースであり、将来の勝率を予測した値ではない。
             st.markdown('#### 想定ペース × 相性・実績')
@@ -2433,6 +2466,27 @@ if selected_page208 in ('🏇 総合診断', '🐎 各馬の特徴'):
                 fixed_order_table_v209(
                     pace_display18, ['馬名','相性','実績'],
                     {'馬名':'馬番＋正式馬名','相性':'他ペース比','実績':'3着内／出走'})
+                with st.expander('S/M/Hの判定データ監査', expanded=False):
+                    pace_audit210 = pace_result18[['馬名','想定ペース対象走数',
+                        '他ペース対象走数','ペース判定不能走数','相性','実績']].copy()
+                    pace_audit210['判定済み走数'] = (pace_audit210['想定ペース対象走数']
+                                                   + pace_audit210['他ペース対象走数'])
+                    pace_audit210['判定確認'] = pace_audit210.apply(
+                        lambda r: '要確認：合計が10走超'
+                        if r['判定済み走数'] + r['ペース判定不能走数'] > 10
+                        else '参考：該当1走以下'
+                        if r['想定ペース対象走数'] <= 1
+                        else '参考：他ペース1走以下'
+                        if r['他ペース対象走数'] <= 1
+                        else '少数例' if min(r['想定ペース対象走数'],r['他ペース対象走数']) < 4
+                        else '件数確認済み', axis=1)
+                    fixed_order_table_v209(
+                        display_horse_column(pace_audit210, horses, st.session_state.auto_numbers),
+                        ['馬名','想定ペース対象走数','他ペース対象走数','ペース判定不能走数','判定確認'],
+                        {'馬名':'馬番＋正式馬名','想定ペース対象走数':'選択S/M/H',
+                         '他ペース対象走数':'他ペース','ペース判定不能走数':'未判定',
+                         '判定確認':'監査メモ'})
+                    st.caption('3着内率の差は標本数が少ないと大きく変動します。ここでは判定の根拠件数を確認し、予測精度は主張しません。')
                 st.caption('相性はその馬自身の他ペースと比較した傾向。実績は選択ペースでの3着以内回数／出走回数。※は少数走数の参考判定。'
                            ' 該当0走と、ペース判定データ不足は区別しています。将来の勝率予測ではありません。')
                 with st.expander('各馬の根拠・対象走数・他ペースを確認',expanded=False):
