@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.18.0')
+st.title('🏇 競馬分析ラボ Ver.18.1')
 st.caption('一括取得 → 総合診断 → 想定ペース別の適性をすぐ比較。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1418,72 +1418,81 @@ with tab_main171:
                       'ハイ（H）': 'ハイ寄り'}[selected_pace18]
         results18 = []
         details18 = {}
+        pace_options18 = ['スロー寄り', 'ミドル寄り', 'ハイ寄り']
         for horse18 in quick_names171:
-            work18 = quick171.loc[quick171['馬名'].eq(horse18)].copy()
-            if work18.empty:
+            raw18 = quick171.loc[quick171['馬名'].eq(horse18)].copy()
+            if raw18.empty:
                 continue
-            work18['着順_数値'] = pd.to_numeric(work18['着順_数値'], errors='coerce')
-            work18 = work18.loc[work18['着順_数値'].ge(1) &
-                                work18['推定ペース'].isin(['スロー寄り','ミドル寄り','ハイ寄り'])].copy()
-            selected18 = work18.loc[work18['推定ペース'].eq(pace_key18)].copy()
-            others18 = work18.loc[~work18['推定ペース'].eq(pace_key18)].copy()
-            count18 = len(selected18)
-            other_count18 = len(others18)
-            wins18 = int(selected18['着順_数値'].le(3).sum())
-            other_wins18 = int(others18['着順_数値'].le(3).sum())
-            pct18 = 100 * wins18 / count18 if count18 else None
-            other_pct18 = 100 * other_wins18 / other_count18 if other_count18 else None
-            delta18 = pct18 - other_pct18 if pct18 is not None and other_pct18 is not None else None
-            if count18 == 0:
-                status18 = '未経験・不明'
-                explanation18 = 'このペースの着順付きデータがありません。苦手という意味ではありません。'
-            elif count18 < 2 or other_count18 < 2:
-                status18 = '比較材料不足'
-                explanation18 = '想定ペースと別ペースの両方が2走以上ないため、優劣は判定しません。'
-            elif delta18 >= 25:
-                status18 = '好走傾向あり' if min(count18, other_count18) >= 4 else '好走傾向（参考）'
-                explanation18 = '別ペースより3着以内率が25ポイント以上高い。ただし集計上の傾向です。'
-            elif delta18 <= -25:
-                status18 = '実績控えめ' if min(count18, other_count18) >= 4 else '実績控えめ（参考）'
-                explanation18 = '別ペースより3着以内率が25ポイント以上低い。不得意の証明ではありません。'
+            raw18['着順_数値'] = pd.to_numeric(raw18['着順_数値'], errors='coerce')
+            raw18 = raw18.loc[raw18['着順_数値'].ge(1)].copy()
+            unknown18 = int((~raw18['推定ペース'].isin(pace_options18)).sum())
+            known18 = raw18.loc[raw18['推定ペース'].isin(pace_options18)].copy()
+            selected18 = known18.loc[known18['推定ペース'].eq(pace_key18)].copy()
+            others18 = known18.loc[~known18['推定ペース'].eq(pace_key18)].copy()
+            n18, other_n18 = len(selected18), len(others18)
+            good18 = int(selected18['着順_数値'].le(3).sum())
+            other_good18 = int(others18['着順_数値'].le(3).sum())
+            pct18 = 100 * good18 / n18 if n18 else None
+            other_pct18 = 100 * other_good18 / other_n18 if other_n18 else None
+            diff18 = pct18 - other_pct18 if pct18 is not None and other_pct18 is not None else None
+            if n18 == 0:
+                if len(known18) == 0:
+                    status18 = '判定データ不足'
+                    reason18 = '着順付きのS/M/H判定済みデータがありません。'
+                elif unknown18:
+                    status18 = '該当0走※'
+                    reason18 = f'取得済みのS/M/Hには該当0走。ただしペース未判定が{unknown18}走あるため未経験とは断定できません。'
+                else:
+                    status18 = '該当0走'
+                    reason18 = '対象条件のペース判定済みレースには該当なし。苦手という意味ではありません。'
+            elif n18 < 2 or other_n18 < 2:
+                status18 = '比較不足'
+                reason18 = '想定ペースと他ペースの両方が2走以上必要なため、優劣は判定しません。'
+            elif diff18 >= 25:
+                status18 = '好走傾向' if min(n18,other_n18) >= 4 else '好走傾向※'
+                reason18 = '他ペースより3着内率が25ポイント以上高い。統計的な有意差や未来の勝率を意味しません。'
+            elif diff18 <= -25:
+                status18 = '実績控えめ' if min(n18,other_n18) >= 4 else '実績控えめ※'
+                reason18 = '他ペースより3着内率が25ポイント以上低い。苦手と断定するものではありません。'
             else:
-                status18 = '大差なし（参考）' if min(count18, other_count18) < 4 else '大差なし'
-                explanation18 = '別ペースとの3着以内率の差は25ポイント未満です。'
-            pos18 = pd.to_numeric(selected18.loc[selected18['着順_数値'].le(3), '4角順位'], errors='coerce').dropna()
-            finish18 = pd.to_numeric(selected18.loc[selected18['着順_数値'].le(3), '上がり順位'], errors='coerce').dropna()
-            posture18 = ('4角平均' + f'{pos18.mean():.1f}番手' if len(pos18) else '4角不明')
-            if len(finish18):
-                posture18 += f'／上がり3位内{int(finish18.le(3).sum())}/{len(finish18)}走'
-            records_label18 = f'{wins18}/{count18}走' if count18 else '—'
-            other_label18 = f'{other_wins18}/{other_count18}走' if other_count18 else '—'
-            results18.append({'馬名': horse18, '好走目安': status18,
-                              '今回ペース': records_label18,
-                              '3着内率': f'{pct18:.0f}%' if pct18 is not None else '—',
-                              '他ペース': other_label18,
-                              '対象走数': count18, '他ペース走数': other_count18})
-            details18[horse18] = (f'想定ペース：{pace_key18}。対象{count18}走で3着以内{wins18}走'
+                status18 = '大差なし' if min(n18,other_n18) >= 4 else '大差なし※'
+                reason18 = '他ペースとの3着内率差が25ポイント未満。'
+            good_rows18 = selected18.loc[selected18['着順_数値'].le(3)]
+            corners18 = pd.to_numeric(good_rows18['4角順位'], errors='coerce').dropna()
+            agari18 = pd.to_numeric(good_rows18['上がり順位'], errors='coerce').dropna()
+            pos_note18 = f'4角平均{corners18.mean():.1f}番手' if len(corners18) else '4角の有効データなし'
+            if len(agari18):
+                pos_note18 += f'／上がり3位内{int(agari18.le(3).sum())}/{len(agari18)}走'
+            results18.append({'馬名':horse18, '評価':status18,
+                              '実績': f'{good18}/{n18}走' if n18 else '—',
+                              '3着内率':f'{pct18:.1f}%' if pct18 is not None else '—',
+                              '想定ペース対象走数':n18, '他ペース対象走数':other_n18,
+                              '他ペース実績':f'{other_good18}/{other_n18}走' if other_n18 else '—',
+                              'ペース判定不能走数':unknown18})
+            details18[horse18] = (f'想定ペース：{pace_key18}／3着以内{good18}/{n18}走'
                                   + (f'（{pct18:.1f}%）' if pct18 is not None else '')
-                                  + f'。他ペースは{other_count18}走で3着以内{other_wins18}走'
+                                  + f'。他ペース：{other_good18}/{other_n18}走'
                                   + (f'（{other_pct18:.1f}%）' if other_pct18 is not None else '')
-                                  + '。' + explanation18 + ' 好走時の位置・末脚：' + posture18 + '。')
+                                  + f'。未判定：{unknown18}走。{reason18} 好走時：{pos_note18}。')
         pace_result18 = pd.DataFrame(results18)
         if not pace_result18.empty:
-            # 馬の総合診断と同じ順番に並べ、過度なランキングを避ける。
             pace_display18 = display_horse_column(pace_result18, horses, st.session_state.auto_numbers)
-            st.dataframe(pace_display18[['馬名', '好走目安', '今回ペース', '3着内率']],
-                         hide_index=True, use_container_width=True,
-                         height=min(700, 48+35*len(pace_display18)),
-                         column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
-                                        '好走目安': st.column_config.TextColumn('展開との相性', width='medium')})
-            st.caption('今回ペース＝3着以内回数／出走回数。直近10走の重賞のみ。netkeibaのS/M/H判定だけを集計。'
-                       '「好走傾向」は過去の実績差であり、予測勝率・能力順位ではありません。')
-            with st.expander('展開適性の根拠・他ペースと比較', expanded=False):
+            st.dataframe(pace_display18[['馬名','評価','実績']], hide_index=True,
+                         use_container_width=True, height=min(700,48+35*len(pace_display18)),
+                         column_config={'馬名':st.column_config.TextColumn('馬番＋馬名',width='medium'),
+                                        '評価':st.column_config.TextColumn('評価',width='small'),
+                                        '実績':st.column_config.TextColumn('3着内／出走',width='small')})
+            st.caption('実績＝想定ペースでの3着以内回数／出走回数。※は少数走数または未判定あり。'
+                       ' 該当0走と、ペース判定データ不足は区別しています。将来の勝率予測ではありません。')
+            with st.expander('各馬の根拠・対象走数・他ペースを確認',expanded=False):
                 chosen_pace18 = tap_choice('確認する馬', pace_display18['馬名'].tolist(), 'scenario_horse_v18')
-                chosen_raw18 = pace_result18.iloc[pace_display18['馬名'].tolist().index(chosen_pace18)]['馬名']
+                chosen_index18 = pace_display18['馬名'].tolist().index(chosen_pace18)
+                chosen_raw18 = pace_result18.iloc[chosen_index18]['馬名']
                 st.write(details18[chosen_raw18])
+                st.caption('集計対象：各馬の直近10走に含まれる重賞。netkeibaのS/M/H判定済みデータのみ。')
             st.download_button('想定ペース別比較をCSVで保存',
                                pace_display18.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_scenario_v18.csv', mime='text/csv',
+                               file_name='keiba_scenario_v181.csv',mime='text/csv',
                                use_container_width=True)
         if quick_shapes171.empty:
             st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。詳細分析からラップを取得すると展開診断も加わります。')
