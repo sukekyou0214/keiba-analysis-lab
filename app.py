@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.9.2')
+st.title('🏇 競馬分析ラボ Ver.15.9.3')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -541,6 +541,30 @@ def parse_lap_html_v1591(html, race_id):
             if len(lines) >= width and all(len(line)>=2 and len(line[0])==1 and len(line[1])==1 for line in lines[:width]):
                 for d, line in zip(distances, lines[:width]):
                     segments[d] = (line[0][0], line[1][0])
+
+    # 最終200mが単独の小表・別ノードになる場合の補完。
+    # 表の文字列から距離、累積、区間ラップの3点を読み、
+    # 直前までの合計との整合がある場合に限って追加する。
+    if race_distance and race_distance % 200 == 0 and race_distance not in segments:
+        last = race_distance
+        before = last - 200
+        if before in segments and sorted(segments) == list(range(200, last, 200)):
+            expected_previous = segments[before][0]
+            # 見出しが別テーブルになっていても対応するため、見出し以降の
+            # テキストを表単位で走査する（他セクションの数字は使用しない）。
+            candidate_texts = list(samples)
+            candidate_texts.extend(t.get_text(' ', strip=True) for t in tables)
+            pattern = re.compile(r'(?<!\d)' + str(last) +
+                                 r'\s*m\s+((?:\d{1,2}:)?\d{1,3}\.\d)\s+'
+                                 r'(\d{1,2}\.\d)(?!\d)', re.I)
+            for txt in candidate_texts:
+                match = pattern.search(txt)
+                if not match:
+                    continue
+                cumulative, lap = seconds(match.group(1)), seconds(match.group(2))
+                if 8 <= lap <= 25 and abs(cumulative - expected_previous - lap) <= 0.25:
+                    segments[last] = (cumulative, lap)
+                    break
 
     observed = sorted(segments)
     laps = [segments[d][1] for d in observed]
@@ -1232,7 +1256,7 @@ if st.session_state['analysis_visible_v1581']:
         st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
 
-    with st.expander('200mラップの試験取得（5レース＋1600m確認・Ver.15.9.2）', expanded=False):
+    with st.expander('200mラップの試験取得（5レース＋1600m確認・Ver.15.9.3）', expanded=False):
         st.caption('ラップ表の上段（通過タイム）と下段（200mラップ）を区別して読み込み、合計・累積タイムを検証します。ランキングは変更しません。')
         sample_ids = []
         if 'レースID' in pace_compare_base.columns:
