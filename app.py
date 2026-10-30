@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.20.6')
+st.title('🏇 競馬分析ラボ Ver.20.7')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2172,7 +2172,51 @@ st.caption(f'分析準備完了：{analysis_df["馬名"].nunique()}頭・{len(an
 
 # Ver.17.1: 通常利用は診断を最優先。保存済みラップから自動で計算する。
 # Streamlitのタブにより詳細分析のボタンや長い表を通常画面から分離する。
-# Ver.20.6: 通常の予想は3つの主タブだけ。品質確認と開発実験は別部門へ。
+# Ver.20.7: 通常の予想は3つの主タブだけ。品質確認と開発実験は別部門へ。
+# Ver.20.7: メイン3タブをiPhoneで押しやすい大型ナビゲーションにする。
+# ボタン以外の既存分析処理は変更せず、従来の詳細分析を維持。
+st.markdown("""
+<style>
+/* 画面幅いっぱいに表示する3つの主タブ。 */
+div[data-testid="stTabs"] > div[data-baseweb="tab-list"] {
+    display: flex !important;
+    width: 100% !important;
+    gap: 6px !important;
+    overflow: visible !important;
+    padding: 4px 0 10px !important;
+}
+div[data-testid="stTabs"] > div[data-baseweb="tab-list"] > button[role="tab"] {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    min-height: 70px !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    padding: 12px 5px !important;
+    line-height: 1.4 !important;
+    font-size: 18px !important;
+    font-weight: 750 !important;
+    text-align: center !important;
+    justify-content: center !important;
+    border: 1px solid rgba(130,140,160,.35) !important;
+    border-radius: 12px 12px 7px 7px !important;
+    background-color: rgba(120,130,150,.09) !important;
+}
+div[data-testid="stTabs"] > div[data-baseweb="tab-list"] > button[role="tab"][aria-selected="true"] {
+    background-color: rgba(228,75,91,.14) !important;
+    border: 2px solid #ef5264 !important;
+    color: inherit !important;
+}
+@media (max-width: 600px) {
+    div[data-testid="stTabs"] > div[data-baseweb="tab-list"] { gap: 5px !important; }
+    div[data-testid="stTabs"] > div[data-baseweb="tab-list"] > button[role="tab"] {
+        min-height: 78px !important;
+        font-size: 16px !important;
+        padding: 11px 4px !important;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
 tab_main171, tab_detail_short205, tab_detail171 = st.tabs(['🏇 総合診断', '📊 詳細分析', '⚙️ 詳細設定'])
 with st.expander('🧰 管理・検証（オプション）', expanded=False):
     st.caption('普段の予想には不要です。取得状況の確認や開発中の検証を行う場合だけ使用してください。')
