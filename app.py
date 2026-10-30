@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.1')
+st.title('🏇 競馬分析ラボ Ver.19.2')
 st.caption('一括取得 → 総合診断 → 序盤の位置取りと逃げ候補の競合から想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1378,6 +1378,77 @@ def render_pace_check_and_retry():
     else:
         st.caption('過去成績を取得すると、全レースのS/M/H取得ができます。')
 
+
+# Ver.19.2: データ修復はメイン画面を散らかさないように折りたたみに配置。
+# 成功した場合のみ差し替え、古い保存データを消さずに残す。
+with st.expander('序盤通過順の確認・過去成績の強制再取得（Ver.19.2）', expanded=False):
+    current_v192 = st.session_state.auto_df
+    if current_v192 is not None and not current_v192.empty:
+        total_v192 = len(current_v192)
+        corners_v192 = (current_v192['通過順'].fillna('').astype(str)
+                        if '通過順' in current_v192.columns else pd.Series('', index=current_v192.index))
+        valid_v192 = corners_v192.apply(lambda x: bool(re.search(r'\d+', x)))
+        st.write(f'保存済み過去成績：**{total_v192}走**／通過順の数値あり：**{int(valid_v192.sum())}走**')
+        bad_v192 = current_v192.loc[~valid_v192].copy()
+        if not bad_v192.empty:
+            st.warning(f'通過順が確認できない成績が{len(bad_v192)}走あります。旧キャッシュの可能性があります。')
+        else:
+            st.info('通過順の数値は保存されています。予測が判定保留なら、初通過地点の取得走数・頭数も確認してください。')
+        with st.expander('保存済み通過順のサンプルを確認', expanded=False):
+            show_cols_v192 = [c for c in ['馬名','レース名','日付','通過順','4角順位','頭数'] if c in current_v192.columns]
+            st.dataframe(current_v192[show_cols_v192].head(15), use_container_width=True, hide_index=True)
+    else:
+        st.caption('まだ過去成績がありません。先に出馬表URLから一括取得してください。')
+    st.caption('再取得は全馬の過去成績だけを再読込し、上がり順位・ペースなど取得済みの値はレースIDを使ってできるだけ引き継ぎます。元データは取得が成功するまで保持します。')
+    confirm_v192 = st.checkbox('現在のレースの全馬過去成績を再取得する（通信が発生します）', key='confirm_force_v192')
+    if st.button('過去成績を強制再取得・通過順を更新', type='secondary',
+                 disabled=(not confirm_v192 or not race_id), use_container_width=True):
+        current_horses_v192 = st.session_state.auto_horses
+        if not current_horses_v192:
+            st.error('出走馬一覧がありません。先に一括取得を実行してください。')
+        else:
+            try:
+                get_results.clear()  # @st.cache_data の旧データを再利用しない
+                fetched_v192, errors_v192 = [], []
+                prg_v192 = st.progress(0)
+                for idx_v192, (hid_v192, name_v192) in enumerate(current_horses_v192.items(), 1):
+                    try:
+                        raw_v192 = get_results(hid_v192, name_v192)
+                        fetched_v192.append(raw_v192)
+                    except Exception as exc_v192:
+                        errors_v192.append(f'{name_v192}: {str(exc_v192)[:100]}')
+                    prg_v192.progress(idx_v192 / len(current_horses_v192))
+                prg_v192.empty()
+                if errors_v192:
+                    st.error(f'{len(errors_v192)}頭で取得失敗したので、保存済みデータを維持しました。')
+                    with st.expander('失敗した馬を見る'):
+                        st.write(' / '.join(errors_v192))
+                else:
+                    rebuilt_v192 = prepare(convert_auto(pd.concat(fetched_v192, ignore_index=True)))
+                    old_v192 = st.session_state.auto_df
+                    if old_v192 is not None and not old_v192.empty:
+                        # 元データと同一馬・同一レースであると確認できた行だけ補助情報を復元する。
+                        keep_v192 = [c for c in ['上がり順位','netkeibaペース'] if c in old_v192.columns]
+                        if keep_v192 and all(c in old_v192.columns for c in ['馬ID','レースID']):
+                            previous_v192 = old_v192[['馬ID','レースID'] + keep_v192].copy()
+                            previous_v192['馬ID'] = previous_v192['馬ID'].astype(str)
+                            previous_v192['レースID'] = previous_v192['レースID'].astype(str)
+                            previous_v192 = previous_v192.drop_duplicates(['馬ID','レースID'])
+                            rebuilt_v192['馬ID'] = rebuilt_v192['馬ID'].astype(str)
+                            rebuilt_v192['レースID'] = rebuilt_v192['レースID'].astype(str)
+                            rebuilt_v192 = rebuilt_v192.drop(columns=keep_v192, errors='ignore').merge(
+                                previous_v192, on=['馬ID','レースID'], how='left', validate='many_to_one')
+                            rebuilt_v192 = prepare(rebuilt_v192)
+                    new_valid_v192 = int(rebuilt_v192['通過順'].fillna('').astype(str).str.contains(r'\d+',regex=True).sum())
+                    if new_valid_v192 == 0:
+                        st.error('再取得データでも通過順が0走でした。旧データを保持します。取得元のHTML列名を調べる必要があります。')
+                    else:
+                        st.session_state.auto_df = rebuilt_v192
+                        save_race_cache(race_id, current_horses_v192, rebuilt_v192)
+                        st.success(f'通過順を{new_valid_v192}/{len(rebuilt_v192)}走で確認し、データを更新しました。')
+                        st.rerun()
+            except Exception as exc_v192:
+                st.error(f'再取得を完了できませんでした。以前の保存データは維持しています：{exc_v192}')
 
 horses = st.session_state.auto_horses
 st.caption('データの保存はサーバー一時保存です。再起動で消える可能性があるため、必要ならデータ管理からExcelへ保存してください。')
