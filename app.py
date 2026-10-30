@@ -1,6 +1,4 @@
-競馬分析ラボ Ver.20.8.3
-更新対象はapp.pyのみ。iPhoneでは長文コピペよりファイルのアップロードを推奨。
-コード全文をコピー全文選択import re
+import re
 import json
 from pathlib import Path
 import time
