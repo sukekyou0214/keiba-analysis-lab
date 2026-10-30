@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.8.5')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.9.1')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -320,6 +320,30 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 
+
+
+def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
+    """主要比較表はHTMLの固定列順で表示。列ドラッグによる入れ替わりを防ぐ。"""
+    import html as _html
+    labels = labels or {}
+    cols = [c for c in columns if c in frame.columns]
+    if not cols:
+        return
+    heads = ''.join('<th>' + _html.escape(str(labels.get(c, c))) + '</th>' for c in cols)
+    body = []
+    for values in frame[cols].itertuples(index=False, name=None):
+        cells = ''.join('<td>' + _html.escape('—' if pd.isna(v) else str(v)) + '</td>' for v in values)
+        body.append('<tr>' + cells + '</tr>')
+    st.markdown(
+        '<div style="overflow:auto;max-height:' + str(max_height) + 'px;'
+        'border:1px solid #8885;border-radius:8px;overscroll-behavior:contain;">'
+        '<table style="border-collapse:collapse;min-width:570px;width:100%;font-size:13px;">'
+        '<thead><tr>' + heads + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
+        '<style>table th,table td{padding:9px 10px;text-align:left;border-bottom:1px solid #8883;'
+        'white-space:normal;vertical-align:top;}table th{position:sticky;top:0;background:#263040;'
+        'color:#fff;z-index:1;}table td:first-child,table th:first-child{min-width:115px;'
+        'font-weight:600;}</style>',
+        unsafe_allow_html=True)
 
 # ===== Ver.20: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
@@ -2139,7 +2163,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.8.5')
+    st.caption('競馬分析ラボ Ver.20.9.1')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2304,12 +2328,13 @@ if selected_page208 in ('🏇 総合診断', '🐎 各馬の特徴'):
         quick_result171 = pd.DataFrame(records171)
         if not quick_result171.empty:
             quick_display171 = display_horse_column(quick_result171, horses, st.session_state.auto_numbers)
-            st.dataframe(quick_display171[['馬名','走りの総合診断','展開','信頼度','好走走数']],
-                         hide_index=True, width='stretch',
-                         height=min(700, 48+35*len(quick_display171)),
-                         column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
-                                        '走りの総合診断': st.column_config.TextColumn('走りの特徴', width='medium'),
-                                        '展開': st.column_config.TextColumn('好走展開', width='medium')})
+            st.markdown('#### 全馬の特徴を比較')
+            st.caption('過去走から分かる走り方・好走展開の比較。能力順位や今回の勝率ではありません。')
+            fixed_order_table_v209(
+                quick_display171, ['馬名','走りの総合診断','展開','信頼度','好走走数'],
+                {'馬名':'馬番＋正式馬名','走りの総合診断':'強み・走り方',
+                 '展開':'好走展開','信頼度':'根拠の信頼度','好走走数':'好走走数'})
+            st.caption('信頼度はデータの充実度の目安で、予測的中率ではありません。')
             # Ver.18: 実際のnetkeiba S/M/H実績から、選択した展開での好走率を比較。
             # レース全体のペースであり、将来の勝率を予測した値ではない。
             st.markdown('#### 想定ペース × 相性・実績')
@@ -2405,11 +2430,9 @@ if selected_page208 in ('🏇 総合診断', '🐎 各馬の特徴'):
             pace_result18 = pd.DataFrame(results18)
             if not pace_result18.empty:
                 pace_display18 = display_horse_column(pace_result18, horses, st.session_state.auto_numbers)
-                st.dataframe(pace_display18[['馬名','相性','実績']], hide_index=True,
-                             width='stretch', height=min(700,48+35*len(pace_display18)),
-                             column_config={'馬名':st.column_config.TextColumn('馬番＋馬名',width='medium'),
-                                            '相性':st.column_config.TextColumn('他ペース比',width='small'),
-                                            '実績':st.column_config.TextColumn('3着内／出走',width='small')})
+                fixed_order_table_v209(
+                    pace_display18, ['馬名','相性','実績'],
+                    {'馬名':'馬番＋正式馬名','相性':'他ペース比','実績':'3着内／出走'})
                 st.caption('相性はその馬自身の他ペースと比較した傾向。実績は選択ペースでの3着以内回数／出走回数。※は少数走数の参考判定。'
                            ' 該当0走と、ペース判定データ不足は区別しています。将来の勝率予測ではありません。')
                 with st.expander('各馬の根拠・対象走数・他ペースを確認',expanded=False):
@@ -2447,8 +2470,10 @@ if selected_page208 == '🐎 各馬の特徴':
         st.caption('普段の比較はここだけでOK。複雑な絞り込みや旧式の集計は「分析条件」にあります。')
         if 'quick_display171' in locals() and isinstance(quick_display171, pd.DataFrame) and not quick_display171.empty:
             summary_cols205 = [c for c in ['馬名','走りの総合診断','展開','信頼度'] if c in quick_display171.columns]
-            st.dataframe(quick_display171[summary_cols205],hide_index=True,width='stretch',
-                         height=min(510,42+33*len(quick_display171)))
+            fixed_order_table_v209(
+                quick_display171, summary_cols205,
+                {'馬名':'馬番＋正式馬名','走りの総合診断':'走りの特徴',
+                 '展開':'好走展開','信頼度':'信頼度'}, max_height=510)
             with st.expander('気になる馬だけ根拠を表示', expanded=False):
                 choice205 = tap_choice('馬を選ぶ', quick_display171['馬名'].tolist(), 'quick_detail_horse_205')
                 rec205 = quick_display171.loc[quick_display171['馬名'].eq(choice205)].iloc[0]
