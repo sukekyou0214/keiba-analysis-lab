@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.14.1')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.15.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -399,6 +399,49 @@ def corner_projection_v2013(data, names, max_runs=5):
                 labels[stage] = (label, len(values))
         output[name] = labels
     return output
+
+
+def movement_profile_v2015(data, names, max_runs=5):
+    """同じ過去レース内での3角→4角と4角→ゴールの順位変化。
+
+    値は頭数で正規化した順位の差。ゴールは着順であり直線途中の隊列ではない。
+    角の記録が2地点以上のときだけ3角と4角を比較する。
+    """
+    from statistics import median
+    profiles = {}
+    for name in names:
+        h = data.loc[data['馬名'].eq(name)].copy()
+        if '日付' in h.columns:
+            h = h.sort_values('日付', ascending=False, na_position='last', kind='stable')
+        h = h.head(max_runs)
+        changes_corner, changes_finish = [], []
+        for _, r in h.iterrows():
+            n = pd.to_numeric(r.get('頭数'), errors='coerce')
+            if pd.isna(n) or n < 2:
+                continue
+            n = int(n)
+            parts = [int(x) for x in re.findall(r'\d+', str(r.get('通過順', '')))]
+            if not (1 <= len(parts) <= 4) or any(x < 1 or x > n for x in parts):
+                continue
+            last = parts[-1]
+            if len(parts) >= 2:
+                before = parts[-2]
+                changes_corner.append((before-last)/(n-1))
+            finish = pd.to_numeric(r.get('着順_数値'), errors='coerce')
+            if pd.notna(finish) and 1 <= finish <= n:
+                changes_finish.append((last-int(finish))/(n-1))
+        def summarize(values, stage):
+            if not values:
+                return 'データ不足', 0
+            # 5%以内は誤差を含むため「ほぼ維持」扱い
+            v = median(values)
+            if v >= .05:
+                return ('位置を上げる傾向' if stage == 'corner' else 'ゴールまで追い上げ'), len(values)
+            if v <= -.05:
+                return ('位置を下げる傾向' if stage == 'corner' else 'ゴールまで後退'), len(values)
+            return 'おおむね位置維持', len(values)
+        profiles[name] = (summarize(changes_corner,'corner'), summarize(changes_finish,'finish'))
+    return profiles
 
 
 # ===== Ver.20: 過去レース全出走馬を対象とする事前データ検証 =====
@@ -2219,7 +2262,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.14.1')
+    st.caption('競馬分析ラボ Ver.20.15.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2596,6 +2639,24 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                     else:
                         st.caption('過去5走のコーナー通過順を頭数比で分類。該当地点の記録がなければ不明。'
                                    '馬名横の数字は有効走数。今回の隊列を確定するものではありません。')
+                with st.expander('仕掛けどころ・直線の追い上げ傾向（直近5走）', expanded=False):
+                    profiles215 = movement_profile_v2015(analysis_df, quick_names171)
+                    rows215 = []
+                    for name215 in quick_names171:
+                        (c215, nc215), (f215, nf215) = profiles215[name215]
+                        rows215.append({'馬名': name215,
+                            '3角→4角': c215, '角の有効走数': nc215,
+                            '4角→ゴール': f215, '直線の有効走数': nf215})
+                    movement215 = display_horse_column(
+                        pd.DataFrame(rows215), horses, st.session_state.auto_numbers)
+                    fixed_order_table_v209(movement215,
+                        ['馬名','3角→4角','角の有効走数','4角→ゴール','直線の有効走数'],
+                        {'馬名':'馬番＋馬名','3角→4角':'コーナーでの動き',
+                         '角の有効走数':'対象走','4角→ゴール':'直線の追い上げ',
+                         '直線の有効走数':'対象走'}, max_height=540)
+                    st.caption('同一過去レース内の順位変化を頭数で補正し、中央値で分類。'
+                               '4角→ゴールは着順との比較であり、直線途中の位置を再現したものではありません。'
+                               '少数走数は参考扱い。S/M/H・競馬場・距離を区別した将来予測ではありません。')
             if selected_page208 == '🏇 総合診断':
                 if quick_shapes171.empty:
                     st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。分析条件からラップを取得すると展開診断も加わります。')
