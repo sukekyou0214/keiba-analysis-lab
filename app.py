@@ -1,7 +1,3 @@
-Ver.20.8.1 軽量復旧版
-コード全文をコピーし、GitHubの app.py を置き換えます。その他のファイルは触らないでください。
-コード全文をコピー
-
 import re
 import json
 from pathlib import Path
