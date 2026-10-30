@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.15.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.16.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -442,6 +442,44 @@ def movement_profile_v2015(data, names, max_runs=5):
             return 'おおむね位置維持', len(values)
         profiles[name] = (summarize(changes_corner,'corner'), summarize(changes_finish,'finish'))
     return profiles
+
+
+
+def movement_audit_v2016(data, horse_names, max_runs=5):
+    """判定に使用した各走の元値・計算式・除外理由を監査用に出力。"""
+    from statistics import median
+    rows = []
+    for name in horse_names:
+        h = data.loc[data['馬名'].eq(name)].copy()
+        if '日付' in h.columns:
+            h = h.sort_values('日付', ascending=False, na_position='last', kind='stable')
+        h = h.head(max_runs)
+        for _, r in h.iterrows():
+            n = pd.to_numeric(r.get('頭数'), errors='coerce')
+            parts = [int(x) for x in re.findall(r'\d+', str(r.get('通過順', '')))]
+            fin = pd.to_numeric(r.get('着順_数値'), errors='coerce')
+            valid_n = pd.notna(n) and n >= 2
+            valid_pass = valid_n and 1 <= len(parts) <= 4 and all(1 <= p <= n for p in parts)
+            valid_fin = valid_pass and pd.notna(fin) and 1 <= fin <= n
+            c3 = parts[-2] if valid_pass and len(parts) >= 2 else None
+            c4 = parts[-1] if valid_pass else None
+            corner_delta = ((c3-c4)/(n-1) if c3 is not None else None)
+            finish_delta = ((c4-int(fin))/(n-1) if valid_fin else None)
+            reason = ('頭数が不明' if not valid_n else
+                      '通過順が不明・形式不正' if not valid_pass else
+                      '着順が不明' if not valid_fin else '有効')
+            rows.append({'馬名':name, '日付':str(r.get('日付','')),
+                         'レース名':str(r.get('レース名','')),
+                         '頭数':int(n) if valid_n else None,
+                         '通過順_原文':str(r.get('通過順','')),
+                         '3角':c3, '4角':c4,
+                         '着順':int(fin) if pd.notna(fin) else None,
+                         '3角→4角_順位変化':c3-c4 if c3 is not None else None,
+                         '3角→4角_補正値':round(corner_delta,4) if corner_delta is not None else None,
+                         '4角→着順_順位変化':c4-int(fin) if valid_fin else None,
+                         '4角→着順_補正値':round(finish_delta,4) if finish_delta is not None else None,
+                         '検証':reason})
+    return pd.DataFrame(rows)
 
 
 # ===== Ver.20: 過去レース全出走馬を対象とする事前データ検証 =====
@@ -2262,7 +2300,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.15.0')
+    st.caption('競馬分析ラボ Ver.20.16.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2654,6 +2692,42 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                         {'馬名':'馬番＋馬名','3角→4角':'コーナーでの動き',
                          '角の有効走数':'対象走','4角→ゴール':'直線の追い上げ',
                          '直線の有効走数':'対象走'}, max_height=540)
+                    with st.expander('クロワ・レガレイラ・マスカレードの過去5走を検算', expanded=False):
+                        audit_names216 = [n for n in quick_names171 if any(
+                            key in n for key in ('クロワデュノール','レガレイラ','マスカレードボール'))]
+                        if not audit_names216:
+                            st.info('検証対象3頭のデータがありません。')
+                        else:
+                            audit216 = movement_audit_v2016(analysis_df, audit_names216)
+                            st.caption('各走の3角・4角・着順を原文から再計算。'
+                                       '正の値＝順位上昇、負の値＝順位低下。'
+                                       '補正値＝順位変化÷(頭数−1)。'
+                                       '現行の判定は各馬の補正値の中央値が±0.05以上かで分類。')
+                            st.dataframe(audit216, hide_index=True, width='stretch')
+                            for name216 in audit_names216:
+                                subset216 = audit216[audit216['馬名'].eq(name216)]
+                                st.markdown('**' + name216 + '**')
+                                for col216, title216 in [
+                                    ('3角→4角_補正値','3角→4角'),
+                                    ('4角→着順_補正値','4角→ゴール')]:
+                                    nums216 = pd.to_numeric(subset216[col216], errors='coerce').dropna()
+                                    if len(nums216):
+                                        median216 = float(nums216.median())
+                                        result216 = ('上昇' if median216 >= .05 else
+                                                     '低下' if median216 <= -.05 else '維持')
+                                        st.write(f'{title216}：有効{len(nums216)}走／'
+                                                 f'補正値中央値 {median216:+.3f}／{result216}')
+                                    else:
+                                        st.write(f'{title216}：有効0走（判定不能）')
+                            st.download_button(
+                                '3頭の過去走検算データをCSV保存',
+                                audit216.to_csv(index=False).encode('utf-8-sig'),
+                                file_name='keiba_movement_audit_v2016.csv',
+                                mime='text/csv', width='stretch')
+                            st.caption('※3角→4角は通過順位の比較。'
+                                       '4角→ゴールは着順との比較であり、'
+                                       '実際の直線での加速地点や追い抜きの瞬間は分かりません。'
+                                       'レースごとの通過順を公式記録と照合して精度を検証してください。')
                     st.caption('同一過去レース内の順位変化を頭数で補正し、中央値で分類。'
                                '4角→ゴールは着順との比較であり、直線途中の位置を再現したものではありません。'
                                '少数走数は参考扱い。S/M/H・競馬場・距離を区別した将来予測ではありません。')
