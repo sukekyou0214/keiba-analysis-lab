@@ -11,8 +11,8 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.18.2')
-st.caption('一括取得 → 総合診断 → 想定ペース別の適性をすぐ比較。')
+st.title('🏇 競馬分析ラボ Ver.19.0')
+st.caption('一括取得 → 総合診断 → 出走馬の位置取りから想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
@@ -141,6 +141,50 @@ def diagnose_horse_v17(horse_df, lap_label=''):
     return {'走りの総合診断': title, '位置取り': pos_label, '末脚': agari_label,
             '展開': short_lap, 'S/M/H': pace_summary, '信頼度': conf, '対象走数': len(d),
             '好走走数': n_good, '位置取得': n_pos, '上がり取得': n_agari, '根拠': reason}
+
+
+
+def estimate_field_pace_v19(data, names):
+    """直近の4角位置から隊列の混雑度を推定する試作。実際の道中ラップではない。"""
+    names = list(dict.fromkeys(names))
+    records = []
+    for name in names:
+        h = data.loc[data['馬名'].eq(name)].copy()
+        if '日付' in h.columns:
+            h = h.sort_values('日付', ascending=False, na_position='last', kind='stable')
+        # 直近5走。G1のみではサンプル不足なので格付けを限定しない。
+        h = h.head(5)
+        p = pd.to_numeric(h['4角順位'], errors='coerce')
+        f = pd.to_numeric(h['頭数'], errors='coerce')
+        valid = p.ge(1) & f.ge(2) & p.le(f)
+        n = int(valid.sum())
+        lead = int((valid & p.eq(1)).sum())
+        front = int((valid & (p.le((f * .35).clip(lower=2)))).sum())
+        # 4角先頭を繰り返す馬と前方につけやすい馬を分ける。
+        leader = n >= 2 and lead / n >= .4
+        forward = n >= 2 and front / n >= .6
+        records.append({'馬名': name, '位置データ': n, '4角先頭':lead,
+                        '前方走数':front, '先頭候補':leader, '先行候補':forward})
+    info = pd.DataFrame(records)
+    known = int(info['位置データ'].ge(2).sum()) if not info.empty else 0
+    leaders = int(info['先頭候補'].sum()) if not info.empty else 0
+    forward = int(info['先行候補'].sum()) if not info.empty else 0
+    total = len(info)
+    coverage = known / total if total else 0
+    # 推定を強行しない。Hは逃げ候補が複数で先行候補も多いときだけ。
+    if total == 0 or coverage < .6:
+        pred = None
+        explanation = f'4角位置を2走以上確認できた馬が{known}/{total}頭のため、判定保留。'
+    elif leaders >= 2 and forward >= max(4, (total + 3)//4):
+        pred = 'ハイ（H）'
+        explanation = '4角先頭の常連が複数おり、前方を取りたい馬も多い。'
+    elif leaders == 0 and forward <= max(2, total//6):
+        pred = 'スロー（S）'
+        explanation = '4角先頭・先行寄りの候補が比較的少ない。'
+    else:
+        pred = 'ミドル（M）'
+        explanation = '逃げ・先行候補の集中が極端ではない。'
+    return pred, explanation, info, known, leaders, forward
 
 def tap_choice(label, options, key, format_func=None):
     """iPhone向け：検索欄のないポップオーバー内ラジオ選択。"""
@@ -1421,6 +1465,24 @@ with tab_main171:
         # Ver.18: 実際のnetkeiba S/M/H実績から、選択した展開での好走率を比較。
         # レース全体のペースであり、将来の勝率を予測した値ではない。
         st.markdown('#### 想定ペース × 相性・実績')
+        # Ver.19: 出走馬の位置取りから暫定の想定ペースを表示。
+        # レースの真のS/M/H判定ではない。発走前の展開は不確実である。
+        predicted_v19, reason_v19, pressure_v19, known_v19, lead_v19, front_v19 = estimate_field_pace_v19(analysis_df, quick_names171)
+        if predicted_v19:
+            st.write(f'**暫定の想定ペース：{predicted_v19}**')
+            st.caption(f'{reason_v19} 4角位置の確認：{known_v19}/{len(quick_names171)}頭／先頭候補：{lead_v19}頭／先行候補：{front_v19}頭。')
+        else:
+            st.write('**暫定の想定ペース：判定保留**')
+            st.caption(reason_v19)
+        st.caption('位置取りの過去実績からの簡易推定です。実際の逃げ宣言・枠順・騎手の作戦・馬場・序盤のラップは未反映。信頼度は限定的です。')
+        with st.expander('ペース予測の根拠（各馬の位置取り）', expanded=False):
+            pressure_show_v19 = display_horse_column(pressure_v19[['馬名','位置データ','4角先頭','前方走数','先頭候補','先行候補']], horses, st.session_state.auto_numbers)
+            st.dataframe(pressure_show_v19, hide_index=True, use_container_width=True)
+            st.caption('先頭候補＝直近5走の有効4角位置で1番手が40%以上。先行候補＝4角上位約35%が60%以上。いずれも2走以上で判定。')
+        # ユーザーによる切替を尊重。初めて表示するときだけ暫定予測を初期選択。
+        if st.session_state.get('scenario_pace_race_v19') != quick_race171:
+            st.session_state['scenario_pace_v18'] = predicted_v19 or 'ミドル（M）'
+            st.session_state['scenario_pace_race_v19'] = quick_race171
         selected_pace18 = st.radio('今回想定するペース',
                                    ['スロー（S）', 'ミドル（M）', 'ハイ（H）'],
                                    horizontal=True, key='scenario_pace_v18')
