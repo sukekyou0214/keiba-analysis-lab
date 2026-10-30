@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.16.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.17.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -480,6 +480,24 @@ def movement_audit_v2016(data, horse_names, max_runs=5):
                          '4角→着順_補正値':round(finish_delta,4) if finish_delta is not None else None,
                          '検証':reason})
     return pd.DataFrame(rows)
+
+
+def movement_counts_v2017(data, names, max_runs=5):
+    """直近最大5走の順位変化を実際の順位差で集計。欠測を維持に含めない。"""
+    audit = movement_audit_v2016(data, names, max_runs)
+    output = {}
+    for name in names:
+        subset = audit.loc[audit['馬名'].eq(name)]
+        stages = []
+        for column in ('3角→4角_順位変化', '4角→着順_順位変化'):
+            values = pd.to_numeric(subset[column], errors='coerce').dropna()
+            up = int((values > 0).sum())
+            same = int((values == 0).sum())
+            down = int((values < 0).sum())
+            missing = len(subset) - len(values)
+            stages.append((f'上昇{up}／維持{same}／後退{down}', len(values), missing))
+        output[name] = (stages[0], stages[1], len(subset))
+    return output
 
 
 # ===== Ver.20: 過去レース全出走馬を対象とする事前データ検証 =====
@@ -2300,7 +2318,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.16.0')
+    st.caption('競馬分析ラボ Ver.20.17.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2692,6 +2710,35 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                         {'馬名':'馬番＋馬名','3角→4角':'コーナーでの動き',
                          '角の有効走数':'対象走','4角→ゴール':'直線の追い上げ',
                          '直線の有効走数':'対象走'}, max_height=540)
+                    st.markdown('**全頭の位置変化回数（直近最大5走）**')
+                    counts217 = movement_counts_v2017(analysis_df, quick_names171)
+                    count_rows217 = []
+                    for name217 in quick_names171:
+                        (cc217, cn217, cm217), (fc217, fn217, fm217), total217 = counts217[name217]
+                        count_rows217.append({
+                            '馬名': name217,
+                            '3角→4角': cc217,
+                            '角の有効': f'{cn217}/{total217}',
+                            '角の欠損': cm217,
+                            '4角→ゴール': fc217,
+                            'ゴールの有効': f'{fn217}/{total217}',
+                            'ゴールの欠損': fm217})
+                    count_df217 = display_horse_column(
+                        pd.DataFrame(count_rows217), horses, st.session_state.auto_numbers)
+                    fixed_order_table_v209(count_df217,
+                        ['馬名','3角→4角','角の有効','角の欠損','4角→ゴール','ゴールの有効','ゴールの欠損'],
+                        {'馬名':'馬番＋馬名','3角→4角':'コーナーの回数',
+                         '角の有効':'有効走','角の欠損':'欠損走',
+                         '4角→ゴール':'ゴールまでの回数',
+                         'ゴールの有効':'有効走','ゴールの欠損':'欠損走'}, max_height=540)
+                    st.caption('上昇・維持・後退は同一レース内の実際の順位差で分類（1つでも順位を上げれば上昇）。'
+                               '上の「傾向」は頭数補正後の中央値による別の判定です。'
+                               '欠損走は通過順などが足りず計算できない走数で、維持には含めません。'
+                               '海外レースなどでは通過順が欠損する場合があります。')
+                    st.download_button('全頭の位置変化回数をCSV保存',
+                        pd.DataFrame(count_rows217).to_csv(index=False).encode('utf-8-sig'),
+                        file_name='keiba_movement_counts_v2017.csv',
+                        mime='text/csv', width='stretch')
                     with st.expander('クロワ・レガレイラ・マスカレードの過去5走を検算', expanded=False):
                         audit_names216 = [n for n in quick_names171 if any(
                             key in n for key in ('クロワデュノール','レガレイラ','マスカレードボール'))]
