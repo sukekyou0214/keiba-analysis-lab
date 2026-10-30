@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.12.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.13.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -323,42 +323,83 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
-    """主要比較表はHTMLの固定列順で表示。列ドラッグによる入れ替わりを防ぐ。"""
+    """横スクロール中も馬番＋馬名2文字を固定。元の馬名は欠落させない。"""
     import html as _html
     labels = labels or {}
     cols = [c for c in columns if c in frame.columns]
     if not cols:
         return
     heads = ''.join('<th>' + _html.escape(str(labels.get(c, c))) + '</th>' for c in cols)
-    body = []
-    for values in frame[cols].itertuples(index=False, name=None):
-        cells_list = []
-        for idx, v in enumerate(values):
+    rows = []
+    for vals in frame[cols].itertuples(index=False, name=None):
+        cells = []
+        for idx, v in enumerate(vals):
             raw = '—' if pd.isna(v) else str(v)
             if idx == 0 and cols[0] == '馬名':
-                match = __import__('re').match(r'^([0-9０-９]+)\\s*(.+)$', raw)
-                if match:
-                    short = match.group(1) + ' ' + match.group(2)[:2]
-                else:
-                    short = raw[:2]
-                cells_list.append('<td class="keiba-pinned-name" title="' + _html.escape(raw, quote=True)
-                                  + '">' + _html.escape(short) + '</td>')
+                # 既存の馬番表示が「1 クロワデュノール」でも、元の正式馬名だけでも対応。
+                m = re.match(r'^([0-9０-９]+)\\s*(.+)$', raw)
+                short = m.group(1) + ' ' + m.group(2)[:2] if m else raw[:2]
+                cells.append('<td class="k-name" title="' + _html.escape(raw, quote=True)
+                             + '">' + _html.escape(short) + '</td>')
             else:
-                cells_list.append('<td>' + _html.escape(raw) + '</td>')
-        cells = ''.join(cells_list)
-        body.append('<tr>' + cells + '</tr>')
+                cells.append('<td>' + _html.escape(raw) + '</td>')
+        rows.append('<tr>' + ''.join(cells) + '</tr>')
     st.markdown(
-        '<div style="overflow:auto;max-height:' + str(max_height) + 'px;border:1px solid #8885;border-radius:8px;">'
-        '<table class="keiba-fixed-table" style="border-collapse:separate;border-spacing:0;min-width:570px;width:100%;font-size:13px;">'
-        '<thead><tr>' + heads + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
-        '<style>.keiba-fixed-table th,.keiba-fixed-table td{padding:9px 10px;text-align:left;'
-        'border-bottom:1px solid #8883;white-space:normal;vertical-align:top;background:#111827;}'
-        '.keiba-fixed-table th{position:sticky;top:0;background:#263040;color:#fff;z-index:1;}'
-        '.keiba-fixed-table td:first-child,.keiba-fixed-table th:first-child{position:sticky;left:0;'
-        'width:76px;min-width:76px;max-width:76px;background:#1c2534;z-index:2;'
-        'box-shadow:2px 0 4px #0005;font-weight:700;white-space:nowrap;}'
-        '.keiba-fixed-table th:first-child{z-index:3;background:#263040;}</style>',
+        '<div class="k-scroll" style="overflow-x:auto;overflow-y:auto;max-height:' + str(max_height) + 'px">'
+        '<table class="k-table"><thead><tr>' + heads + '</tr></thead><tbody>'
+        + ''.join(rows) + '</tbody></table></div>'
+        '<style>.k-scroll{border:1px solid #8885;border-radius:8px;}'
+        '.k-table{border-collapse:separate;border-spacing:0;min-width:600px;width:100%;font-size:13px;}'
+        '.k-table td,.k-table th{padding:9px 10px;text-align:left;border-bottom:1px solid #8884;'
+        'vertical-align:top;white-space:normal;background:#111827;color:#f4f5f8;}'
+        '.k-table th{position:sticky;top:0;background:#263040;z-index:1;}'
+        '.k-table td:first-child,.k-table th:first-child{position:sticky;left:0;'
+        'width:88px;min-width:88px;max-width:88px;white-space:nowrap;'
+        'background:#1c2534;z-index:2;box-shadow:2px 0 5px #0007;font-weight:700;}'
+        '.k-table th:first-child{background:#263040;z-index:3;'
+        'font-size:0;} .k-table th:first-child:after{content:"馬番＋馬名";font-size:13px;}</style>',
         unsafe_allow_html=True)
+
+
+def corner_projection_v2013(data, names, max_runs=5):
+    """実際の通過順を先頭・中団・後方の頭数比に正規化して段階別に集計。
+    1角/2角を記録しないレースでは推測で補完しない。
+    直線は4角の位置からの参考値で、実際の直線位置は不明。
+    """
+    from statistics import median
+    stages = ('1角','2角','3角','4角')
+    output = {}
+    for name in names:
+        h = data.loc[data['馬名'].eq(name)].copy()
+        if '日付' in h:
+            h = h.sort_values('日付', ascending=False, na_position='last', kind='stable')
+        h = h.head(max_runs)
+        observed = {k: [] for k in stages}
+        for _, r in h.iterrows():
+            n = pd.to_numeric(r.get('頭数'), errors='coerce')
+            if pd.isna(n) or n < 2:
+                continue
+            nums = [int(x) for x in re.findall(r'\\d+', str(r.get('通過順', '')))]
+            # 2地点なら3角/4角、3地点なら2角/3角/4角、
+            # 4地点なら1角～4角。1地点なら4角のみと解釈。
+            # 5地点以上や不自然な値は安全のため除外する。
+            if not 1 <= len(nums) <= 4 or any(x < 1 or x > n for x in nums):
+                continue
+            for stage, rank in zip(stages[4-len(nums):], nums):
+                observed[stage].append((rank-1)/(n-1))
+        labels = {}
+        for stage in stages:
+            values = observed[stage]
+            if not values:
+                labels[stage] = ('不明', 0)
+            else:
+                ratio = median(values)
+                label = ('逃げ' if ratio <= .075 else '先行' if ratio <= .35
+                         else '中団' if ratio <= .70 else '後方')
+                labels[stage] = (label, len(values))
+        output[name] = labels
+    return output
+
 
 # ===== Ver.20: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
@@ -2178,7 +2219,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.12.0')
+    st.caption('競馬分析ラボ Ver.20.13.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2397,41 +2438,50 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                 else:
                     st.write('**暫定の想定ペース：判定保留**')
                     st.caption(reason_v19)
-                # Ver.20.12: 観測された過去の初通過位置から作る模式図。予測着順ではない。
-                with st.expander('スタート後の隊列イメージ（過去走からの推定）', expanded=True):
+                # Ver.20.13: 角ごとに実測された通過順を別々に集計する。
+                with st.expander('コーナー別の隊列イメージ（過去走からの推定）', expanded=True):
                     import html as _pace_html
-                    view212 = display_horse_column(
-                        pressure_v19[['馬名','初通過取得','逃げ候補','先行候補']],
-                        horses, st.session_state.auto_numbers)
-                    lane212 = {'逃げ候補': [], '先行候補': [], 'その他': []}
-                    for _, rr212 in view212.iterrows():
-                        name212 = str(rr212['馬名'])
-                        mm212 = __import__('re').match(r'^([0-9０-９]+)\\s*(.+)$', name212)
-                        brief212 = (mm212.group(1) + ' ' + mm212.group(2)[:2]) if mm212 else name212[:4]
-                        tag212 = ('逃げ候補' if bool(rr212['逃げ候補']) else
-                                  '先行候補' if bool(rr212['先行候補']) else 'その他')
-                        lane212[tag212].append(
-                            '<span title="' + _pace_html.escape(name212, quote=True)
-                            + '" style="display:inline-block;margin:3px;padding:6px 8px;'
-                              'background:#fff;color:#172236;border-radius:20px;font-weight:700;'
-                              'font-size:13px;">' + _pace_html.escape(brief212) + '</span>')
-                    lane_html212 = ''.join(
-                        '<div style="padding:10px 7px;border-bottom:2px dashed #ffffff60;">'
-                        '<strong style="display:block;margin-bottom:6px;">' + title212 + '</strong>'
-                        + (''.join(lane212[key212]) or '—') + '</div>'
-                        for key212,title212 in [('逃げ候補','先頭付近（逃げ候補）'),
-                                                ('先行候補','前方（先行候補）'),
-                                                ('その他','中団・後方・位置不明')])
-                    st.markdown(
-                        '<div style="background:#b5db69;color:#182b1b;padding:12px;'
-                        'border-radius:12px;text-align:center;">'
-                        '<div style="font-weight:700;padding:7px;background:#c3edf4;'
-                        'border-radius:8px;">スタート → 第1通過地点（模式図）</div>'
-                        + lane_html212 + '</div>', unsafe_allow_html=True)
-                    st.caption('各馬の表示は馬番＋馬名先頭2文字。長押し等のタイトルに正式馬名。'
-                               '過去5走の初通過位置による大まかなグループ分けで、'
-                               '実際の隊列・着順・スタート直後の位置を予測したものではありません。'
-                               '「その他」にはデータ不足の馬も含まれます。')
+                    proj213 = corner_projection_v2013(analysis_df, quick_names171)
+                    horse_labels213 = display_horse_column(
+                        pd.DataFrame({'馬名': quick_names171}), horses,
+                        st.session_state.auto_numbers)['馬名'].tolist()
+                    # display_horse_column の番号と正式馬名をそのまま使用
+                    label_map213 = dict(zip(quick_names171, horse_labels213))
+                    for stage213 in ('1角','2角','3角','4角'):
+                        groups213 = {k: [] for k in ('逃げ','先行','中団','後方','不明')}
+                        for horse213 in quick_names171:
+                            group213, samples213 = proj213[horse213][stage213]
+                            full213 = str(label_map213.get(horse213, horse213))
+                            mm213 = re.match(r'^([0-9０-９]+)\\s*(.+)$', full213)
+                            brief213 = (mm213.group(1) + ' ' + mm213.group(2)[:2]
+                                        if mm213 else full213[:4])
+                            groups213[group213].append(
+                                '<span title="' + _pace_html.escape(full213, quote=True)
+                                + '" style="display:inline-block;margin:3px;padding:6px 8px;'
+                                  'background:#fff;color:#172236;border-radius:20px;'
+                                  'font-weight:700;font-size:13px;">'
+                                + _pace_html.escape(brief213)
+                                + '<small style="opacity:.65"> ' + str(samples213) + '走</small></span>')
+                        blocks213 = ''.join(
+                            '<div style="padding:8px;border-bottom:1px dashed #ffffff88;">'
+                            '<strong>' + k213 + '</strong><div>'
+                            + (''.join(groups213[k213]) or '—') + '</div></div>'
+                            for k213 in ('逃げ','先行','中団','後方','不明'))
+                        st.markdown(
+                            '<div style="margin:10px 0;padding:12px;border-radius:12px;'
+                            'background:#b5db69;color:#182b1b;">'
+                            '<div style="background:#c3edf4;padding:9px;border-radius:8px;'
+                            'text-align:center;font-weight:700;">' + stage213 + '（過去走の位置傾向）</div>'
+                            + blocks213 + '</div>', unsafe_allow_html=True)
+                    st.markdown('**最後の直線（参考）**')
+                    st.caption('直線入口は4角通過位置を参考にできますが、直線途中の位置や'
+                               '加速・追い抜きの時点は現在のデータでは再現できません。'
+                               'そのため直線の隊列図を推測で作らず、4角位置と末脚評価を併せて確認してください。')
+                    st.caption('通過順は末尾から4角→3角→2角→1角に対応付け。'
+                               '記録がないコーナーは「不明」。'
+                               '各馬の直近5走で頭数に対する位置比率の中央値を使用。'
+                               '馬番＋馬名2文字、横の数字は有効走数。'
+                               '異なる距離・競馬場の過去走も含むため、今回の隊列を保証しません。')
                 st.caption('レース全体のS/M/Hと馬が作ったペースは同一ではありません。先頭で走った過去レースのS/M/Hは補助材料です。騎手の作戦・馬場・今回の前半ラップは未反映。予測ロジックは未検証です。')
                 with st.expander('ペース予測の根拠（各馬の位置取り）', expanded=False):
                     pressure_show_v19 = display_horse_column(pressure_v19[['馬名','初通過取得','初通過先頭','初通過前方','逃げ候補','先行候補','先頭S','先頭M','先頭H','前方S','前方M','前方H']], horses, st.session_state.auto_numbers)
