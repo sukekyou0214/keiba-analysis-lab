@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.13.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.14.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -337,8 +337,8 @@ def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
             raw = '—' if pd.isna(v) else str(v)
             if idx == 0 and cols[0] == '馬名':
                 # 既存の馬番表示が「1 クロワデュノール」でも、元の正式馬名だけでも対応。
-                m = re.match(r'^([0-9０-９]+)\\s*(.+)$', raw)
-                short = m.group(1) + ' ' + m.group(2)[:2] if m else raw[:2]
+                m = re.match(r'^([0-9０-９]+)\s*(.+)$', raw)
+                short = m.group(1) + ' ' + m.group(2)[:2] if m else raw[:4]
                 cells.append('<td class="k-name" title="' + _html.escape(raw, quote=True)
                              + '">' + _html.escape(short) + '</td>')
             else:
@@ -379,7 +379,7 @@ def corner_projection_v2013(data, names, max_runs=5):
             n = pd.to_numeric(r.get('頭数'), errors='coerce')
             if pd.isna(n) or n < 2:
                 continue
-            nums = [int(x) for x in re.findall(r'\\d+', str(r.get('通過順', '')))]
+            nums = [int(x) for x in re.findall(r'\d+', str(r.get('通過順', '')))]
             # 2地点なら3角/4角、3地点なら2角/3角/4角、
             # 4地点なら1角～4角。1地点なら4角のみと解釈。
             # 5地点以上や不自然な値は安全のため除外する。
@@ -2219,7 +2219,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.13.0')
+    st.caption('競馬分析ラボ Ver.20.14.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2438,50 +2438,6 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                 else:
                     st.write('**暫定の想定ペース：判定保留**')
                     st.caption(reason_v19)
-                # Ver.20.13: 角ごとに実測された通過順を別々に集計する。
-                with st.expander('コーナー別の隊列イメージ（過去走からの推定）', expanded=True):
-                    import html as _pace_html
-                    proj213 = corner_projection_v2013(analysis_df, quick_names171)
-                    horse_labels213 = display_horse_column(
-                        pd.DataFrame({'馬名': quick_names171}), horses,
-                        st.session_state.auto_numbers)['馬名'].tolist()
-                    # display_horse_column の番号と正式馬名をそのまま使用
-                    label_map213 = dict(zip(quick_names171, horse_labels213))
-                    for stage213 in ('1角','2角','3角','4角'):
-                        groups213 = {k: [] for k in ('逃げ','先行','中団','後方','不明')}
-                        for horse213 in quick_names171:
-                            group213, samples213 = proj213[horse213][stage213]
-                            full213 = str(label_map213.get(horse213, horse213))
-                            mm213 = re.match(r'^([0-9０-９]+)\\s*(.+)$', full213)
-                            brief213 = (mm213.group(1) + ' ' + mm213.group(2)[:2]
-                                        if mm213 else full213[:4])
-                            groups213[group213].append(
-                                '<span title="' + _pace_html.escape(full213, quote=True)
-                                + '" style="display:inline-block;margin:3px;padding:6px 8px;'
-                                  'background:#fff;color:#172236;border-radius:20px;'
-                                  'font-weight:700;font-size:13px;">'
-                                + _pace_html.escape(brief213)
-                                + '<small style="opacity:.65"> ' + str(samples213) + '走</small></span>')
-                        blocks213 = ''.join(
-                            '<div style="padding:8px;border-bottom:1px dashed #ffffff88;">'
-                            '<strong>' + k213 + '</strong><div>'
-                            + (''.join(groups213[k213]) or '—') + '</div></div>'
-                            for k213 in ('逃げ','先行','中団','後方','不明'))
-                        st.markdown(
-                            '<div style="margin:10px 0;padding:12px;border-radius:12px;'
-                            'background:#b5db69;color:#182b1b;">'
-                            '<div style="background:#c3edf4;padding:9px;border-radius:8px;'
-                            'text-align:center;font-weight:700;">' + stage213 + '（過去走の位置傾向）</div>'
-                            + blocks213 + '</div>', unsafe_allow_html=True)
-                    st.markdown('**最後の直線（参考）**')
-                    st.caption('直線入口は4角通過位置を参考にできますが、直線途中の位置や'
-                               '加速・追い抜きの時点は現在のデータでは再現できません。'
-                               'そのため直線の隊列図を推測で作らず、4角位置と末脚評価を併せて確認してください。')
-                    st.caption('通過順は末尾から4角→3角→2角→1角に対応付け。'
-                               '記録がないコーナーは「不明」。'
-                               '各馬の直近5走で頭数に対する位置比率の中央値を使用。'
-                               '馬番＋馬名2文字、横の数字は有効走数。'
-                               '異なる距離・競馬場の過去走も含むため、今回の隊列を保証しません。')
                 st.caption('レース全体のS/M/Hと馬が作ったペースは同一ではありません。先頭で走った過去レースのS/M/Hは補助材料です。騎手の作戦・馬場・今回の前半ラップは未反映。予測ロジックは未検証です。')
                 with st.expander('ペース予測の根拠（各馬の位置取り）', expanded=False):
                     pressure_show_v19 = display_horse_column(pressure_v19[['馬名','初通過取得','初通過先頭','初通過前方','逃げ候補','先行候補','先頭S','先頭M','先頭H','前方S','前方M','前方H']], horses, st.session_state.auto_numbers)
@@ -2601,6 +2557,45 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                                        pace_display18.to_csv(index=False).encode('utf-8-sig'),
                                        file_name='keiba_scenario_v182.csv',mime='text/csv',
                                        width='stretch')
+                # Ver.20.14: 横長の5画面ではなく、1地点だけ表示して縦スクロールを削減。
+                with st.expander('隊列予想（地点を切り替え）', expanded=False):
+                    stage214 = st.radio('表示する地点',
+                        ['1角','2角','3角','4角','最後の直線'],
+                        horizontal=True, key='corner_stage_v214')
+                    proj214 = corner_projection_v2013(analysis_df, quick_names171)
+                    label_df214 = display_horse_column(pd.DataFrame({'馬名':quick_names171}),
+                        horses, st.session_state.auto_numbers)
+                    label_map214 = dict(zip(quick_names171,label_df214['馬名'].tolist()))
+                    groups214 = {k: [] for k in ('逃げ','先行','中団','後方','不明')}
+                    for name214 in quick_names171:
+                        # 最後の直線は4角の位置を「直線入口」として表示。
+                        # 直線途中の隊列や追い抜きは通過順データだけでは不明。
+                        use_stage214 = '4角' if stage214 == '最後の直線' else stage214
+                        group214, count214 = proj214[name214][use_stage214]
+                        full214 = str(label_map214.get(name214,name214))
+                        match214 = re.match(r'^([0-9０-９]+)\s*(.+)$',full214)
+                        short214 = (match214.group(1)+' '+match214.group(2)[:2]
+                                    if match214 else full214[:4])
+                        import html as _html214
+                        groups214[group214].append(
+                            '<span title="'+_html214.escape(full214,quote=True)+'" '
+                            'style="display:inline-block;background:white;color:#182b1b;'
+                            'border-radius:18px;margin:3px;padding:6px 8px;font-weight:700;">'
+                            +_html214.escape(short214)+' <small>'+str(count214)+'走</small></span>')
+                    rows214 = ''.join(
+                        '<div style="border-bottom:1px dashed #ffffff80;padding:8px 4px">'
+                        '<b>'+g214+'</b><div>'+(''.join(groups214[g214]) or '—')+'</div></div>'
+                        for g214 in ('逃げ','先行','中団','後方','不明'))
+                    title214 = '直線入口（4角位置を使用）' if stage214=='最後の直線' else stage214
+                    st.markdown('<div style="background:#b5db69;color:#182b1b;padding:12px;'
+                                'border-radius:12px"><h4 style="text-align:center">'
+                                +title214+'</h4>'+rows214+'</div>',unsafe_allow_html=True)
+                    if stage214 == '最後の直線':
+                        st.caption('直線入口の位置のみ。直線での追い抜き・加速を予測したものではありません。'
+                                   '上がり3Fと4角順位を合わせた直線途中の予測は今後の検証課題です。')
+                    else:
+                        st.caption('過去5走のコーナー通過順を頭数比で分類。該当地点の記録がなければ不明。'
+                                   '馬名横の数字は有効走数。今回の隊列を確定するものではありません。')
             if selected_page208 == '🏇 総合診断':
                 if quick_shapes171.empty:
                     st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。分析条件からラップを取得すると展開診断も加わります。')
