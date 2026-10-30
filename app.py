@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.5.1')
+st.title('🏇 競馬分析ラボ Ver.19.5.2')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -320,7 +320,7 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 
-# ===== Ver.19.5.1: 過去レース全出走馬を対象とする事前データ検証 =====
+# ===== Ver.19.5.2: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
 # ただし、事前の走歴不足は必ず明示し、欠測を予測的中扱いしない。
 V195_TAG = {'スロー寄り': 'S', 'ミドル寄り': 'M', 'ハイ寄り': 'H'}
@@ -410,13 +410,8 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
                 if not matches.empty:
                     pre.at[idx,'netkeibaペース']=matches.iloc[0]
                     local_paces[raceid]=matches.iloc[0]
-                elif re.fullmatch(r'\d{12}', raceid) and pace_calls < limit_pace_calls:
-                    pace_calls += 1
-                    try:
-                        pre.at[idx,'netkeibaペース']=get_netkeiba_pace(raceid)
-                        local_paces[raceid]=pre.at[idx,'netkeibaペース']
-                    except (requests.RequestException, ValueError, KeyError):
-                        pass
+                # 不明なペースは、全頭を揃えた後に逃げ実績を優先して照会する。
+                # 馬の取得順だけで照会枠を使い切るのを防ぐ。
             pre['馬名']=name
             frames.append(pre)
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
@@ -424,6 +419,40 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
         if progress_callback:
             progress_callback(index,len(entrants),name)
     full = pd.concat(frames,ignore_index=True) if frames else pd.DataFrame()
+    # 全馬の過去走を確認してから、先頭→前方→その他の順でペース照会。
+    # 同じレースIDは1回だけ照会し、結果を全該当走に反映する。
+    if not full.empty and 'netkeibaペース' in full.columns:
+        normalized = full['netkeibaペース'].fillna('').astype(str).str.strip()
+        missing = full.loc[~normalized.isin(V195_TAG)].copy()
+        def _pace_priority(row):
+            pieces = re.findall(r'\d+', str(row.get('通過順', '')))
+            size = pd.to_numeric(row.get('頭数'), errors='coerce')
+            if not pieces or pd.isna(size) or size < 2:
+                return 3
+            first = int(pieces[0])
+            return 0 if first == 1 else (1 if first <= max(2, size*.35) else 2)
+        if not missing.empty:
+            missing['_pace_priority'] = missing.apply(_pace_priority, axis=1)
+            missing = missing.sort_values('_pace_priority', kind='stable')
+            for _, rec in missing.iterrows():
+                raceid = str(rec.get('レースID', '')).strip().removesuffix('.0')
+                if not re.fullmatch(r'\d{12}', raceid):
+                    continue
+                if raceid in local_paces:
+                    pace_value = local_paces[raceid]
+                elif pace_calls < limit_pace_calls:
+                    pace_calls += 1
+                    try:
+                        pace_value = get_netkeiba_pace(raceid)
+                        local_paces[raceid] = pace_value
+                    except (requests.RequestException, ValueError, KeyError):
+                        continue
+                else:
+                    break
+                if pace_value in V195_TAG:
+                    same_race = full['レースID'].fillna('').astype(str).str.replace(r'\.0$', '',regex=True).eq(raceid)
+                    unknown = ~full['netkeibaペース'].fillna('').astype(str).isin(V195_TAG)
+                    full.loc[same_race & unknown, 'netkeibaペース'] = pace_value
     known_horses = (full.groupby('馬名')['通過順'].apply(lambda s: int(s.fillna('').astype(str).str.contains(r'\d').sum()>=2)).sum()
                     if not full.empty and '通過順' in full else 0)
     predicted=None; explanation='事前の位置取り情報不足'; lead=front=0
@@ -433,6 +462,21 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
         predicted,explanation,detail,known_count,lead,front=estimate_field_pace_v19(full,names)
     else:
         known_count=0
+    # 結果の診断: 実際の逃げ候補でS/M/Hの記録が不足しているか可視化。
+    audit_lead_known = audit_lead_missing = 0
+    audit_lead_names = ''
+    if not full.empty:
+        candidates = detail.loc[detail['逃げ候補'], '馬名'].tolist()
+        audit_lead_names = ' / '.join(candidates)
+        for horse in candidates:
+            past = full.loc[full['馬名'].eq(horse)].sort_values('日付',ascending=False).head(5)
+            for _, record in past.iterrows():
+                parts = re.findall(r'\d+', str(record.get('通過順', '')))
+                if parts and int(parts[0]) == 1:
+                    if str(record.get('netkeibaペース', '')) in V195_TAG:
+                        audit_lead_known += 1
+                    else:
+                        audit_lead_missing += 1
     # 実際の全出走馬に対して予測器を再生。計算に欠けた馬はカバレッジに反映。
     pred_tag = {'スロー（S）':'S','ミドル（M）':'M','ハイ（H）':'H'}.get(predicted)
     status = ('全頭・事前走歴確認' if known_count==len(entrants) and not failed else
@@ -446,6 +490,9 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
             'S/M/H追加照会':pace_calls,
             '過去走ペース判定あり':int(full['netkeibaペース'].isin(V195_TAG).sum()) if not full.empty and 'netkeibaペース' in full.columns else 0,
             '過去走対象':len(full),
+            '逃げ候補馬名':audit_lead_names,
+            '逃げ先頭時ペース取得':audit_lead_known,
+            '逃げ先頭時ペース未取得':audit_lead_missing,
             '取得失敗詳細':' / '.join(failed)[:500],
             '予測根拠':explanation}
 
@@ -1973,7 +2020,7 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5.1・試験版）',expanded=False):
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5.2・試験版）',expanded=False):
         st.caption('まず3レースまで試験。結果表から当時の全出走馬を取得し、開催日より前の各馬の成績のみを使って予測します。')
         st.caption('出走全頭を取得しても、当時の事前走歴が欠けていれば「参考」扱いです。S/M/Hの照合結果は未検証モデルの試験結果です。')
         candidates195 = analysis_df.copy()
