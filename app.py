@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15')
+st.title('🏇 競馬分析ラボ Ver.15.2')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -501,59 +501,66 @@ if race_id and st.session_state.auto_race_id != race_id:
 if race_id and st.session_state.auto_df is not None:
     st.info(f'保存済みデータを利用中：{len(st.session_state.auto_df)}走。再取得せず分析できます。')
 
-if st.button('出走馬を自動取得', disabled=not race_id, use_container_width=True):
+# URL入力から1タップで、出走馬・過去成績・上がり順位まで取得する。
+# 保存済みの成績は再利用し、上がり順位がまだない場合は追加照合する。
+if st.button('出走馬・過去成績・上がり順位をまとめて取得', type='primary',
+             disabled=not race_id, use_container_width=True):
+    horses_now = st.session_state.auto_horses.copy()
+    data_now = st.session_state.auto_df
     try:
-        with st.spinner('出馬表を確認しています…'):
-            st.session_state.auto_horses = get_horses(race_id)
-            st.session_state.auto_df = None
+        if not horses_now:
+            with st.spinner('① 出馬表から出走馬を取得中…'):
+                horses_now = get_horses(race_id)
+                st.session_state.auto_horses = horses_now
+        if data_now is None:
+            datasets = []
+            horse_errors = []
+            progress = st.progress(0)
+            status = st.empty()
+            for i, (horse_id, name) in enumerate(horses_now.items(), 1):
+                status.write(f'② 過去成績を取得中：{name}（{i}/{len(horses_now)}）')
+                try:
+                    datasets.append(get_results(horse_id, name))
+                except Exception as e:
+                    horse_errors.append(f'{name}：{e}')
+                progress.progress(i / len(horses_now))
+                if i < len(horses_now):
+                    time.sleep(1)
+            status.empty()
+            progress.empty()
+            if not datasets:
+                raise ValueError('過去成績を1件も取得できませんでした')
+            data_now = prepare(convert_auto(pd.concat(datasets, ignore_index=True)))
+            st.session_state.auto_df = data_now
+            save_race_cache(race_id, horses_now, data_now)
+            st.success(f'過去成績：{len(data_now)}走を取得・保存しました')
+            if horse_errors:
+                st.warning('取得できなかった馬：' + ' / '.join(horse_errors))
+        else:
+            st.info(f'② 保存済みの過去成績 {len(data_now)}走を再利用します')
+
+        # 1レースにつき最大1回の照合。失敗があっても、取得済みデータを保持する。
+        try:
+            with st.spinner('③ 直近5走の上がり順位を照合しています…'):
+                updated, checked, agari_errors = add_recent_agari_ranks(data_now)
+            st.session_state.auto_df = updated
+            save_race_cache(race_id, horses_now, updated)
+            count = int(updated['上がり順位'].notna().sum())
+            st.success(f'取得完了！ 出走馬{len(horses_now)}頭・過去成績{len(updated)}走・上がり順位{count}走（今回照合{checked}レース）')
+            if agari_errors:
+                st.warning(f'上がり順位を取得できなかったレース：{len(agari_errors)}件。例：{agari_errors[0]}')
+        except Exception as e:
+            st.warning(f'過去成績は保存済みですが、上がり順位の照合は失敗しました：{e}。同じボタンで再試行できます。')
     except Exception as e:
-        st.error(f'出走馬の取得に失敗しました：{e}')
+        st.error(f'まとめて取得できませんでした：{e}')
 
 horses = st.session_state.auto_horses
 if horses:
-    st.success(f'出走馬：{len(horses)}頭を取得しました')
+    st.success(f'出走馬：{len(horses)}頭')
     st.write('、'.join(horses.values()))
-    if st.button('全馬の過去成績を取得', use_container_width=True):
-        datasets = []
-        errors = []
-        progress = st.progress(0)
-        status = st.empty()
-        for i, (horse_id, name) in enumerate(horses.items(), 1):
-            status.write(f'取得中：{name}（{i}/{len(horses)}）')
-            try:
-                datasets.append(get_results(horse_id, name))
-            except Exception as e:
-                errors.append(f'{name}：{e}')
-            progress.progress(i / len(horses))
-            if i < len(horses):
-                time.sleep(1)
-        if datasets:
-            try:
-                st.session_state.auto_df = prepare(convert_auto(pd.concat(datasets, ignore_index=True)))
-                save_race_cache(race_id, horses, st.session_state.auto_df)
-                st.success(f'過去成績：{len(st.session_state.auto_df)}走を取得・一時保存しました')
-            except Exception as e:
-                st.error(f'成績の変換に失敗しました：{e}')
-        if errors:
-            st.warning('取得できなかった馬：' + ' / '.join(errors))
-        status.empty()
-
 if st.session_state.auto_df is not None:
-    st.subheader('上がり順位の追加取得（Ver.14）')
     available = int(st.session_state.auto_df['上がり順位'].notna().sum())
-    st.write(f'現在、上がり順位が判明している成績：{available}走')
-    st.caption('各馬の直近5走を対象に、レース全体の上がりタイムから同タイム同順位で算出します。レース結果ページの仕様によって取得できない場合があります。')
-    if st.button('直近5走の上がり順位を取得', use_container_width=True):
-        try:
-            updated, checked, errors = add_recent_agari_ranks(st.session_state.auto_df)
-            st.session_state.auto_df = updated
-            save_race_cache(race_id, horses, updated)
-            count = int(updated['上がり順位'].notna().sum())
-            st.success(f'照合したレース：{checked}件 / 上がり順位を取得済み：{count}走')
-            if errors:
-                st.warning(f'確認できなかったレース：{len(errors)}件。最初の例：{errors[0]}')
-        except Exception as e:
-            st.error(f'上がり順位の取得に失敗：{e}')
+    st.caption(f'保存済みの過去成績：{len(st.session_state.auto_df)}走／上がり順位取得済み：{available}走。上がり順位は各馬の直近5走について照合します。')
 
 st.caption('取得データはサーバーに一時保存し、同じレースIDなら再利用します。Streamlit Cloudの停止・再起動・再デプロイでは消える場合があります。確実に残すには下のExcelをiPhoneに保存してください。取得データの利用条件も確認してください。')
 manual = st.text_area('手入力する出走馬名（1行に1頭・任意）', height=110, placeholder='自動取得できない場合などに入力')
@@ -768,7 +775,7 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.dataframe(used, hide_index=True, use_container_width=True)
         st.download_button('集計対象レース一覧をCSVで保存', data=used.to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
-    st.subheader('ペース別の成績比較（Ver.15）')
+    st.subheader('ペース別の成績比較（Ver.15.2）')
     st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
     st.warning('これは前半・後半600mの差による暫定区分です。中間ラップを含む実際のレース全体のペースではありません。違う距離・競馬場のデータを混ぜた場合、適性判断は慎重に。')
     detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
@@ -805,4 +812,91 @@ if st.button('分析する', type='primary', use_container_width=True):
                      column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
         st.download_button('ペース判定根拠をCSVで保存', pace_audit.to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
+
+    with st.expander('ペース判定の精度チェック（Ver.15.2）', expanded=False):
+        st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
+        audit = pace_compare_base.copy()
+        # レースIDが取得できた場合は最優先で使用。ない場合はレース日、競馬場、レース名、距離を組み合わせる。
+        rid_series = (audit['レースID'].fillna('').astype(str).str.strip()
+                      if 'レースID' in audit.columns else pd.Series('', index=audit.index))
+        valid_rid = rid_series.str.fullmatch(r'\d{12}').fillna(False)
+        day_series = pd.to_datetime(audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+        name_series = audit['レース名'].fillna('').astype(str) if 'レース名' in audit else pd.Series('', index=audit.index)
+        venue_series = audit['競馬場'].fillna('').astype(str)
+        dist_series = audit['距離_m'].astype('Int64').astype(str)
+        backup = day_series + '|' + venue_series + '|' + name_series + '|' + dist_series
+        # レースを識別できない場合、別レースを無理にまとめない。
+        backup_ok = day_series.ne('') & name_series.str.strip().ne('') & venue_series.str.strip().ne('')
+        audit['_race_key'] = ['ID:' + r if ok else '補完:' + b if bk else '行:' + str(i)
+                              for i, (r, ok, b, bk) in enumerate(zip(rid_series, valid_rid, backup, backup_ok))]
+        audit['_識別方法'] = ['レースID' if ok else '日付・場所・レース名' if bk else '識別不可（行単位）'
+                              for ok, bk in zip(valid_rid, backup_ok)]
+        pace_order = ['ハイ寄り', 'ミドル寄り', 'スロー寄り', '不明']
+        dist_bins = [-float('inf'), 1600, 1800, 2200, 2400, float('inf')]
+        dist_labels = ['1600m以下', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上']
+        audit['_距離帯'] = pd.cut(audit['距離_m'], bins=dist_bins, labels=dist_labels)
+        rows_audit = []
+        for key, grp in audit.groupby('_race_key', sort=False):
+            first = grp.iloc[0]
+            classifications = sorted(set(grp['推定ペース'].fillna('不明').astype(str)))
+            f3 = pd.to_numeric(grp['前半3F'], errors='coerce').dropna()
+            l3 = pd.to_numeric(grp['後半3F'], errors='coerce').dropna()
+            d3 = pd.to_numeric(grp['前後半3F差'], errors='coerce').dropna()
+            # 同一レースで数値が異なる場合、分類が同じでもデータ不一致として検出する。
+            numeric_conflict = any(len(vals) >= 2 and vals.max() - vals.min() > 0.11 for vals in [f3, l3, d3])
+            status = ('識別不可' if first['_識別方法'] == '識別不可（行単位）'
+                      else '不一致' if len(classifications) > 1 or numeric_conflict
+                      else '判定不能' if classifications == ['不明'] else '一致')
+            rid = str(first['レースID']).strip() if 'レースID' in grp.columns else ''
+            rows_audit.append({'日付': day_series.loc[grp.index[0]], 'レース名': first['レース名'],
+                               '競馬場': first['競馬場'], '距離_m': first['距離_m'],
+                               '距離帯': str(first['_距離帯']) if pd.notna(first['_距離帯']) else '距離不明',
+                               'レースID': rid if re.fullmatch(r'\d{12}', rid) else '',
+                               '識別方法': first['_識別方法'], '登録馬数': len(grp),
+                               '前半3F': round(f3.iloc[0], 1) if not f3.empty else float('nan'),
+                               '後半3F': round(l3.iloc[0], 1) if not l3.empty else float('nan'),
+                               '前後半3F差': round(d3.iloc[0], 1) if not d3.empty else float('nan'),
+                               '推定ペース': ' / '.join(classifications), '判定チェック': status,
+                               'レース結果URL': f'https://race.netkeiba.com/race/result.html?race_id={rid}' if re.fullmatch(r'\d{12}', rid) else ''})
+        race_audit = pd.DataFrame(rows_audit)
+        if race_audit.empty:
+            st.info('この分析条件では検証できるレースがありません。')
+        else:
+            total = len(race_audit)
+            conflicts = int((race_audit['判定チェック'] == '不一致').sum())
+            unknown = int((race_audit['判定チェック'] == '判定不能').sum())
+            unidentified = int((race_audit['判定チェック'] == '識別不可').sum())
+            c1, c2, c3 = st.columns(3)
+            c1.metric('異なるレース数', total)
+            c2.metric('判定不一致', conflicts)
+            c3.metric('判定不能', unknown)
+            if unidentified:
+                st.warning(f'識別に必要な情報がない成績が{unidentified}件あり、行単位で扱っています。レース数は概算です。')
+            if conflicts:
+                st.error(f'同じレースなのにペースの分類または数値が違うレースが{conflicts}件あります。下の一覧で確認してください。')
+            else:
+                st.success('識別できたレースについて、馬ごとのペース判定の食い違いは見つかりませんでした。')
+            st.markdown('**距離別のペース分布（重複レース除外）**')
+            valid_once = race_audit[race_audit['判定チェック'] == '一致'].copy()
+            counts_pace = pd.crosstab(valid_once['距離帯'], valid_once['推定ペース']).reindex(columns=pace_order[:3], fill_value=0)
+            counts_pace['判定可能レース数'] = counts_pace.sum(axis=1)
+            if unknown:
+                missing_by_dist = race_audit[race_audit['判定チェック'] == '判定不能'].groupby('距離帯').size()
+                counts_pace['判定不能'] = missing_by_dist.reindex(counts_pace.index, fill_value=0).astype(int)
+            st.dataframe(counts_pace.reset_index(), hide_index=True, use_container_width=True)
+            st.caption('ハイ寄りの割合が少なくても「ハイに弱い」ことは意味しません。距離ごとのサンプル数と判定不能数を見てください。')
+            st.markdown('**各馬のペース経験数**')
+            horse_pace = pd.crosstab(audit['馬名'], audit['推定ペース']).reindex(columns=pace_order, fill_value=0)
+            horse_pace = horse_pace.reindex(sorted(audit['馬名'].dropna().unique()), fill_value=0)
+            horse_pace['判定可能走数'] = horse_pace[pace_order[:3]].sum(axis=1)
+            horse_pace['ハイ実績'] = horse_pace['ハイ寄り'].map(lambda n: 'データなし' if n == 0 else f'{n}走')
+            horse_pace.index.name = '馬名'
+            st.dataframe(horse_pace.reset_index(), hide_index=True, use_container_width=True)
+            st.markdown('**レース単位の判定一覧**')
+            st.dataframe(race_audit, hide_index=True, use_container_width=True,
+                         column_config={'レース名': st.column_config.TextColumn('レース名', width='medium'),
+                                        'レース結果URL': st.column_config.LinkColumn('レース結果')})
+            st.download_button('ペース精度チェックをCSVで保存', race_audit.to_csv(index=False).encode('utf-8-sig'),
+                               file_name='keiba_pace_validation_v151.csv', mime='text/csv', use_container_width=True)
+
     st.download_button('📥 分析結果をCSVで保存', data=result.to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
