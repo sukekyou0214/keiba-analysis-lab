@@ -11,14 +11,14 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.0')
-st.caption('一括取得 → 総合診断 → 出走馬の位置取りから想定ペースを暫定予測。')
+st.title('🏇 競馬分析ラボ Ver.19.1')
+st.caption('一括取得 → 総合診断 → 序盤の位置取りと逃げ候補の競合から想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
 METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
-ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード'], 'レース名': ['レース名'], '格付け根拠': ['格付け根拠']}
+ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード'], 'レース名': ['レース名'], '格付け根拠': ['格付け根拠'], '通過順': ['通過順', '通過']}
 
 
 
@@ -145,45 +145,70 @@ def diagnose_horse_v17(horse_df, lap_label=''):
 
 
 def estimate_field_pace_v19(data, names):
-    """直近の4角位置から隊列の混雑度を推定する試作。実際の道中ラップではない。"""
+    """出走予定馬の序盤通過順から逃げ競合を暫定推定する。
+
+    4角先頭は単騎逃げの証拠ではない。欠損時は4角だけでHを強行しない。
+    予測ルールは仮説であり、事後レースでの検証前のため確率は出さない。
+    """
     names = list(dict.fromkeys(names))
     records = []
     for name in names:
         h = data.loc[data['馬名'].eq(name)].copy()
         if '日付' in h.columns:
             h = h.sort_values('日付', ascending=False, na_position='last', kind='stable')
-        # 直近5走。G1のみではサンプル不足なので格付けを限定しない。
         h = h.head(5)
         p = pd.to_numeric(h['4角順位'], errors='coerce')
         f = pd.to_numeric(h['頭数'], errors='coerce')
         valid = p.ge(1) & f.ge(2) & p.le(f)
         n = int(valid.sum())
         lead = int((valid & p.eq(1)).sum())
-        front = int((valid & (p.le((f * .35).clip(lower=2)))).sum())
-        # 4角先頭を繰り返す馬と前方につけやすい馬を分ける。
-        leader = n >= 2 and lead / n >= .4
-        forward = n >= 2 and front / n >= .6
-        records.append({'馬名': name, '位置データ': n, '4角先頭':lead,
-                        '前方走数':front, '先頭候補':leader, '先行候補':forward})
+        front = int((valid & p.le((f*.35).clip(lower=2))).sum())
+        # netkeiba「通過」は 1-2-3-4 / 2-2 / 3 のような形式。
+        # 最初の通過地点がスタート直後とは限らないため参考指標に限定。
+        corners = h['通過順'] if '通過順' in h.columns else pd.Series('', index=h.index)
+        early_positions = []
+        early_lead = 0
+        early_front = 0
+        for raw, size in zip(corners, f):
+            pieces = re.findall(r'\d+', str(raw))
+            if not pieces or pd.isna(size) or size < 2:
+                continue
+            first = int(pieces[0])
+            if not (1 <= first <= size):
+                continue
+            early_positions.append(first)
+            early_lead += int(first == 1)
+            early_front += int(first <= max(2, size*.35))
+        en = len(early_positions)
+        # 逃げ候補は初通過地点の先頭実績を優先（最低2走）。
+        escape_candidate = en >= 2 and early_lead/en >= .4
+        forward_candidate = en >= 2 and early_front/en >= .6
+        records.append({'馬名':name, '位置データ':n, '初通過取得':en,
+                        '初通過先頭':early_lead, '初通過前方':early_front,
+                        '4角先頭':lead, '4角前方':front,
+                        '逃げ候補':escape_candidate, '先行候補':forward_candidate})
     info = pd.DataFrame(records)
-    known = int(info['位置データ'].ge(2).sum()) if not info.empty else 0
-    leaders = int(info['先頭候補'].sum()) if not info.empty else 0
-    forward = int(info['先行候補'].sum()) if not info.empty else 0
     total = len(info)
+    known = int(info['初通過取得'].ge(2).sum()) if total else 0
+    leaders = int(info['逃げ候補'].sum()) if total else 0
+    forward = int(info['先行候補'].sum()) if total else 0
     coverage = known / total if total else 0
-    # 推定を強行しない。Hは逃げ候補が複数で先行候補も多いときだけ。
-    if total == 0 or coverage < .6:
+    if not total or coverage < .6:
         pred = None
-        explanation = f'4角位置を2走以上確認できた馬が{known}/{total}頭のため、判定保留。'
-    elif leaders >= 2 and forward >= max(4, (total + 3)//4):
+        explanation = (f'序盤通過順を2走以上確認できた馬が{known}/{total}頭。'
+                       '4角位置だけでは逃げ争いを判断できないため判定保留。')
+    elif leaders >= 2 and forward >= max(4, (total+3)//4):
         pred = 'ハイ（H）'
-        explanation = '4角先頭の常連が複数おり、前方を取りたい馬も多い。'
+        explanation = '序盤の先頭常連が複数、かつ先行候補も多い。逃げ競合によるHシナリオが有力。'
+    elif leaders == 1 and forward <= max(3, total//4):
+        pred = 'スロー（S）'
+        explanation = '序盤先頭常連が1頭で先行候補も少なめ。単騎逃げのSシナリオが有力。'
     elif leaders == 0 and forward <= max(2, total//6):
         pred = 'スロー（S）'
-        explanation = '4角先頭・先行寄りの候補が比較的少ない。'
+        explanation = '序盤先頭常連・先行候補が少なく、Sシナリオが有力。'
     else:
         pred = 'ミドル（M）'
-        explanation = '逃げ・先行候補の集中が極端ではない。'
+        explanation = '逃げ競合・先行圧力の材料が拮抗しておりMを中心に想定。'
     return pred, explanation, info, known, leaders, forward
 
 def tap_choice(label, options, key, format_func=None):
@@ -974,6 +999,7 @@ def convert_auto(raw):
     data['競馬場'] = data['開催'].apply(venue_name)
     data['着順_数値'] = pd.to_numeric(data['着 順'], errors='coerce')
     data['上がり3F_秒'] = pd.to_numeric(data['上り'], errors='coerce')
+    data['通過順'] = data['通過'].fillna('').astype(str)
     data['4角順位'] = pd.to_numeric(data['通過'].astype(str).str.extract(r'(\d+)\s*$')[0], errors='coerce')
     data['上がり順位'] = float('nan')
     data['日付'] = pd.to_datetime(data['日付'], errors='coerce')
@@ -983,7 +1009,7 @@ def convert_auto(raw):
     data['前半3F'] = pd.to_numeric(pace_pair[0], errors='coerce')
     data['後半3F'] = pd.to_numeric(pace_pair[1], errors='coerce')
     data['前後半3F差'] = data['前半3F'] - data['後半3F']
-    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース名', '格付け根拠', 'レース格']].copy()
+    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース名', '格付け根拠', 'レース格', '通過順']].copy()
 
 
 def prepare(data):
@@ -1020,6 +1046,9 @@ def prepare(data):
         if audit_col not in data.columns:
             data[audit_col] = ''
         data[audit_col] = data[audit_col].fillna('').astype(str).replace('nan', '')
+    if '通過順' not in data.columns:
+        data['通過順'] = ''  # 旧保存データでも起動できるようにする
+    data['通過順'] = data['通過順'].fillna('').astype(str)
     data['馬名'] = data['馬名'].astype(str).str.strip()
     data = data[data['馬名'].ne('') & data['馬名'].ne('nan')].copy()
     if '日付' in data.columns:
@@ -1470,19 +1499,19 @@ with tab_main171:
         predicted_v19, reason_v19, pressure_v19, known_v19, lead_v19, front_v19 = estimate_field_pace_v19(analysis_df, quick_names171)
         if predicted_v19:
             st.write(f'**暫定の想定ペース：{predicted_v19}**')
-            st.caption(f'{reason_v19} 4角位置の確認：{known_v19}/{len(quick_names171)}頭／先頭候補：{lead_v19}頭／先行候補：{front_v19}頭。')
+            st.caption(f'{reason_v19} 初通過位置を確認：{known_v19}/{len(quick_names171)}頭／逃げ候補：{lead_v19}頭／先行候補：{front_v19}頭。')
         else:
             st.write('**暫定の想定ペース：判定保留**')
             st.caption(reason_v19)
-        st.caption('位置取りの過去実績からの簡易推定です。実際の逃げ宣言・枠順・騎手の作戦・馬場・序盤のラップは未反映。信頼度は限定的です。')
+        st.caption('初通過地点は発走直後とは限りません。過去実績からの暫定推定で、逃げ宣言・騎手の作戦・馬場・レース前半の実ラップは未反映。多数派の予想には合わせず、根拠が強ければHも表示します。')
         with st.expander('ペース予測の根拠（各馬の位置取り）', expanded=False):
-            pressure_show_v19 = display_horse_column(pressure_v19[['馬名','位置データ','4角先頭','前方走数','先頭候補','先行候補']], horses, st.session_state.auto_numbers)
+            pressure_show_v19 = display_horse_column(pressure_v19[['馬名','初通過取得','初通過先頭','初通過前方','4角先頭','逃げ候補','先行候補']], horses, st.session_state.auto_numbers)
             st.dataframe(pressure_show_v19, hide_index=True, use_container_width=True)
-            st.caption('先頭候補＝直近5走の有効4角位置で1番手が40%以上。先行候補＝4角上位約35%が60%以上。いずれも2走以上で判定。')
+            st.caption('逃げ候補＝直近5走のうち初通過地点で先頭40%以上、先行候補＝初通過上位約35%が60%以上（各2走以上）。初通過地点は競馬場・距離により異なります。')
         # ユーザーによる切替を尊重。初めて表示するときだけ暫定予測を初期選択。
-        if st.session_state.get('scenario_pace_race_v19') != quick_race171:
+        if st.session_state.get('scenario_pace_race_v191') != quick_race171:
             st.session_state['scenario_pace_v18'] = predicted_v19 or 'ミドル（M）'
-            st.session_state['scenario_pace_race_v19'] = quick_race171
+            st.session_state['scenario_pace_race_v191'] = quick_race171
         selected_pace18 = st.radio('今回想定するペース',
                                    ['スロー（S）', 'ミドル（M）', 'ハイ（H）'],
                                    horizontal=True, key='scenario_pace_v18')
