@@ -1,4 +1,6 @@
-import re
+競馬分析ラボ Ver.20.8.3
+更新対象はapp.pyのみ。iPhoneでは長文コピペよりファイルのアップロードを推奨。
+コード全文をコピー全文選択import re
 import json
 from pathlib import Path
 import time
@@ -12,7 +14,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.20.8.2（安定版・計測）')
+st.title('🏇 競馬分析ラボ Ver.20.8.3（取得・分析時間診断）')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1865,6 +1867,8 @@ if st.session_state.get('fetch_fatal_v174') and st.session_state.get('fetch_issu
 # 保存済みの成績は再利用し、上がり順位がまだない場合は追加照合する。
 if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='primary',
              disabled=not race_id, width='stretch'):
+    _fetch_t0_v2083 = time.perf_counter()
+    _fetch_marks_v2083 = {}
     st.session_state.pop('fetch_fatal_v174', None)
     transient_progress_v174 = st.empty()
     with transient_progress_v174.container():
@@ -1894,6 +1898,8 @@ if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='prim
                     horses_now, nums_now = get_horses(race_id)
                     st.session_state.auto_horses = horses_now
                     st.session_state.auto_numbers = nums_now
+            _fetch_marks_v2083['出馬表・キャッシュ更新'] = time.perf_counter() - _fetch_t0_v2083
+            _fetch_stage_v2083 = time.perf_counter()
             if data_now is None:
                 datasets = []
                 horse_errors = []
@@ -1922,6 +1928,8 @@ if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='prim
             else:
                 st.info(f'② 保存済みの過去成績 {len(data_now)}走を再利用します')
 
+            _fetch_marks_v2083['過去成績の取得・保存'] = time.perf_counter() - _fetch_stage_v2083
+            _fetch_stage_v2083 = time.perf_counter()
             # 1レースにつき最大1回の照合。失敗があっても、取得済みデータを保持する。
             try:
                 with st.spinner('③ 直近5走の上がり順位を照合しています…'):
@@ -1937,6 +1945,8 @@ if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='prim
                 st.session_state['fetch_issues_v174'].append(f'上がり順位の照合失敗：{e}')
                 st.warning(f'過去成績は保存済みですが、上がり順位の照合は失敗しました：{e}。同じボタンで再試行できます。')
 
+            _fetch_marks_v2083['上がり順位の照合'] = time.perf_counter() - _fetch_stage_v2083
+            _fetch_stage_v2083 = time.perf_counter()
             # Ver.17.3: netkeibaのペースも同じボタンで差分取得。途中10件ごとに保存する。
             pace_work = st.session_state.auto_df
             if pace_work is not None and 'レースID' in pace_work.columns:
@@ -1971,9 +1981,17 @@ if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='prim
                         st.warning(f'S/M/Hを取得できなかったレース：{len(errors)}件。管理・検証で確認できます。')
                 else:
                     st.caption('S/M/H判定は保存済みデータを再利用しました。')
+            _fetch_marks_v2083['S/M/Hの差分取得'] = time.perf_counter() - _fetch_stage_v2083
         except Exception as e:
             st.session_state['fetch_fatal_v174'] = str(e)
             st.error(f'まとめて取得できませんでした：{e}')
+        finally:
+            # 最後の成功・失敗にかかわらず、測定値を残す（通信や待機時間込み）。
+            st.session_state['last_fetch_profile_v2083'] = {
+                'race_id': race_id,
+                'total': round(time.perf_counter() - _fetch_t0_v2083, 2),
+                'stages': {k: round(v, 2) for k, v in _fetch_marks_v2083.items()},
+            }
     transient_progress_v174.empty()
     st.rerun()
 
@@ -2745,7 +2763,9 @@ if selected_page208 == '⚙️ 分析条件':
             st.session_state['analysis_visible_v1581'] = False
         if st.button('分析する', type='primary', width='stretch'):
             st.session_state['analysis_visible_v1581'] = True
+            st.session_state['analysis_clicked_v2083'] = True
         if st.session_state['analysis_visible_v1581']:
+            _analysis_t0_v2083 = time.perf_counter()
             # Ver.14.6：先に各馬の「直近N走」を確定し、その範囲内で条件を適用する。
             # 日付が取得できない走は末尾に置き、元の並びを保持する。
             base = analysis_df.copy()
@@ -2814,6 +2834,12 @@ if selected_page208 == '⚙️ 分析条件':
                 result['表示順'] = result['馬名'].apply(selected.index)
                 result = result.sort_values('表示順').drop(columns='表示順')
                 st.subheader('🐎 馬の成績比較')
+            if st.session_state.pop('analysis_clicked_v2083', False):
+                st.session_state['last_analysis_profile_v2083'] = {
+                    'race_id': race_id,
+                    'compute': round(time.perf_counter() - _analysis_t0_v2083, 2),
+                    'rows': int(len(result)),
+                }
             result = result.round(2)
             if mode == 'ランキング':
                 # 順位と馬名を常に先頭に。重要指標を続ける。
@@ -3541,3 +3567,18 @@ with st.sidebar.expander("⏱ 速度診断（開発用）", expanded=False):
     st.caption(f"データ準備: {_keiba_data_t - _keiba_setup_t:.2f}秒")
     st.caption(f"画面描画: {time.perf_counter() - _keiba_data_t:.2f}秒")
     st.caption("上記はこの再実行1回のサーバー側処理時間。通信・ブラウザ表示時間は含みません。")
+    st.markdown('**前回の一括取得（通信・待機時間を含む）**')
+    fetch_profile = st.session_state.get('last_fetch_profile_v2083')
+    if fetch_profile:
+        st.caption(f"レースID: {fetch_profile['race_id']} / 合計: {fetch_profile['total']:.2f}秒")
+        for stage, sec in fetch_profile['stages'].items():
+            st.caption(f"{stage}: {sec:.2f}秒")
+    else:
+        st.caption('未計測。次に一括取得ボタンを押した結果を記録します。')
+    st.markdown('**前回の「分析する」集計時間**')
+    analysis_profile = st.session_state.get('last_analysis_profile_v2083')
+    if analysis_profile:
+        st.caption(f"集計: {analysis_profile['compute']:.2f}秒 / {analysis_profile['rows']}行（詳細表の描画時間は別）")
+    else:
+        st.caption('未計測。次に「分析する」を押すと記録します。')
+    st.caption('この記録は現在のセッションに保存。サーバー再起動で消える場合があります。')
