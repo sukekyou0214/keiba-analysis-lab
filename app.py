@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.17.0')
+st.title('🏇 競馬分析ラボ Ver.17.1')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1291,853 +1291,937 @@ if analysis_df.empty:
     st.error('分析対象の馬の成績がありません。')
     st.stop()
 
-st.header('⑤ レース格の判定チェック（Ver.14.4）')
-st.caption('元のレース名と格付け根拠を見ながら、誤判定・判定不明を確認できます。ここで表示するのはフィルター適用前のデータです。')
-audit = analysis_df.copy()
-if '日付' in audit.columns:
-    audit = audit.sort_values(['馬名', '日付'], ascending=[True, False], kind='stable')
-audit_horses = ['全馬'] + sorted(audit['馬名'].unique().tolist())
-with st.expander('過去レースの格付け一覧を確認', expanded=False):
-    audit_horse = tap_choice('確認する馬', audit_horses, 'audit_horse_v153')
-    audit_grade = tap_choice('表示する格付け', ['すべて', 'G1', 'G2', 'G3', 'その他', '不明'], 'audit_grade_v153')
-    if audit_horse != '全馬':
-        audit = audit[audit['馬名'] == audit_horse]
-    if audit_grade != 'すべて':
-        audit = audit[audit['レース格'] == audit_grade]
-    audit_cols = ['馬名', '日付', 'レース名', 'レース格', '格付け根拠', '着順_数値', 'レースID']
-    audit_view = audit[[c for c in audit_cols if c in audit.columns]].copy()
-    if '日付' in audit_view.columns:
-        audit_view['日付'] = pd.to_datetime(audit_view['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
-    if 'レースID' in audit_view.columns:
-        ids = audit_view['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
-        audit_view['レース結果URL'] = ids.apply(lambda v: f'https://race.netkeiba.com/race/result.html?race_id={v}' if re.fullmatch(r'\d{12}', v) else '')
-        audit_view = audit_view.drop(columns=['レースID'])
-    st.write(f'表示：{len(audit_view)}走（元データ：{len(analysis_df)}走）')
-    st.dataframe(display_horse_column(audit_view, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
-                 column_config={'馬名': st.column_config.TextColumn('馬名', width='medium'),
-                                'レース名': st.column_config.TextColumn('レース名', width='medium'),
-                                '格付け根拠': st.column_config.TextColumn('格付け根拠', width='large'),
-                                'レース結果URL': st.column_config.LinkColumn('レース結果を確認', display_text='結果を見る')})
-    st.download_button('格付けチェック表をCSVで保存', display_horse_column(audit_view, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
-                       file_name='keiba_grade_audit.csv', mime='text/csv', use_container_width=True)
-    missing_names = int(analysis_df['レース名'].fillna('').eq('').sum())
-    if missing_names:
-        st.warning(f'レース名がないデータが{missing_names}走あります。旧バージョンの保存データは、レース格を検証するために再取得が必要です。')
-    st.caption('格付け判定は取得ページの表記に依存します。G1・G2・G3と表示されても、根拠欄や実際のレース名と一致しているか確認してください。')
+# Ver.17.1: 通常利用は診断を最優先。保存済みラップから自動で計算する。
+# Streamlitのタブにより詳細分析のボタンや長い表を通常画面から分離する。
+tab_main171, tab_detail171 = st.tabs(['🏇 総合診断（すぐ見る）', '🔬 詳細分析・検証'])
+with tab_main171:
+    st.subheader('出走馬の総合診断')
+    st.caption('初期条件：各馬の直近10走のうちG1・G2・G3。操作なしで自動表示。条件を変える場合は「詳細分析・検証」へ。')
+    quick171 = analysis_df.copy()
+    if '日付' in quick171.columns:
+        quick171 = quick171.sort_values('日付', ascending=False, na_position='last', kind='stable')
+    quick171 = quick171.groupby('馬名', sort=False).head(10).copy()
+    quick171 = quick171.loc[quick171['レース格'].isin(['G1','G2','G3'])].copy()
+    quick_race171 = str(st.session_state.get('auto_race_id', ''))
+    quick_shapes171 = load_lap_full_progress(quick_race171)
+    if quick_shapes171.empty:
+        maybe171 = st.session_state.get('lap_shapes_v163')
+        if (isinstance(maybe171, pd.DataFrame) and not maybe171.empty
+                and st.session_state.get('lap_shapes_v163_race') == quick_race171):
+            quick_shapes171 = maybe171.copy()
+    metric_names171 = ['終盤加速幅_秒', '残1000m相対加速_秒', '残1000mラップ幅_秒']
+    quick_lapped171 = pd.DataFrame()
+    if not quick171.empty and 'レースID' in quick171.columns and not quick_shapes171.empty and 'レースID' in quick_shapes171.columns:
+        qbase171 = quick171.copy()
+        qbase171['_quick_rid171'] = qbase171['レースID'].fillna('').astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        qshape171 = quick_shapes171.copy()
+        qshape171['_quick_rid171'] = qshape171['レースID'].fillna('').astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        if '検証' in qshape171.columns:
+            qshape171 = qshape171[qshape171['検証'].eq('OK')].copy()
+        for m171 in metric_names171:
+            if m171 not in qshape171.columns:
+                qshape171[m171] = float('nan')
+            qshape171[m171] = pd.to_numeric(qshape171[m171], errors='coerce')
+        qshape171 = qshape171.drop_duplicates('_quick_rid171')
+        quick_lapped171 = qbase171.merge(qshape171[['_quick_rid171'] + metric_names171], on='_quick_rid171', how='inner')
+        quick_lapped171['着順_数値'] = pd.to_numeric(quick_lapped171['着順_数値'], errors='coerce')
+        quick_lapped171 = quick_lapped171.drop_duplicates(['馬名','_quick_rid171'])
+    quick_names171 = list(dict.fromkeys(list(horses.values()) if horses else []))
+    quick_names171 += [nm for nm in quick171['馬名'].dropna().unique() if nm not in quick_names171]
+    records171 = []
+    for name171 in quick_names171:
+        allhorse171 = quick171.loc[quick171['馬名'].eq(name171)]
+        lapgroup171 = (quick_lapped171.loc[quick_lapped171['馬名'].eq(name171)]
+                       if not quick_lapped171.empty else pd.DataFrame())
+        if lapgroup171.empty:
+            label171 = '不明'
+            # ラップが未取得でも、馬自身の位置と末脚の診断は表示する。
+            hdiagnose171 = allhorse171
+        else:
+            hdiagnose171 = lapgroup171
+            good171 = lapgroup171['着順_数値'].between(1,3)
+            bad171 = lapgroup171['着順_数値'].ge(4)
+            comp171 = {'好走走数': int(good171.sum()), '凡走走数': int(bad171.sum())}
+            for col171, lab171 in zip(metric_names171, ['終盤加速', '残1000m加速', '残1000mラップ幅']):
+                va171 = pd.to_numeric(lapgroup171.loc[good171, col171], errors='coerce').dropna()
+                vb171 = pd.to_numeric(lapgroup171.loc[bad171, col171], errors='coerce').dropna()
+                comp171[lab171+'_差'] = va171.mean()-vb171.mean() if len(va171) and len(vb171) else float('nan')
+            label171, _, _ = interpret_running_pattern(comp171)
+        diag171 = diagnose_horse_v17(hdiagnose171, label171)
+        diag171['馬名'] = name171
+        diag171['ラップ確認走数'] = len(lapgroup171)
+        records171.append(diag171)
+    quick_result171 = pd.DataFrame(records171)
+    if not quick_result171.empty:
+        quick_display171 = display_horse_column(quick_result171, horses, st.session_state.auto_numbers)
+        st.dataframe(quick_display171[['馬名','走りの総合診断','展開','信頼度','好走走数']],
+                     hide_index=True, use_container_width=True,
+                     height=min(700, 48+35*len(quick_display171)),
+                     column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
+                                    '走りの総合診断': st.column_config.TextColumn('走りの特徴', width='medium'),
+                                    '展開': st.column_config.TextColumn('好走展開', width='medium')})
+        if quick_shapes171.empty:
+            st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。詳細分析からラップを取得すると展開診断も加わります。')
+        st.caption('「参考」「暫定」は少数データの目印。レース全体のラップを馬自身の個別ラップとして扱いません。')
+        with st.expander('気になる馬の診断根拠を見る', expanded=False):
+            chosen171 = tap_choice('馬を選ぶ', quick_display171['馬名'].tolist(), 'quick_diagnosis_horse_v171')
+            row171 = quick_display171.loc[quick_display171['馬名'].eq(chosen171)].iloc[0]
+            st.markdown(f"**{row171['馬名']}：{row171['走りの総合診断']}**　{row171['信頼度']}")
+            st.write(row171['根拠'])
+            st.caption(f"好走 {row171['好走走数']}/{row171['対象走数']}走、ラップ確認 {row171['ラップ確認走数']}走、4角取得 {row171['位置取得']}走、上がり取得 {row171['上がり取得']}走")
+        st.download_button('総合診断をCSVで保存', quick_display171.to_csv(index=False).encode('utf-8-sig'),
+                           file_name='keiba_quick_diagnosis_v171.csv', mime='text/csv', use_container_width=True)
+    else:
+        st.info('診断に使える出走馬データがありません。')
 
-st.header('⑥ 分析条件')
-mode = st.radio('分析モード', ['ランキング', '馬を比較'], horizontal=True)
-venue = tap_choice('競馬場', ['すべて'] + sorted(analysis_df['競馬場'].unique().tolist()), 'tap_競馬場_v153')
-track = tap_choice('馬場状態', ['すべて'] + sorted(analysis_df['馬場状態'].unique().tolist()), 'tap_馬場状態_v153')
-course_options = ['すべて'] + sorted(analysis_df['コース'].dropna().astype(str).unique().tolist()) if 'コース' in analysis_df.columns else ['すべて']
-course = tap_choice('コース', course_options, 'tap_コース_v153')
-distance = tap_choice('距離', ['すべて', '1200m以下', '1201〜1600m', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'], 'tap_距離_v153')
-recent = tap_choice('対象レース', ['直近5走', '直近10走', '直近15走', '全走'], 'tap_対象レース_v153')
-grade_filter = tap_choice('レース格', ['全レース', '重賞のみ（G1・G2・G3）', 'G1のみ', 'その他（L・OP・条件戦など）'], 'tap_レース格_v153')
-st.caption('格付けが確認できない走は「不明」として保持。重賞・G1・その他の絞り込みから除外します。')
-pace_filter = tap_choice('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'], 'tap_推定ペース_v153')
-st.caption('判定は前半600mと後半600mの差のみ（前半−後半）：−1秒未満＝前傾（ハイ寄り）、±1秒以内＝均衡（ミドル寄り）、＋1秒超＝後傾（スロー寄り）。道中のラップ、コース差、距離差は反映しない暫定分類です。')
-st.caption('脚質は4角位置と頭数から便宜的に推定。先頭（4角）＝逃げ確定ではなく、差し追込率は後方位置の割合です。')
-st.caption('集計順序：各馬の全成績から直近○走を確定 → 競馬場・馬場・距離・レース格・ペースで絞り込み。例：直近5走＋G1のみ＝直近5走の中にあるG1だけ。')
-counts = analysis_df['レース格'].value_counts()
-st.caption('判定済み：' + ' / '.join(f'{g} {int(counts.get(g, 0))}走' for g in ['G1', 'G2', 'G3', 'その他']) + f' / 不明 {int(counts.get("不明", 0))}走')
-if int(counts.get('不明', 0)):
-    st.info('レース格が不明な成績があります。以前のバージョンで取得したデータは格付け未保存の場合があります。必要に応じて新しく過去成績を取得し直してください。')
-if mode == 'ランキング':
-    metric = tap_choice('ランキング指標', METRICS, 'tap_ランキング指標_v153')
-else:
-    options = sorted(analysis_df['馬名'].unique().tolist())
-    selected = tap_horses('比較する馬（2〜3頭）', options, 'compare_horses_v153')
-view = st.radio('表示方法', ['横並び表', 'スマホ用カード'], horizontal=True)
+with tab_detail171:
+    st.header('⑤ レース格の判定チェック（Ver.14.4）')
+    st.caption('元のレース名と格付け根拠を見ながら、誤判定・判定不明を確認できます。ここで表示するのはフィルター適用前のデータです。')
+    audit = analysis_df.copy()
+    if '日付' in audit.columns:
+        audit = audit.sort_values(['馬名', '日付'], ascending=[True, False], kind='stable')
+    audit_horses = ['全馬'] + sorted(audit['馬名'].unique().tolist())
+    with st.expander('過去レースの格付け一覧を確認', expanded=False):
+        audit_horse = tap_choice('確認する馬', audit_horses, 'audit_horse_v153')
+        audit_grade = tap_choice('表示する格付け', ['すべて', 'G1', 'G2', 'G3', 'その他', '不明'], 'audit_grade_v153')
+        if audit_horse != '全馬':
+            audit = audit[audit['馬名'] == audit_horse]
+        if audit_grade != 'すべて':
+            audit = audit[audit['レース格'] == audit_grade]
+        audit_cols = ['馬名', '日付', 'レース名', 'レース格', '格付け根拠', '着順_数値', 'レースID']
+        audit_view = audit[[c for c in audit_cols if c in audit.columns]].copy()
+        if '日付' in audit_view.columns:
+            audit_view['日付'] = pd.to_datetime(audit_view['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+        if 'レースID' in audit_view.columns:
+            ids = audit_view['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
+            audit_view['レース結果URL'] = ids.apply(lambda v: f'https://race.netkeiba.com/race/result.html?race_id={v}' if re.fullmatch(r'\d{12}', v) else '')
+            audit_view = audit_view.drop(columns=['レースID'])
+        st.write(f'表示：{len(audit_view)}走（元データ：{len(analysis_df)}走）')
+        st.dataframe(display_horse_column(audit_view, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
+                     column_config={'馬名': st.column_config.TextColumn('馬名', width='medium'),
+                                    'レース名': st.column_config.TextColumn('レース名', width='medium'),
+                                    '格付け根拠': st.column_config.TextColumn('格付け根拠', width='large'),
+                                    'レース結果URL': st.column_config.LinkColumn('レース結果を確認', display_text='結果を見る')})
+        st.download_button('格付けチェック表をCSVで保存', display_horse_column(audit_view, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
+                           file_name='keiba_grade_audit.csv', mime='text/csv', use_container_width=True)
+        missing_names = int(analysis_df['レース名'].fillna('').eq('').sum())
+        if missing_names:
+            st.warning(f'レース名がないデータが{missing_names}走あります。旧バージョンの保存データは、レース格を検証するために再取得が必要です。')
+        st.caption('格付け判定は取得ページの表記に依存します。G1・G2・G3と表示されても、根拠欄や実際のレース名と一致しているか確認してください。')
 
-st.header('⑦ 分析する')
-# Streamlitはどのボタンでも再実行されるので、分析済み状態を保持する。
-# ラップ取得・CSVダウンロード等を押しても分析結果を消さない。
-if 'analysis_visible_v1581' not in st.session_state:
-    st.session_state['analysis_visible_v1581'] = False
-if st.button('分析する', type='primary', use_container_width=True):
-    st.session_state['analysis_visible_v1581'] = True
-if st.session_state['analysis_visible_v1581']:
-    # Ver.14.6：先に各馬の「直近N走」を確定し、その範囲内で条件を適用する。
-    # 日付が取得できない走は末尾に置き、元の並びを保持する。
-    base = analysis_df.copy()
-    if '日付' in base.columns:
-        base = base.sort_values('日付', ascending=False, na_position='last', kind='stable')
-    if recent != '全走':
-        n = int(recent.replace('直近', '').replace('走', ''))
-        base = base.groupby('馬名', sort=False).head(n).copy()
-    base_counts = base.groupby('馬名').size().rename('直近対象走数')
+    st.header('⑥ 分析条件')
+    mode = st.radio('分析モード', ['ランキング', '馬を比較'], horizontal=True)
+    venue = tap_choice('競馬場', ['すべて'] + sorted(analysis_df['競馬場'].unique().tolist()), 'tap_競馬場_v153')
+    track = tap_choice('馬場状態', ['すべて'] + sorted(analysis_df['馬場状態'].unique().tolist()), 'tap_馬場状態_v153')
+    course_options = ['すべて'] + sorted(analysis_df['コース'].dropna().astype(str).unique().tolist()) if 'コース' in analysis_df.columns else ['すべて']
+    course = tap_choice('コース', course_options, 'tap_コース_v153')
+    distance = tap_choice('距離', ['すべて', '1200m以下', '1201〜1600m', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'], 'tap_距離_v153')
+    recent = tap_choice('対象レース', ['直近5走', '直近10走', '直近15走', '全走'], 'tap_対象レース_v153')
+    grade_filter = tap_choice('レース格', ['全レース', '重賞のみ（G1・G2・G3）', 'G1のみ', 'その他（L・OP・条件戦など）'], 'tap_レース格_v153')
+    st.caption('格付けが確認できない走は「不明」として保持。重賞・G1・その他の絞り込みから除外します。')
+    pace_filter = tap_choice('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'], 'tap_推定ペース_v153')
+    st.caption('判定は前半600mと後半600mの差のみ（前半−後半）：−1秒未満＝前傾（ハイ寄り）、±1秒以内＝均衡（ミドル寄り）、＋1秒超＝後傾（スロー寄り）。道中のラップ、コース差、距離差は反映しない暫定分類です。')
+    st.caption('脚質は4角位置と頭数から便宜的に推定。先頭（4角）＝逃げ確定ではなく、差し追込率は後方位置の割合です。')
+    st.caption('集計順序：各馬の全成績から直近○走を確定 → 競馬場・馬場・距離・レース格・ペースで絞り込み。例：直近5走＋G1のみ＝直近5走の中にあるG1だけ。')
+    counts = analysis_df['レース格'].value_counts()
+    st.caption('判定済み：' + ' / '.join(f'{g} {int(counts.get(g, 0))}走' for g in ['G1', 'G2', 'G3', 'その他']) + f' / 不明 {int(counts.get("不明", 0))}走')
+    if int(counts.get('不明', 0)):
+        st.info('レース格が不明な成績があります。以前のバージョンで取得したデータは格付け未保存の場合があります。必要に応じて新しく過去成績を取得し直してください。')
+    if mode == 'ランキング':
+        metric = tap_choice('ランキング指標', METRICS, 'tap_ランキング指標_v153')
+    else:
+        options = sorted(analysis_df['馬名'].unique().tolist())
+        selected = tap_horses('比較する馬（2〜3頭）', options, 'compare_horses_v153')
+    view = st.radio('表示方法', ['横並び表', 'スマホ用カード'], horizontal=True)
 
-    filtered = base.copy()
-    if venue != 'すべて':
-        filtered = filtered[filtered['競馬場'] == venue]
-    if track != 'すべて':
-        filtered = filtered[filtered['馬場状態'] == track]
-    if course != 'すべて' and 'コース' in filtered.columns:
-        filtered = filtered[filtered['コース'] == course]
-    if grade_filter != '全レース':
-        grade_targets = {'重賞のみ（G1・G2・G3）': ['G1', 'G2', 'G3'],
-                         'G1のみ': ['G1'], 'その他（L・OP・条件戦など）': ['その他']}
-        filtered = filtered[filtered['レース格'].isin(grade_targets[grade_filter])]
-    # 比較用データはペース条件を掛ける直前に確保。距離条件はこの後両方に適用。
-    pace_compare_base = filtered.copy()
-    if pace_filter != 'すべて':
-        filtered = filtered[filtered['推定ペース'] == pace_filter]
-    ranges = {'1200m以下': (0, 1200), '1201〜1600m': (1201, 1600), '1601〜1800m': (1601, 1800), '1801〜2200m': (1801, 2200), '2201〜2400m': (2201, 2400), '2401m以上': (2401, float('inf'))}
-    if distance in ranges:
-        filtered = filtered[filtered['距離_m'].between(*ranges[distance])]
-        pace_compare_base = pace_compare_base[pace_compare_base['距離_m'].between(*ranges[distance])]
-    if mode == '馬を比較':
-        if len(selected) < 2:
-            st.warning('比較する馬を2頭以上選んでください。')
+    st.header('⑦ 分析する')
+    # Streamlitはどのボタンでも再実行されるので、分析済み状態を保持する。
+    # ラップ取得・CSVダウンロード等を押しても分析結果を消さない。
+    if 'analysis_visible_v1581' not in st.session_state:
+        st.session_state['analysis_visible_v1581'] = False
+    if st.button('分析する', type='primary', use_container_width=True):
+        st.session_state['analysis_visible_v1581'] = True
+    if st.session_state['analysis_visible_v1581']:
+        # Ver.14.6：先に各馬の「直近N走」を確定し、その範囲内で条件を適用する。
+        # 日付が取得できない走は末尾に置き、元の並びを保持する。
+        base = analysis_df.copy()
+        if '日付' in base.columns:
+            base = base.sort_values('日付', ascending=False, na_position='last', kind='stable')
+        if recent != '全走':
+            n = int(recent.replace('直近', '').replace('走', ''))
+            base = base.groupby('馬名', sort=False).head(n).copy()
+        base_counts = base.groupby('馬名').size().rename('直近対象走数')
+
+        filtered = base.copy()
+        if venue != 'すべて':
+            filtered = filtered[filtered['競馬場'] == venue]
+        if track != 'すべて':
+            filtered = filtered[filtered['馬場状態'] == track]
+        if course != 'すべて' and 'コース' in filtered.columns:
+            filtered = filtered[filtered['コース'] == course]
+        if grade_filter != '全レース':
+            grade_targets = {'重賞のみ（G1・G2・G3）': ['G1', 'G2', 'G3'],
+                             'G1のみ': ['G1'], 'その他（L・OP・条件戦など）': ['その他']}
+            filtered = filtered[filtered['レース格'].isin(grade_targets[grade_filter])]
+        # 比較用データはペース条件を掛ける直前に確保。距離条件はこの後両方に適用。
+        pace_compare_base = filtered.copy()
+        if pace_filter != 'すべて':
+            filtered = filtered[filtered['推定ペース'] == pace_filter]
+        ranges = {'1200m以下': (0, 1200), '1201〜1600m': (1201, 1600), '1601〜1800m': (1601, 1800), '1801〜2200m': (1801, 2200), '2201〜2400m': (2201, 2400), '2401m以上': (2401, float('inf'))}
+        if distance in ranges:
+            filtered = filtered[filtered['距離_m'].between(*ranges[distance])]
+            pace_compare_base = pace_compare_base[pace_compare_base['距離_m'].between(*ranges[distance])]
+        if mode == '馬を比較':
+            if len(selected) < 2:
+                st.warning('比較する馬を2頭以上選んでください。')
+                st.stop()
+            filtered = filtered[filtered['馬名'].isin(selected)]
+            pace_compare_base = pace_compare_base[pace_compare_base['馬名'].isin(selected)]
+        st.caption(f'直近走数を先に適用：{len(base)}走 → 条件絞り込み後：{len(filtered)}走（対象 {filtered["馬名"].nunique()}頭）')
+        if filtered.empty:
+            st.warning('指定した直近走数の範囲内に、条件に一致するレースがありません。対象レースを直近10走・全走に広げて確認してください。')
             st.stop()
-        filtered = filtered[filtered['馬名'].isin(selected)]
-        pace_compare_base = pace_compare_base[pace_compare_base['馬名'].isin(selected)]
-    st.caption(f'直近走数を先に適用：{len(base)}走 → 条件絞り込み後：{len(filtered)}走（対象 {filtered["馬名"].nunique()}頭）')
-    if filtered.empty:
-        st.warning('指定した直近走数の範囲内に、条件に一致するレースがありません。対象レースを直近10走・全走に広げて確認してください。')
-        st.stop()
-    # この内訳はランキングと同じ filtered を使うため、表示・CSVの出走数と一致する。
-    matched_counts = filtered.groupby('馬名').size().rename('条件一致走数')
-    count_check = pd.concat([base_counts, matched_counts], axis=1).fillna(0).astype(int).reset_index()
-    count_check = count_check.sort_values(['条件一致走数', '馬名'], ascending=[False, True])
-    with st.expander('集計対象走数の確認（全馬）', expanded=False):
-        st.caption('「直近対象走数」から、選んだレース格などに一致した「条件一致走数」だけをランキングに使用しています。0走の馬はランキングに出ません。')
-        st.dataframe(display_horse_column(count_check, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
-    rows = []
-    for name, group in filtered.groupby('馬名'):
-        row = summarize(group)
-        row['馬名'] = name
+        # この内訳はランキングと同じ filtered を使うため、表示・CSVの出走数と一致する。
+        matched_counts = filtered.groupby('馬名').size().rename('条件一致走数')
+        count_check = pd.concat([base_counts, matched_counts], axis=1).fillna(0).astype(int).reset_index()
+        count_check = count_check.sort_values(['条件一致走数', '馬名'], ascending=[False, True])
+        with st.expander('集計対象走数の確認（全馬）', expanded=False):
+            st.caption('「直近対象走数」から、選んだレース格などに一致した「条件一致走数」だけをランキングに使用しています。0走の馬はランキングに出ません。')
+            st.dataframe(display_horse_column(count_check, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
+        rows = []
+        for name, group in filtered.groupby('馬名'):
+            row = summarize(group)
+            row['馬名'] = name
+            if mode == 'ランキング':
+                count = sample_count_for_metric(group, metric)
+                row['指標対象走数'] = count
+                row['データ量'] = sample_label(count)
+            rows.append(row)
+        result = pd.DataFrame(rows)
         if mode == 'ランキング':
-            count = sample_count_for_metric(group, metric)
-            row['指標対象走数'] = count
-            row['データ量'] = sample_label(count)
-        rows.append(row)
-    result = pd.DataFrame(rows)
-    if mode == 'ランキング':
-        ascending = metric in ['平均着順', '平均4角', '平均上がり', '平均上がり順位']
-        result = result.sort_values(metric, ascending=ascending, na_position='last', kind='stable').reset_index(drop=True)
-        result.insert(0, '順位', result[metric].rank(method='min', ascending=ascending, na_option='bottom').astype(int))
-        st.subheader(f'🏆 {metric} ランキング')
-        st.caption('指標対象走数＝選択したランキング指標を計算できた走数。1〜2走は参考値、3〜4走は少数例です。順位にはサンプル数による補正を掛けていません。')
-        if int((result['指標対象走数'] <= 2).sum()):
-            st.info(f'今回、{int((result["指標対象走数"] <= 2).sum())}頭が指標対象2走以下。高順位でも参考値として見てください。')
-    else:
-        result['表示順'] = result['馬名'].apply(selected.index)
-        result = result.sort_values('表示順').drop(columns='表示順')
-        st.subheader('🐎 馬の成績比較')
-    result = result.round(2)
-    if mode == 'ランキング':
-        # 順位と馬名を常に先頭に。重要指標を続ける。
-        front = ['順位', '馬名', '出走数', '指標対象走数', 'データ量', metric]
-        result = result[[c for c in dict.fromkeys(front) if c in result.columns]
-                        + [c for c in result.columns if c not in front]]
-    else:
-        result = result[['馬名'] + [c for c in result.columns if c != '馬名']]
-    if view == '横並び表':
-        if mode == 'ランキング':
-            full_table = st.checkbox('詳細指標をすべて表示', value=False)
-            key_cols = ['順位', '馬名', '出走数', '指標対象走数', 'データ量', metric, '複勝率(%)', '平均4角', '上がり最速率(%)']
-            compact_cols = [c for c in dict.fromkeys(key_cols) if c in result.columns]
-            show_table = result if full_table else result[compact_cols]
-            st.dataframe(display_horse_column(show_table, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
-                         column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
+            ascending = metric in ['平均着順', '平均4角', '平均上がり', '平均上がり順位']
+            result = result.sort_values(metric, ascending=ascending, na_position='last', kind='stable').reset_index(drop=True)
+            result.insert(0, '順位', result[metric].rank(method='min', ascending=ascending, na_option='bottom').astype(int))
+            st.subheader(f'🏆 {metric} ランキング')
+            st.caption('指標対象走数＝選択したランキング指標を計算できた走数。1〜2走は参考値、3〜4走は少数例です。順位にはサンプル数による補正を掛けていません。')
+            if int((result['指標対象走数'] <= 2).sum()):
+                st.info(f'今回、{int((result["指標対象走数"] <= 2).sum())}頭が指標対象2走以下。高順位でも参考値として見てください。')
         else:
-            st.dataframe(display_horse_column(result, horses, st.session_state.auto_numbers).set_index('馬名').T, use_container_width=True)
-    else:
-        for _, row in result.iterrows():
-            with st.container(border=True):
-                label = f'🐎 {horse_display(row["馬名"], horses, st.session_state.auto_numbers)}'
-                if mode == 'ランキング':
-                    label = f'{int(row["順位"])}位 {label}'
-                st.markdown(f'### {label}')
-                st.caption(f'対象：{int(row["出走数"])}走')
-                if mode == 'ランキング':
-                    st.caption(f'【{metric}】有効データ {int(row["指標対象走数"])}走 ／ {row["データ量"]}')
-                for key in METRICS:
-                    value = row[key]
-                    shown = 'データなし' if pd.isna(value) else f'{value:.2f}' + ('%' if key.endswith('(%)') else '')
-                    st.write(f'**{key}：** {shown}')
-                st.caption(f'上がり順位：{int(row["上がり対象走数"])}走 / 推定ペース：{int(row["ペース判定対象走数"])}走 / 推定脚質：{int(row["脚質判定対象走数"])}走')
-    with st.expander('今回の集計に入ったレース一覧', expanded=False):
-        show_cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '着順_数値', '推定ペース']
-        used = filtered[[c for c in show_cols if c in filtered.columns]].copy()
-        if '日付' in used.columns:
-            used['日付'] = pd.to_datetime(used['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
-        st.dataframe(display_horse_column(used, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
-        st.download_button('集計対象レース一覧をCSVで保存', data=display_horse_column(used, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
-                           file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
-    st.subheader('ペース別の成績比較（Ver.15.8）')
-    st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
-    st.info('netkeibaのS/M/Hが取得できたレースのみで集計します。未取得レースは「不明」として除外し、独自推定は混ぜません。')
-    # Ver.15.8: ペース判定のカバー率を必ず明示する（評価不能=苦手、ではない）。
-    coverage_source = pace_compare_base.copy()
-    coverage_source['判定状態'] = coverage_source['推定ペース'].apply(
-        lambda x: 'netkeiba判定あり' if x in ('ハイ寄り', 'ミドル寄り', 'スロー寄り') else '未取得・不明')
-    coverage_rows = []
-    for h, hg in coverage_source.groupby('馬名', sort=False):
-        known_h = hg[hg['判定状態'].eq('netkeiba判定あり')]
-        total_h = len(hg)
-        n_known = len(known_h)
-        coverage_rows.append({'馬名': h, '条件一致走数': total_h,
-                              'netkeiba判定あり': n_known, '未取得・不明': total_h - n_known,
-                              '判定カバー率(%)': round(n_known / total_h * 100, 1) if total_h else 0,
-                              'ハイ': int(known_h['推定ペース'].eq('ハイ寄り').sum()),
-                              'ミドル': int(known_h['推定ペース'].eq('ミドル寄り').sum()),
-                              'スロー': int(known_h['推定ペース'].eq('スロー寄り').sum())})
-    if coverage_rows:
-        coverage = pd.DataFrame(coverage_rows)
-        all_count = len(coverage_source)
-        known_count = int(coverage_source['判定状態'].eq('netkeiba判定あり').sum())
-        st.caption(f'ペース判定のカバー率：{known_count}/{all_count}走'
-                   f'（{known_count / all_count * 100:.1f}%）｜除外：{all_count-known_count}走')
-        with st.expander('ペース判定の取得状況（馬別・Ver.15.8）', expanded=False):
-            st.caption('選択した直近走数・格付け・距離などに合う過去成績が母数。'
-                       '「不明」は苦手を意味しません。ハイ0走も能力の低さではありません。')
-            st.dataframe(display_horse_column(coverage, horses, st.session_state.auto_numbers),
-                         hide_index=True, use_container_width=True)
-            st.download_button('ペース取得状況をCSVで保存',
-                               display_horse_column(coverage, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_pace_coverage_v158.csv', mime='text/csv', use_container_width=True)
-            unknown = coverage_source[coverage_source['判定状態'].eq('未取得・不明')].copy()
-            if unknown.empty:
-                st.success('現在の分析条件に該当する走はすべてnetkeiba判定を取得済みです。')
+            result['表示順'] = result['馬名'].apply(selected.index)
+            result = result.sort_values('表示順').drop(columns='表示順')
+            st.subheader('🐎 馬の成績比較')
+        result = result.round(2)
+        if mode == 'ランキング':
+            # 順位と馬名を常に先頭に。重要指標を続ける。
+            front = ['順位', '馬名', '出走数', '指標対象走数', 'データ量', metric]
+            result = result[[c for c in dict.fromkeys(front) if c in result.columns]
+                            + [c for c in result.columns if c not in front]]
+        else:
+            result = result[['馬名'] + [c for c in result.columns if c != '馬名']]
+        if view == '横並び表':
+            if mode == 'ランキング':
+                full_table = st.checkbox('詳細指標をすべて表示', value=False)
+                key_cols = ['順位', '馬名', '出走数', '指標対象走数', 'データ量', metric, '複勝率(%)', '平均4角', '上がり最速率(%)']
+                compact_cols = [c for c in dict.fromkeys(key_cols) if c in result.columns]
+                show_table = result if full_table else result[compact_cols]
+                st.dataframe(display_horse_column(show_table, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
+                             column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
             else:
-                columns = ['馬名','日付','レース名','レースID','競馬場','距離_m','レース格','ペース判定元']
-                unknown = unknown[[c for c in columns if c in unknown.columns]]
-                st.warning(f'未取得・不明が{len(unknown)}走あります。下のCSVで対象レースを確認できます。')
-                st.dataframe(display_horse_column(unknown, horses, st.session_state.auto_numbers),
+                st.dataframe(display_horse_column(result, horses, st.session_state.auto_numbers).set_index('馬名').T, use_container_width=True)
+        else:
+            for _, row in result.iterrows():
+                with st.container(border=True):
+                    label = f'🐎 {horse_display(row["馬名"], horses, st.session_state.auto_numbers)}'
+                    if mode == 'ランキング':
+                        label = f'{int(row["順位"])}位 {label}'
+                    st.markdown(f'### {label}')
+                    st.caption(f'対象：{int(row["出走数"])}走')
+                    if mode == 'ランキング':
+                        st.caption(f'【{metric}】有効データ {int(row["指標対象走数"])}走 ／ {row["データ量"]}')
+                    for key in METRICS:
+                        value = row[key]
+                        shown = 'データなし' if pd.isna(value) else f'{value:.2f}' + ('%' if key.endswith('(%)') else '')
+                        st.write(f'**{key}：** {shown}')
+                    st.caption(f'上がり順位：{int(row["上がり対象走数"])}走 / 推定ペース：{int(row["ペース判定対象走数"])}走 / 推定脚質：{int(row["脚質判定対象走数"])}走')
+        with st.expander('今回の集計に入ったレース一覧', expanded=False):
+            show_cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '着順_数値', '推定ペース']
+            used = filtered[[c for c in show_cols if c in filtered.columns]].copy()
+            if '日付' in used.columns:
+                used['日付'] = pd.to_datetime(used['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+            st.dataframe(display_horse_column(used, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
+            st.download_button('集計対象レース一覧をCSVで保存', data=display_horse_column(used, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
+                               file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
+        st.subheader('ペース別の成績比較（Ver.15.8）')
+        st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
+        st.info('netkeibaのS/M/Hが取得できたレースのみで集計します。未取得レースは「不明」として除外し、独自推定は混ぜません。')
+        # Ver.15.8: ペース判定のカバー率を必ず明示する（評価不能=苦手、ではない）。
+        coverage_source = pace_compare_base.copy()
+        coverage_source['判定状態'] = coverage_source['推定ペース'].apply(
+            lambda x: 'netkeiba判定あり' if x in ('ハイ寄り', 'ミドル寄り', 'スロー寄り') else '未取得・不明')
+        coverage_rows = []
+        for h, hg in coverage_source.groupby('馬名', sort=False):
+            known_h = hg[hg['判定状態'].eq('netkeiba判定あり')]
+            total_h = len(hg)
+            n_known = len(known_h)
+            coverage_rows.append({'馬名': h, '条件一致走数': total_h,
+                                  'netkeiba判定あり': n_known, '未取得・不明': total_h - n_known,
+                                  '判定カバー率(%)': round(n_known / total_h * 100, 1) if total_h else 0,
+                                  'ハイ': int(known_h['推定ペース'].eq('ハイ寄り').sum()),
+                                  'ミドル': int(known_h['推定ペース'].eq('ミドル寄り').sum()),
+                                  'スロー': int(known_h['推定ペース'].eq('スロー寄り').sum())})
+        if coverage_rows:
+            coverage = pd.DataFrame(coverage_rows)
+            all_count = len(coverage_source)
+            known_count = int(coverage_source['判定状態'].eq('netkeiba判定あり').sum())
+            st.caption(f'ペース判定のカバー率：{known_count}/{all_count}走'
+                       f'（{known_count / all_count * 100:.1f}%）｜除外：{all_count-known_count}走')
+            with st.expander('ペース判定の取得状況（馬別・Ver.15.8）', expanded=False):
+                st.caption('選択した直近走数・格付け・距離などに合う過去成績が母数。'
+                           '「不明」は苦手を意味しません。ハイ0走も能力の低さではありません。')
+                st.dataframe(display_horse_column(coverage, horses, st.session_state.auto_numbers),
                              hide_index=True, use_container_width=True)
-                st.download_button('ペース未判定の成績をCSVで保存',
-                                   display_horse_column(unknown, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
-                                   file_name='keiba_pace_unknown_v158.csv', mime='text/csv', use_container_width=True)
-    detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
-    if detail.empty:
-        st.info('今回の条件ではペースを分類できる成績がありません。')
-    else:
-        detail_rows = []
-        for (h, p), g in detail.groupby(['馬名', '推定ペース']):
-            finish = g['着順_数値'].dropna()
-            n = len(finish)
-            detail_rows.append({'馬名': h, '推定ペース': p, '対象走数': len(g), '着順有効走数': n,
-                                'データ量': sample_label(n),
-                                '勝率(%)': round(100 * (finish == 1).sum() / n, 1) if n else float('nan'),
-                                '複勝率(%)': round(100 * (finish <= 3).sum() / n, 1) if n else float('nan'),
-                                '平均4角': round(g['4角順位'].mean(), 2),
-                                '上がり順位対象走数': int(g['上がり順位'].notna().sum()),
-                                '平均上がり順位': round(g['上がり順位'].mean(), 2)})
-        comparison = pd.DataFrame(detail_rows)
-        order = {'ハイ寄り': 0, 'ミドル寄り': 1, 'スロー寄り': 2}
-        comparison['_順'] = comparison['推定ペース'].map(order)
-        comparison = comparison.sort_values(['馬名', '_順']).drop(columns='_順')
-        st.dataframe(display_horse_column(comparison, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
-                     column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
-        st.download_button('ペース別成績をCSVで保存', display_horse_column(comparison, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
-                           file_name='keiba_pace_compare_v15.csv', mime='text/csv', use_container_width=True)
-    with st.expander('ペース判定の根拠（レースごとの前後半3F）', expanded=False):
-        st.caption('差＝前半3F−後半3F。負なら前半が速く、正なら後半が速い。各レースの元データと分類を照合できます。')
-        cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '前半3F', '後半3F', '前後半3F差', '暫定ペース', '推定ペース', 'ペース判定元', '着順_数値']
-        pace_audit = pace_compare_base[[c for c in dict.fromkeys(cols) if c in pace_compare_base.columns]].copy()
-        if '日付' in pace_audit.columns:
-            pace_audit['日付'] = pd.to_datetime(pace_audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
-        st.write(f'判定可能：{int(pace_audit["推定ペース"].ne("不明").sum())}走 ／ 全{len(pace_audit)}走')
-        st.dataframe(display_horse_column(pace_audit, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
-                     column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
-        st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
-                           file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
-
-    with st.expander('200mラップの試験取得（5レース＋1600m確認・Ver.15.9.4）', expanded=False):
-        st.caption('ラップ表の上段（通過タイム）と下段（200mラップ）を区別して読み込み、合計・累積タイムを検証します。ランキングは変更しません。')
-        sample_ids = []
-        if 'レースID' in pace_compare_base.columns:
-            sample_ids = (pace_compare_base['レースID'].fillna('').astype(str)
-                          .str.replace(r'\.0$', '', regex=True))
-            sample_ids = sample_ids[sample_ids.str.fullmatch(r'\d{12}')].drop_duplicates().head(5).tolist()
-        # 通常5レースに加えて、該当データがあれば1600mのレースを1件検証。
-        extra_1600 = ''
-        if 'レースID' in pace_compare_base.columns and '距離_m' in pace_compare_base.columns:
-            distance_1600 = pd.to_numeric(pace_compare_base['距離_m'], errors='coerce').eq(1600)
-            ids_1600 = (pace_compare_base.loc[distance_1600, 'レースID'].fillna('').astype(str)
-                        .str.replace(r'\.0$', '', regex=True))
-            candidates_1600 = ids_1600[ids_1600.str.fullmatch(r'\d{12}')]
-            extra_1600 = next((r for r in candidates_1600 if r not in sample_ids), '')
-            if extra_1600:
-                sample_ids.append(extra_1600)
-        st.caption('対象：通常の先頭5レース' + (' ＋1600mの追加1レース' if extra_1600 else '（1600mの追加対象なし）'))
-        if not sample_ids:
-            st.info('試験取得できるレースIDがありません。')
-        elif st.button('200mラップを試験取得', key='lap_table_v1594'):
-            rows = []
-            progress_lap = st.progress(0)
-            for i, rid in enumerate(sample_ids, 1):
-                try:
-                    result_lap = get_lap_table_test_v1594(rid)
-                    rows.append({'レースID':rid, **result_lap})
-                except Exception as e:
-                    rows.append({'レースID':rid, '状態':'取得不可', '200mラップ':'',
-                                 '区間数':0, 'レース距離':'', '期待区間数':'', '合計秒':'', '検証':str(e)[:200], '末尾補完':'例外', '表の一部':'',
-                                 'ページURL':f'https://db.sp.netkeiba.com/race/{rid}/'})
-                progress_lap.progress(i / len(sample_ids))
-            st.session_state['lap_table_v1592_result'] = pd.DataFrame(rows)
-        if 'lap_table_v1592_result' in st.session_state:
-            lap_result = st.session_state['lap_table_v1592_result']
-            st.dataframe(lap_result, hide_index=True, use_container_width=True)
-            st.download_button('200mラップ試験結果をCSVで保存',
-                               lap_result.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_table_test_v1594.csv', mime='text/csv',
-                               use_container_width=True)
-
-    with st.expander('200mラップ展開タイプ分析（Ver.16.5・全レース対応）', expanded=False):
-        st.caption('20・30レースの試験、または保存済みの全過去成績を対象にできます。全件は重複レースを1回だけ取得し、5件ごとに途中保存。結果表は現在の分析条件で絞った馬を比較します。')
-        sample = pace_compare_base.copy()
-        # Ver.16.6.1: 表示用の過去成績にも照合用レースIDを設定する。
-        # 以前は取得対象のコピーにだけ _rid16 を追加していたため、
-        # 展開タイプ分布は表示されても全馬比較表が表示されなかった。
-        if 'レースID' in sample.columns:
-            sample['_rid16'] = (sample['レースID'].fillna('').astype(str)
-                                .str.strip().str.replace(r'\.0$', '', regex=True))
-        full_sample16 = analysis_df.copy()
-        test_size = tap_choice('取得するレース数', [20, 30, '全レース'], 'lap_shape_v163_n')
-        all_mode16 = test_size == '全レース'
-        acquisition_sample16 = full_sample16 if all_mode16 else sample
-        if 'レースID' in acquisition_sample16.columns:
-            acquisition_sample16['_rid16'] = acquisition_sample16['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
-            candidates = acquisition_sample16[acquisition_sample16['_rid16'].str.fullmatch(r'\d{12}')].drop_duplicates('_rid16').copy()
+                st.download_button('ペース取得状況をCSVで保存',
+                                   display_horse_column(coverage, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_pace_coverage_v158.csv', mime='text/csv', use_container_width=True)
+                unknown = coverage_source[coverage_source['判定状態'].eq('未取得・不明')].copy()
+                if unknown.empty:
+                    st.success('現在の分析条件に該当する走はすべてnetkeiba判定を取得済みです。')
+                else:
+                    columns = ['馬名','日付','レース名','レースID','競馬場','距離_m','レース格','ペース判定元']
+                    unknown = unknown[[c for c in columns if c in unknown.columns]]
+                    st.warning(f'未取得・不明が{len(unknown)}走あります。下のCSVで対象レースを確認できます。')
+                    st.dataframe(display_horse_column(unknown, horses, st.session_state.auto_numbers),
+                                 hide_index=True, use_container_width=True)
+                    st.download_button('ペース未判定の成績をCSVで保存',
+                                       display_horse_column(unknown, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
+                                       file_name='keiba_pace_unknown_v158.csv', mime='text/csv', use_container_width=True)
+        detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
+        if detail.empty:
+            st.info('今回の条件ではペースを分類できる成績がありません。')
         else:
-            candidates = pd.DataFrame()
-        race_ids_16 = candidates['_rid16'].tolist() if all_mode16 and not candidates.empty else (candidates['_rid16'].head(test_size).tolist() if not candidates.empty else [])
-        # 試験モードのみ、1600mを追加確認する（全件モードは全レースそのまま）。
-        if not all_mode16 and '距離_m' in candidates.columns and race_ids_16:
-            d1600 = candidates.loc[pd.to_numeric(candidates['距離_m'], errors='coerce').eq(1600), '_rid16'].tolist()
-            if d1600 and not any(r in d1600 for r in race_ids_16):
-                race_ids_16[-1] = d1600[0]
-        race_key16 = str(st.session_state.get('auto_race_id', ''))
-        stored16 = load_lap_full_progress(race_key16) if all_mode16 else pd.DataFrame()
-        if all_mode16 and not stored16.empty:
-            stored16['レースID'] = stored16['レースID'].astype(str).str.replace(r'\.0$', '', regex=True)
-            stored16 = stored16.drop_duplicates('レースID', keep='last')
-            stored16 = stored16[stored16['レースID'].isin(race_ids_16)].copy()
-        successful16 = set(stored16.loc[stored16.get('検証', pd.Series('', index=stored16.index)).eq('OK'), 'レースID']) if not stored16.empty else set()
-        if all_mode16:
-            pending_ids16 = [rid for rid in race_ids_16 if rid not in successful16]
-            st.write(f'**対象：{len(race_ids_16)}レース ／ 検証OK：{len(successful16)} ／ 未取得・要再試行：{len(pending_ids16)}**')
-            st.caption('「未取得・要再試行」には特殊距離・海外レースなどの取得不可も含みます。再試行を繰り返しても取得できないレースは、下のCSVで原因を確認してください。')
-        else:
-            pending_ids16 = race_ids_16
-            st.caption(f'候補{len(candidates)}レース ／ 今回の試験対象{len(race_ids_16)}レース')
-        start16 = st.button('全レースの未取得分をまとめて取得・再開' if all_mode16 else '展開タイプを20〜30レース試験判定する',
-                            key='classify_lap_v165_button', disabled=not pending_ids16, use_container_width=True)
-        if start16:
-            # 過去の成功分は残す。失敗分は今回の試行で上書きする。
-            rows16 = stored16.to_dict('records') if all_mode16 else []
-            merged16 = {str(r['レースID']):r for r in rows16} if all_mode16 else {}
-            progress16 = st.progress(0)
-            for j, rid16 in enumerate(pending_ids16, 1):
-                try:
-                    payload16 = load_lap_v16(rid16)
-                    cache_hit = bool(payload16 is not None and payload16.get('検証') == 'OK')
-                    if not cache_hit:
-                        payload16 = get_lap_table_test_v1594(rid16)
-                        if payload16.get('検証') == 'OK':
-                            save_lap_v16(rid16, payload16)
-                    extra16 = classify_lap_shape_v16(payload16.get('200mラップ', ''),
-                                                      payload16.get('レース距離'), payload16.get('検証'))
-                    title16, day16 = get_lap_race_title(rid16, acquisition_sample16)
-                    row16 = {'レースID': rid16, 'レース名': title16, '開催日': day16,
-                             'レース距離': payload16.get('レース距離'),
-                             '200mラップ': payload16.get('200mラップ'),
-                             '検証': payload16.get('検証'),
-                             '取得方法': '保存済み' if cache_hit else '新規取得', **extra16}
-                except Exception as ex16:
-                    row16 = {'レースID':rid16, 'レース名':'取得エラー', '開催日':'',
-                             '検証':'取得エラー', '取得方法':'失敗',
-                             '展開タイプ':'判定不可', '判定根拠':str(ex16)[:180]}
-                merged16[str(rid16)] = row16
-                progress16.progress(j / len(pending_ids16))
-                if j % 5 == 0 or j == len(pending_ids16):
-                    current16 = pd.DataFrame(list(merged16.values()))
-                    st.session_state['lap_shapes_v163'] = current16
+            detail_rows = []
+            for (h, p), g in detail.groupby(['馬名', '推定ペース']):
+                finish = g['着順_数値'].dropna()
+                n = len(finish)
+                detail_rows.append({'馬名': h, '推定ペース': p, '対象走数': len(g), '着順有効走数': n,
+                                    'データ量': sample_label(n),
+                                    '勝率(%)': round(100 * (finish == 1).sum() / n, 1) if n else float('nan'),
+                                    '複勝率(%)': round(100 * (finish <= 3).sum() / n, 1) if n else float('nan'),
+                                    '平均4角': round(g['4角順位'].mean(), 2),
+                                    '上がり順位対象走数': int(g['上がり順位'].notna().sum()),
+                                    '平均上がり順位': round(g['上がり順位'].mean(), 2)})
+            comparison = pd.DataFrame(detail_rows)
+            order = {'ハイ寄り': 0, 'ミドル寄り': 1, 'スロー寄り': 2}
+            comparison['_順'] = comparison['推定ペース'].map(order)
+            comparison = comparison.sort_values(['馬名', '_順']).drop(columns='_順')
+            st.dataframe(display_horse_column(comparison, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
+                         column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
+            st.download_button('ペース別成績をCSVで保存', display_horse_column(comparison, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
+                               file_name='keiba_pace_compare_v15.csv', mime='text/csv', use_container_width=True)
+        with st.expander('ペース判定の根拠（レースごとの前後半3F）', expanded=False):
+            st.caption('差＝前半3F−後半3F。負なら前半が速く、正なら後半が速い。各レースの元データと分類を照合できます。')
+            cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '前半3F', '後半3F', '前後半3F差', '暫定ペース', '推定ペース', 'ペース判定元', '着順_数値']
+            pace_audit = pace_compare_base[[c for c in dict.fromkeys(cols) if c in pace_compare_base.columns]].copy()
+            if '日付' in pace_audit.columns:
+                pace_audit['日付'] = pd.to_datetime(pace_audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+            st.write(f'判定可能：{int(pace_audit["推定ペース"].ne("不明").sum())}走 ／ 全{len(pace_audit)}走')
+            st.dataframe(display_horse_column(pace_audit, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
+                         column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
+            st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
+                               file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
+
+        with st.expander('200mラップの試験取得（5レース＋1600m確認・Ver.15.9.4）', expanded=False):
+            st.caption('ラップ表の上段（通過タイム）と下段（200mラップ）を区別して読み込み、合計・累積タイムを検証します。ランキングは変更しません。')
+            sample_ids = []
+            if 'レースID' in pace_compare_base.columns:
+                sample_ids = (pace_compare_base['レースID'].fillna('').astype(str)
+                              .str.replace(r'\.0$', '', regex=True))
+                sample_ids = sample_ids[sample_ids.str.fullmatch(r'\d{12}')].drop_duplicates().head(5).tolist()
+            # 通常5レースに加えて、該当データがあれば1600mのレースを1件検証。
+            extra_1600 = ''
+            if 'レースID' in pace_compare_base.columns and '距離_m' in pace_compare_base.columns:
+                distance_1600 = pd.to_numeric(pace_compare_base['距離_m'], errors='coerce').eq(1600)
+                ids_1600 = (pace_compare_base.loc[distance_1600, 'レースID'].fillna('').astype(str)
+                            .str.replace(r'\.0$', '', regex=True))
+                candidates_1600 = ids_1600[ids_1600.str.fullmatch(r'\d{12}')]
+                extra_1600 = next((r for r in candidates_1600 if r not in sample_ids), '')
+                if extra_1600:
+                    sample_ids.append(extra_1600)
+            st.caption('対象：通常の先頭5レース' + (' ＋1600mの追加1レース' if extra_1600 else '（1600mの追加対象なし）'))
+            if not sample_ids:
+                st.info('試験取得できるレースIDがありません。')
+            elif st.button('200mラップを試験取得', key='lap_table_v1594'):
+                rows = []
+                progress_lap = st.progress(0)
+                for i, rid in enumerate(sample_ids, 1):
+                    try:
+                        result_lap = get_lap_table_test_v1594(rid)
+                        rows.append({'レースID':rid, **result_lap})
+                    except Exception as e:
+                        rows.append({'レースID':rid, '状態':'取得不可', '200mラップ':'',
+                                     '区間数':0, 'レース距離':'', '期待区間数':'', '合計秒':'', '検証':str(e)[:200], '末尾補完':'例外', '表の一部':'',
+                                     'ページURL':f'https://db.sp.netkeiba.com/race/{rid}/'})
+                    progress_lap.progress(i / len(sample_ids))
+                st.session_state['lap_table_v1592_result'] = pd.DataFrame(rows)
+            if 'lap_table_v1592_result' in st.session_state:
+                lap_result = st.session_state['lap_table_v1592_result']
+                st.dataframe(lap_result, hide_index=True, use_container_width=True)
+                st.download_button('200mラップ試験結果をCSVで保存',
+                                   lap_result.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_lap_table_test_v1594.csv', mime='text/csv',
+                                   use_container_width=True)
+
+        with st.expander('200mラップ展開タイプ分析（Ver.16.5・全レース対応）', expanded=False):
+            st.caption('20・30レースの試験、または保存済みの全過去成績を対象にできます。全件は重複レースを1回だけ取得し、5件ごとに途中保存。結果表は現在の分析条件で絞った馬を比較します。')
+            sample = pace_compare_base.copy()
+            # Ver.16.6.1: 表示用の過去成績にも照合用レースIDを設定する。
+            # 以前は取得対象のコピーにだけ _rid16 を追加していたため、
+            # 展開タイプ分布は表示されても全馬比較表が表示されなかった。
+            if 'レースID' in sample.columns:
+                sample['_rid16'] = (sample['レースID'].fillna('').astype(str)
+                                    .str.strip().str.replace(r'\.0$', '', regex=True))
+            full_sample16 = analysis_df.copy()
+            test_size = tap_choice('取得するレース数', [20, 30, '全レース'], 'lap_shape_v163_n')
+            all_mode16 = test_size == '全レース'
+            acquisition_sample16 = full_sample16 if all_mode16 else sample
+            if 'レースID' in acquisition_sample16.columns:
+                acquisition_sample16['_rid16'] = acquisition_sample16['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
+                candidates = acquisition_sample16[acquisition_sample16['_rid16'].str.fullmatch(r'\d{12}')].drop_duplicates('_rid16').copy()
+            else:
+                candidates = pd.DataFrame()
+            race_ids_16 = candidates['_rid16'].tolist() if all_mode16 and not candidates.empty else (candidates['_rid16'].head(test_size).tolist() if not candidates.empty else [])
+            # 試験モードのみ、1600mを追加確認する（全件モードは全レースそのまま）。
+            if not all_mode16 and '距離_m' in candidates.columns and race_ids_16:
+                d1600 = candidates.loc[pd.to_numeric(candidates['距離_m'], errors='coerce').eq(1600), '_rid16'].tolist()
+                if d1600 and not any(r in d1600 for r in race_ids_16):
+                    race_ids_16[-1] = d1600[0]
+            race_key16 = str(st.session_state.get('auto_race_id', ''))
+            stored16 = load_lap_full_progress(race_key16) if all_mode16 else pd.DataFrame()
+            if all_mode16 and not stored16.empty:
+                stored16['レースID'] = stored16['レースID'].astype(str).str.replace(r'\.0$', '', regex=True)
+                stored16 = stored16.drop_duplicates('レースID', keep='last')
+                stored16 = stored16[stored16['レースID'].isin(race_ids_16)].copy()
+            successful16 = set(stored16.loc[stored16.get('検証', pd.Series('', index=stored16.index)).eq('OK'), 'レースID']) if not stored16.empty else set()
+            if all_mode16:
+                pending_ids16 = [rid for rid in race_ids_16 if rid not in successful16]
+                st.write(f'**対象：{len(race_ids_16)}レース ／ 検証OK：{len(successful16)} ／ 未取得・要再試行：{len(pending_ids16)}**')
+                st.caption('「未取得・要再試行」には特殊距離・海外レースなどの取得不可も含みます。再試行を繰り返しても取得できないレースは、下のCSVで原因を確認してください。')
+            else:
+                pending_ids16 = race_ids_16
+                st.caption(f'候補{len(candidates)}レース ／ 今回の試験対象{len(race_ids_16)}レース')
+            start16 = st.button('全レースの未取得分をまとめて取得・再開' if all_mode16 else '展開タイプを20〜30レース試験判定する',
+                                key='classify_lap_v165_button', disabled=not pending_ids16, use_container_width=True)
+            if start16:
+                # 過去の成功分は残す。失敗分は今回の試行で上書きする。
+                rows16 = stored16.to_dict('records') if all_mode16 else []
+                merged16 = {str(r['レースID']):r for r in rows16} if all_mode16 else {}
+                progress16 = st.progress(0)
+                for j, rid16 in enumerate(pending_ids16, 1):
+                    try:
+                        payload16 = load_lap_v16(rid16)
+                        cache_hit = bool(payload16 is not None and payload16.get('検証') == 'OK')
+                        if not cache_hit:
+                            payload16 = get_lap_table_test_v1594(rid16)
+                            if payload16.get('検証') == 'OK':
+                                save_lap_v16(rid16, payload16)
+                        extra16 = classify_lap_shape_v16(payload16.get('200mラップ', ''),
+                                                          payload16.get('レース距離'), payload16.get('検証'))
+                        title16, day16 = get_lap_race_title(rid16, acquisition_sample16)
+                        row16 = {'レースID': rid16, 'レース名': title16, '開催日': day16,
+                                 'レース距離': payload16.get('レース距離'),
+                                 '200mラップ': payload16.get('200mラップ'),
+                                 '検証': payload16.get('検証'),
+                                 '取得方法': '保存済み' if cache_hit else '新規取得', **extra16}
+                    except Exception as ex16:
+                        row16 = {'レースID':rid16, 'レース名':'取得エラー', '開催日':'',
+                                 '検証':'取得エラー', '取得方法':'失敗',
+                                 '展開タイプ':'判定不可', '判定根拠':str(ex16)[:180]}
+                    merged16[str(rid16)] = row16
+                    progress16.progress(j / len(pending_ids16))
+                    if j % 5 == 0 or j == len(pending_ids16):
+                        current16 = pd.DataFrame(list(merged16.values()))
+                        st.session_state['lap_shapes_v163'] = current16
+                        st.session_state['lap_shapes_v163_race'] = race_key16
+                        st.session_state['lap_shapes_v163_n'] = test_size
+                        if all_mode16:
+                            save_lap_full_progress(race_key16, current16)
+                st.success(f'{len(pending_ids16)}レースを処理しました。取得不可は未確認として保持します。')
+            if all_mode16:
+                # 別操作による再実行後も、ディスクに保存済みの全件結果を表示。
+                shapes_current16 = load_lap_full_progress(race_key16)
+                if not shapes_current16.empty:
+                    shapes_current16['レースID'] = shapes_current16['レースID'].astype(str).str.replace(r'\.0$', '', regex=True)
+                    shapes_current16 = shapes_current16[shapes_current16['レースID'].isin(race_ids_16)].copy()
+                    st.session_state['lap_shapes_v163'] = shapes_current16
                     st.session_state['lap_shapes_v163_race'] = race_key16
                     st.session_state['lap_shapes_v163_n'] = test_size
-                    if all_mode16:
-                        save_lap_full_progress(race_key16, current16)
-            st.success(f'{len(pending_ids16)}レースを処理しました。取得不可は未確認として保持します。')
-        if all_mode16:
-            # 別操作による再実行後も、ディスクに保存済みの全件結果を表示。
-            shapes_current16 = load_lap_full_progress(race_key16)
-            if not shapes_current16.empty:
-                shapes_current16['レースID'] = shapes_current16['レースID'].astype(str).str.replace(r'\.0$', '', regex=True)
-                shapes_current16 = shapes_current16[shapes_current16['レースID'].isin(race_ids_16)].copy()
-                st.session_state['lap_shapes_v163'] = shapes_current16
-                st.session_state['lap_shapes_v163_race'] = race_key16
-                st.session_state['lap_shapes_v163_n'] = test_size
-        shapes16 = st.session_state.get('lap_shapes_v163')
-        if isinstance(shapes16, pd.DataFrame) and not shapes16.empty and st.session_state.get('lap_shapes_v163_race') == race_key16:
-            st.write('**レース単位の検証結果**')
-            st.dataframe(shapes16, hide_index=True, use_container_width=True)
-            st.download_button('展開タイプ検証結果をCSVで保存', shapes16.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_shape_v165.csv', mime='text/csv', use_container_width=True)
-            count16 = (shapes16['展開タイプ'].fillna('判定不可').value_counts()
-                       .rename_axis('展開タイプ').reset_index(name='レース数'))
-            count16['割合(%)'] = (100 * count16['レース数'] / len(shapes16)).round(1)
-            st.write('**展開タイプの分布（レース単位）**')
-            st.dataframe(count16, hide_index=True, use_container_width=True)
-            st.download_button('展開タイプ分布をCSVで保存', count16.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_shape_distribution_v163.csv', mime='text/csv', use_container_width=True)
-            if 'レース距離' in shapes16.columns:
-                distance16 = shapes16[['レース距離', '展開タイプ']].copy()
-                distance16['レース距離'] = pd.to_numeric(distance16['レース距離'], errors='coerce')
-                distance16['距離帯'] = pd.cut(distance16['レース距離'],
-                                         bins=[0, 1600, 1800, 2200, 2400, 10000],
-                                         labels=['1600m以下', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'])
-                bydistance16 = (distance16.groupby(['距離帯', '展開タイプ'], observed=True)
-                                 .size().rename('レース数').reset_index())
-                st.write('**距離別の判定分布**')
-                st.dataframe(bydistance16, hide_index=True, use_container_width=True)
-                st.download_button('距離別の判定分布をCSVで保存',
-                                   bydistance16.to_csv(index=False).encode('utf-8-sig'),
-                                   file_name='keiba_lap_shape_distance_v163.csv', mime='text/csv', use_container_width=True)
-            valid16 = shapes16.loc[shapes16['検証'].eq('OK') &
-                                   shapes16['展開タイプ'].ne('判定不可'),
-                                   ['レースID', '展開タイプ']].drop_duplicates('レースID')
-            # 表が出ないときに理由が分かるよう、照合数も明示する。
-            if '_rid16' not in sample.columns:
-                st.warning('展開別・全馬比較：過去成績にレースID列がありません。過去成績を再取得してください。')
-            elif valid16.empty:
-                st.warning('展開別・全馬比較：検証OKのラップがありません。ラップ取得結果を確認してください。')
-            if not valid16.empty and '_rid16' in sample.columns:
-                linked16 = sample.merge(valid16, left_on='_rid16', right_on='レースID',
-                                        how='inner', suffixes=('', '_分類'))
-                if linked16.empty:
-                    st.warning(f'展開別・全馬比較：レースIDの照合が0件です（現在の分析条件：{len(sample)}走／ラップ検証OK：{len(valid16)}レース）。フィルター条件またはレースIDを確認してください。')
-                if not linked16.empty:
-                    st.caption(f'展開別・全馬比較の照合結果：{len(linked16)}走（重複除去前）／{linked16["馬名"].nunique()}頭')
-                    # 同一馬・同一レースの重複行は1走として数える。
-                    linked16 = linked16.drop_duplicates(['馬名', '_rid16']).copy()
-                    for field in ['着順_数値', '上がり順位', '4角順位']:
-                        if field not in linked16:
-                            linked16[field] = float('nan')
-                        linked16[field] = pd.to_numeric(linked16[field], errors='coerce')
-                    linked16['勝利'] = linked16['着順_数値'].eq(1).astype(int)
-                    linked16['馬券内'] = linked16['着順_数値'].between(1, 3).astype(int)
-                    overview16 = (linked16.groupby(['馬名', '展開タイプ'], dropna=False)
-                                  .agg(対象走数=('馬券内', 'size'), 勝利数=('勝利', 'sum'),
-                                       馬券内数=('馬券内', 'sum'), 平均着順=('着順_数値', 'mean'),
-                                       **{'4角取得走数': ('4角順位', 'count'), '平均4角': ('4角順位', 'mean')},
-                                       上がり順位取得走数=('上がり順位', 'count'),
-                                       平均上がり順位=('上がり順位', 'mean')).reset_index())
-                    overview16['勝率(%)'] = (100 * overview16['勝利数'] / overview16['対象走数']).round(1)
-                    overview16['複勝率(%)'] = (100 * overview16['馬券内数'] / overview16['対象走数']).round(1)
-                    for field in ['平均着順', '平均4角', '平均上がり順位']:
-                        overview16[field] = overview16[field].round(2)
-                    overview16['データ量'] = overview16['対象走数'].map(
-                        lambda n: '参考（1〜2走）' if n < 3 else ('少数（3〜4走）' if n < 5 else '5走以上'))
-                    # Ver.16.6：中心は「馬名 + 3展開」のコンパクトな横並び表。
-                    type_order166 = ['瞬発戦寄り', 'ロングスパート戦寄り', '消耗戦寄り', '混合・判定保留']
-                    type_labels166 = {'瞬発戦寄り': '瞬発戦', 'ロングスパート戦寄り': 'ロンスパ',
-                                      '消耗戦寄り': '消耗戦', '混合・判定保留': '保留'}
-                    # 分母は現在の分析条件に入る「馬×レース」の重複を除いた走数。
-                    candidates166 = sample.loc[
-                        sample['_rid16'].astype(str).str.fullmatch(r'\d{12}', na=False)
-                    ].drop_duplicates(['馬名', '_rid16']).copy()
-                    denominator166 = candidates166.groupby('馬名').size().to_dict()
-                    by_horse_type166 = {(str(r['馬名']), str(r['展開タイプ'])): r
-                                        for _, r in overview16.iterrows()}
-                    ordered_horses166 = list(dict.fromkeys(horses.values())) if horses else []
-                    present_horses166 = set(sample['馬名'].dropna().astype(str))
-                    ordered_horses166 = [h for h in ordered_horses166 if h in present_horses166]
-                    ordered_horses166.extend(sorted(present_horses166.difference(ordered_horses166)))
-                    wide_rows166 = []
-                    for horse166 in ordered_horses166:
-                        row166 = {'馬名': horse166}
-                        covered166 = 0
-                        for typ166 in type_order166:
-                            label166 = type_labels166[typ166]
-                            hit166 = by_horse_type166.get((horse166, typ166))
-                            if hit166 is None:
-                                row166[label166] = '—'
-                                row166[label166 + '_走数'] = 0
-                            else:
-                                n166 = int(hit166['対象走数'])
-                                rate166 = float(hit166['複勝率(%)'])
-                                row166[label166] = f'{rate166:g}%（{n166}走）'
-                                row166[label166 + '_走数'] = n166
-                                covered166 += n166
-                        total166 = int(denominator166.get(horse166, 0))
-                        row166['分類済み'] = covered166
-                        row166['対象候補'] = total166
-                        row166['未確認'] = max(0, total166 - covered166)
-                        row166['確認率'] = f'{100*covered166/total166:.0f}%' if total166 else '—'
-                        wide_rows166.append(row166)
-                    wide166 = pd.DataFrame(wide_rows166)
-                    if not wide166.empty:
-                        wide166 = display_horse_column(wide166, horses, st.session_state.auto_numbers)
-                        st.subheader('展開タイプ別・全馬比較（Ver.16.6）')
-                        st.caption('複勝率（該当走数）で表示。— はデータなし、0%は該当レースで3着以内なし。1〜2走は参考値です。')
-                        main_cols166 = ['馬名', '瞬発戦', 'ロンスパ', '消耗戦']
-                        st.dataframe(wide166[main_cols166], hide_index=True, use_container_width=True,
-                                     height=min(690, 45 + 36 * len(wide166)),
-                                     column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
-                                                    '瞬発戦': st.column_config.TextColumn('瞬発戦 複勝率（走数）', width='medium'),
-                                                    'ロンスパ': st.column_config.TextColumn('ロンスパ 複勝率（走数）', width='medium'),
-                                                    '消耗戦': st.column_config.TextColumn('消耗戦 複勝率（走数）', width='medium')})
-                        all_cols166 = ['馬名', '瞬発戦', 'ロンスパ', '消耗戦', '保留', '分類済み',
-                                       '対象候補', '未確認', '確認率']
-                        st.download_button('展開別・全馬比較をCSVで保存',
-                                           wide166[all_cols166].to_csv(index=False).encode('utf-8-sig'),
-                                           file_name='keiba_lap_horse_wide_v166.csv',
-                                           mime='text/csv', use_container_width=True)
-                        # Ver.16.7: 分類保留のレースでも数値を活用する比較表。
-                        # いずれも各馬が記録した個別ラップではなく、出走したレース全体のラップ。
-                        metric_cols167 = ['終盤加速幅_秒', '残1000m相対加速_秒', '残1000mラップ幅_秒']
-                        shape_metrics167 = shapes16.copy()
-                        shape_metrics167['レースID'] = (shape_metrics167['レースID'].fillna('').astype(str)
-                                                           .str.strip().str.replace(r'\.0$', '', regex=True))
-                        shape_metrics167 = shape_metrics167.loc[
-                            shape_metrics167['検証'].eq('OK')].drop_duplicates('レースID').copy()
-                        for metric167 in metric_cols167:
-                            if metric167 not in shape_metrics167.columns:
-                                shape_metrics167[metric167] = float('nan')
-                            shape_metrics167[metric167] = pd.to_numeric(shape_metrics167[metric167], errors='coerce')
-                        # 分類用ラップを取得できたものだけ対象にする（全件解析結果から再計算不要）。
-                        numeric_source167 = sample.merge(
-                            shape_metrics167[['レースID'] + metric_cols167],
-                            left_on='_rid16', right_on='レースID', how='inner')
-                        numeric_source167 = numeric_source167.drop_duplicates(['馬名', '_rid16']).copy()
-                        numeric_source167['着順_数値'] = pd.to_numeric(
-                            numeric_source167['着順_数値'], errors='coerce')
-                        numeric_source167['馬券内167'] = numeric_source167['着順_数値'].between(1, 3)
-                        numeric_rows167 = []
-                        for horse167 in ordered_horses166:
-                            horse_df167 = numeric_source167.loc[numeric_source167['馬名'].eq(horse167)]
-                            good_df167 = horse_df167.loc[horse_df167['馬券内167']]
-                            row167 = {'馬名': horse167,
-                                      'ラップ確認走数': len(horse_df167),
-                                      '好走走数': len(good_df167)}
-                            for source_col167, short_col167 in [
-                                ('終盤加速幅_秒', '好走時_終盤加速秒'),
-                                ('残1000m相対加速_秒', '好走時_残1000m加速秒'),
-                                ('残1000mラップ幅_秒', '好走時_残1000mラップ幅秒')]:
-                                series167 = good_df167[source_col167].dropna()
-                                row167[short_col167] = round(float(series167.mean()), 2) if not series167.empty else float('nan')
-                                row167[short_col167 + '_対象走数'] = int(len(series167))
-                            numeric_rows167.append(row167)
-                        numeric_wide167 = pd.DataFrame(numeric_rows167)
-                        if not numeric_wide167.empty:
-                            numeric_wide167 = display_horse_column(
-                                numeric_wide167, horses, st.session_state.auto_numbers)
-                            st.subheader('加速・持続ラップの比較（Ver.16.7）')
-                            st.caption('**3着以内に好走したレースの平均値**。馬自身の個別ラップ・能力値ではなく、経験したレース全体のラップ構成です。分類保留のレースも含めます。')
-                            st.caption('終盤加速：直前600mよりラスト600mが何秒/200m速いか。残1000m加速：直前基準より残1000m平均が何秒速いか。ラップ幅：残1000mの最速と最遅の差（小さいほど一定）。')
-                            display_cols167 = ['馬名', '好走時_終盤加速秒',
-                                               '好走時_残1000m加速秒', '好走時_残1000mラップ幅秒',
-                                               '好走走数', 'ラップ確認走数']
-                            display167 = numeric_wide167[display_cols167].copy()
-                            st.dataframe(display167, hide_index=True, use_container_width=True,
-                                         height=min(690, 45 + 36 * len(display167)),
-                                         column_config={
-                                             '馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
-                                             '好走時_終盤加速秒': st.column_config.NumberColumn('終盤加速', format='%.2f'),
-                                             '好走時_残1000m加速秒': st.column_config.NumberColumn('残1000m加速', format='%.2f'),
-                                             '好走時_残1000mラップ幅秒': st.column_config.NumberColumn('残1000mラップ幅', format='%.2f'),
-                                             '好走走数': st.column_config.NumberColumn('好走数', format='%d走'),
-                                             'ラップ確認走数': st.column_config.NumberColumn('確認数', format='%d走')
-                                         })
-                            st.download_button('加速・持続ラップ比較をCSVで保存',
-                                               numeric_wide167.to_csv(index=False).encode('utf-8-sig'),
-                                               file_name='keiba_lap_numeric_v167.csv',
-                                               mime='text/csv', use_container_width=True)
-                            with st.expander('数値の根拠になったレースを確認（Ver.16.7.1）', expanded=False):
-                                reason167 = numeric_source167.loc[numeric_source167['馬券内167']].copy()
-                                if not reason167.empty:
-                                    # sampleにもレースIDが存在する場合、merge後はレースID_x / レースID_y
-                                    # になり得る。常に正規化済みの_rid16を照合キーに使う。
-                                    info167 = shapes16[['レースID'] + [
-                                        c for c in ['レース名', '開催日', '展開タイプ'] if c in shapes16.columns
-                                    ]].drop_duplicates('レースID').copy()
-                                    info167['_rid16'] = (info167['レースID'].fillna('').astype(str)
-                                        .str.strip().str.replace(r'\.0$', '', regex=True))
-                                    info167 = info167.drop(columns=['レースID']).drop_duplicates('_rid16')
-                                    # 同名の既存列は混在させず、ラップ集計側を表示する。
-                                    reason167 = reason167.drop(columns=[
-                                        c for c in ['レース名', '開催日', '展開タイプ'] if c in reason167.columns
-                                    ])
-                                    reason167 = reason167.merge(info167, on='_rid16', how='left')
-                                    reason167 = display_horse_column(reason167, horses, st.session_state.auto_numbers)
-                                    for col167 in ['レース名', '開催日', '展開タイプ']:
-                                        if col167 not in reason167.columns:
-                                            reason167[col167] = ''
-                                    detail_cols167 = ['馬名', 'レース名', '開催日', '着順_数値', '展開タイプ'] + metric_cols167
-                                    st.dataframe(reason167[detail_cols167], hide_index=True,
-                                                 use_container_width=True)
+            shapes16 = st.session_state.get('lap_shapes_v163')
+            if isinstance(shapes16, pd.DataFrame) and not shapes16.empty and st.session_state.get('lap_shapes_v163_race') == race_key16:
+                st.write('**レース単位の検証結果**')
+                st.dataframe(shapes16, hide_index=True, use_container_width=True)
+                st.download_button('展開タイプ検証結果をCSVで保存', shapes16.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_lap_shape_v165.csv', mime='text/csv', use_container_width=True)
+                count16 = (shapes16['展開タイプ'].fillna('判定不可').value_counts()
+                           .rename_axis('展開タイプ').reset_index(name='レース数'))
+                count16['割合(%)'] = (100 * count16['レース数'] / len(shapes16)).round(1)
+                st.write('**展開タイプの分布（レース単位）**')
+                st.dataframe(count16, hide_index=True, use_container_width=True)
+                st.download_button('展開タイプ分布をCSVで保存', count16.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_lap_shape_distribution_v163.csv', mime='text/csv', use_container_width=True)
+                if 'レース距離' in shapes16.columns:
+                    distance16 = shapes16[['レース距離', '展開タイプ']].copy()
+                    distance16['レース距離'] = pd.to_numeric(distance16['レース距離'], errors='coerce')
+                    distance16['距離帯'] = pd.cut(distance16['レース距離'],
+                                             bins=[0, 1600, 1800, 2200, 2400, 10000],
+                                             labels=['1600m以下', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'])
+                    bydistance16 = (distance16.groupby(['距離帯', '展開タイプ'], observed=True)
+                                     .size().rename('レース数').reset_index())
+                    st.write('**距離別の判定分布**')
+                    st.dataframe(bydistance16, hide_index=True, use_container_width=True)
+                    st.download_button('距離別の判定分布をCSVで保存',
+                                       bydistance16.to_csv(index=False).encode('utf-8-sig'),
+                                       file_name='keiba_lap_shape_distance_v163.csv', mime='text/csv', use_container_width=True)
+                valid16 = shapes16.loc[shapes16['検証'].eq('OK') &
+                                       shapes16['展開タイプ'].ne('判定不可'),
+                                       ['レースID', '展開タイプ']].drop_duplicates('レースID')
+                # 表が出ないときに理由が分かるよう、照合数も明示する。
+                if '_rid16' not in sample.columns:
+                    st.warning('展開別・全馬比較：過去成績にレースID列がありません。過去成績を再取得してください。')
+                elif valid16.empty:
+                    st.warning('展開別・全馬比較：検証OKのラップがありません。ラップ取得結果を確認してください。')
+                if not valid16.empty and '_rid16' in sample.columns:
+                    linked16 = sample.merge(valid16, left_on='_rid16', right_on='レースID',
+                                            how='inner', suffixes=('', '_分類'))
+                    if linked16.empty:
+                        st.warning(f'展開別・全馬比較：レースIDの照合が0件です（現在の分析条件：{len(sample)}走／ラップ検証OK：{len(valid16)}レース）。フィルター条件またはレースIDを確認してください。')
+                    if not linked16.empty:
+                        st.caption(f'展開別・全馬比較の照合結果：{len(linked16)}走（重複除去前）／{linked16["馬名"].nunique()}頭')
+                        # 同一馬・同一レースの重複行は1走として数える。
+                        linked16 = linked16.drop_duplicates(['馬名', '_rid16']).copy()
+                        for field in ['着順_数値', '上がり順位', '4角順位']:
+                            if field not in linked16:
+                                linked16[field] = float('nan')
+                            linked16[field] = pd.to_numeric(linked16[field], errors='coerce')
+                        linked16['勝利'] = linked16['着順_数値'].eq(1).astype(int)
+                        linked16['馬券内'] = linked16['着順_数値'].between(1, 3).astype(int)
+                        overview16 = (linked16.groupby(['馬名', '展開タイプ'], dropna=False)
+                                      .agg(対象走数=('馬券内', 'size'), 勝利数=('勝利', 'sum'),
+                                           馬券内数=('馬券内', 'sum'), 平均着順=('着順_数値', 'mean'),
+                                           **{'4角取得走数': ('4角順位', 'count'), '平均4角': ('4角順位', 'mean')},
+                                           上がり順位取得走数=('上がり順位', 'count'),
+                                           平均上がり順位=('上がり順位', 'mean')).reset_index())
+                        overview16['勝率(%)'] = (100 * overview16['勝利数'] / overview16['対象走数']).round(1)
+                        overview16['複勝率(%)'] = (100 * overview16['馬券内数'] / overview16['対象走数']).round(1)
+                        for field in ['平均着順', '平均4角', '平均上がり順位']:
+                            overview16[field] = overview16[field].round(2)
+                        overview16['データ量'] = overview16['対象走数'].map(
+                            lambda n: '参考（1〜2走）' if n < 3 else ('少数（3〜4走）' if n < 5 else '5走以上'))
+                        # Ver.16.6：中心は「馬名 + 3展開」のコンパクトな横並び表。
+                        type_order166 = ['瞬発戦寄り', 'ロングスパート戦寄り', '消耗戦寄り', '混合・判定保留']
+                        type_labels166 = {'瞬発戦寄り': '瞬発戦', 'ロングスパート戦寄り': 'ロンスパ',
+                                          '消耗戦寄り': '消耗戦', '混合・判定保留': '保留'}
+                        # 分母は現在の分析条件に入る「馬×レース」の重複を除いた走数。
+                        candidates166 = sample.loc[
+                            sample['_rid16'].astype(str).str.fullmatch(r'\d{12}', na=False)
+                        ].drop_duplicates(['馬名', '_rid16']).copy()
+                        denominator166 = candidates166.groupby('馬名').size().to_dict()
+                        by_horse_type166 = {(str(r['馬名']), str(r['展開タイプ'])): r
+                                            for _, r in overview16.iterrows()}
+                        ordered_horses166 = list(dict.fromkeys(horses.values())) if horses else []
+                        present_horses166 = set(sample['馬名'].dropna().astype(str))
+                        ordered_horses166 = [h for h in ordered_horses166 if h in present_horses166]
+                        ordered_horses166.extend(sorted(present_horses166.difference(ordered_horses166)))
+                        wide_rows166 = []
+                        for horse166 in ordered_horses166:
+                            row166 = {'馬名': horse166}
+                            covered166 = 0
+                            for typ166 in type_order166:
+                                label166 = type_labels166[typ166]
+                                hit166 = by_horse_type166.get((horse166, typ166))
+                                if hit166 is None:
+                                    row166[label166] = '—'
+                                    row166[label166 + '_走数'] = 0
                                 else:
-                                    st.info('この条件で3着以内のラップ確認レースはありません。')
-                        # Ver.16.8: 3着以内と4着以下のレース全体ラップを比較。
-                        # 取消・中止・失格など着順が数値でないレースは比較から除外する。
-                        st.subheader('好走時 vs 凡走時：ラップ比較（Ver.16.8）')
-                        st.caption('3着以内＝好走、4着以下＝凡走。表示値は**各馬が出走したレース全体**のラップ平均であり、馬自身の個別ラップではありません。差＝好走時 − 凡走時。')
-                        valid168 = numeric_source167.loc[
-                            numeric_source167['着順_数値'].ge(1)].copy()
-                        valid168['結果区分168'] = valid168['着順_数値'].apply(
-                            lambda x: '好走' if x <= 3 else '凡走')
-                        pairs168 = [
-                            ('終盤加速幅_秒', '終盤加速'),
-                            ('残1000m相対加速_秒', '残1000m加速'),
-                            ('残1000mラップ幅_秒', '残1000mラップ幅'),
-                        ]
-                        rows168 = []
-                        for horse168 in ordered_horses166:
-                            subset168 = valid168.loc[valid168['馬名'].eq(horse168)]
-                            row168 = {'馬名': horse168,
-                                      '好走走数': int(subset168['結果区分168'].eq('好走').sum()),
-                                      '凡走走数': int(subset168['結果区分168'].eq('凡走').sum())}
-                            for original168, label168 in pairs168:
-                                good168 = pd.to_numeric(subset168.loc[
-                                    subset168['結果区分168'].eq('好走'), original168],
-                                    errors='coerce').dropna()
-                                bad168 = pd.to_numeric(subset168.loc[
-                                    subset168['結果区分168'].eq('凡走'), original168],
-                                    errors='coerce').dropna()
-                                row168[label168 + '_好走走数'] = int(len(good168))
-                                row168[label168 + '_凡走走数'] = int(len(bad168))
-                                row168[label168 + '_好走'] = round(float(good168.mean()), 2) if len(good168) else float('nan')
-                                row168[label168 + '_凡走'] = round(float(bad168.mean()), 2) if len(bad168) else float('nan')
-                                row168[label168 + '_差'] = (round(float(good168.mean() - bad168.mean()), 2)
-                                                            if len(good168) and len(bad168) else float('nan'))
-                            rows168.append(row168)
-                        comparison168 = pd.DataFrame(rows168)
-                        if not comparison168.empty:
-                            comparison168 = display_horse_column(
-                                comparison168, horses, st.session_state.auto_numbers)
-                            def show_sec168(x):
-                                return f'{float(x):+.2f}' if pd.notna(x) else '—'
-                            main168 = comparison168[['馬名', '終盤加速_好走', '終盤加速_凡走',
-                                                      '終盤加速_差', '好走走数', '凡走走数']].copy()
-                            for c168 in ['終盤加速_好走', '終盤加速_凡走', '終盤加速_差']:
-                                main168[c168] = main168[c168].map(show_sec168)
-                            main168 = main168.rename(columns={
-                                '終盤加速_好走': '好走時', '終盤加速_凡走': '凡走時',
-                                '終盤加速_差': '差（秒）', '好走走数': '好走', '凡走走数': '凡走'})
-                            st.dataframe(main168, hide_index=True, use_container_width=True,
-                                         height=min(690, 45 + 36 * len(main168)))
-                            st.caption('上の表は**終盤加速**（秒/200m）の比較。— はデータなし。差がプラスでも「その展開が得意」と断定できず、1〜2走の数字は参考値です。')
-                            with st.expander('残1000m加速・持続性・指標別の対象走数を見る', expanded=False):
-                                extra168 = ['馬名', '好走走数', '凡走走数']
-                                for _, name168 in pairs168:
-                                    extra168.extend([name168 + '_好走', name168 + '_凡走',
-                                                     name168 + '_差', name168 + '_好走走数',
-                                                     name168 + '_凡走走数'])
-                                st.dataframe(comparison168[extra168], hide_index=True,
-                                             use_container_width=True)
-                                st.caption('残1000mラップ幅は小さいほど一定。ただし差の正負だけで良し悪しは判断できません。')
-                            st.subheader('どんな展開で好走しやすい？（Ver.17.0・自動解説）')
-                            st.caption('好走・凡走の**レース全体のラップ差**から特徴を自動要約。馬自身のラップや能力値ではありません。分類基準は試験用で、統計的な有意差を示すものではありません。')
-                            interpretations169 = []
-                            for _, row169 in comparison168.iterrows():
-                                label169, confidence169, reason169 = interpret_running_pattern(row169)
-                                interpretations169.append({'馬名': row169['馬名'],
-                                    '好走する展開の特徴': label169,
-                                    '判定の確かさ': confidence169,
-                                    '好走走数': int(row169['好走走数']),
-                                    '凡走走数': int(row169['凡走走数']),
-                                    '判定理由': reason169})
-                            interpretation_df169 = pd.DataFrame(interpretations169)
-                            st.dataframe(interpretation_df169[['馬名', '好走する展開の特徴', '判定の確かさ', '好走走数', '凡走走数']],
-                                         hide_index=True, use_container_width=True,
-                                         height=min(690, 45 + 36 * len(interpretation_df169)))
-                            with st.expander('なぜこの判定になった？（馬ごとの説明）', expanded=False):
-                                selected169 = tap_choice('確認する馬', interpretation_df169['馬名'].tolist(), 'interpret_horse169')
-                                rec169 = interpretation_df169[interpretation_df169['馬名'].eq(selected169)].iloc[0]
-                                st.markdown(f"**{rec169['好走する展開の特徴']}**　／　{rec169['判定の確かさ']}")
-                                st.write(rec169['判定理由'])
-                                st.caption('好走時と凡走時の比較で、各指標の差が0.25秒以上（ラップ幅は0.30秒以上）の場合に特徴として表示。閾値は暫定です。')
-                            st.download_button('好走展開の自動解説をCSVで保存',
-                                               interpretation_df169.to_csv(index=False).encode('utf-8-sig'),
-                                               file_name='keiba_running_pattern_v169.csv',
+                                    n166 = int(hit166['対象走数'])
+                                    rate166 = float(hit166['複勝率(%)'])
+                                    row166[label166] = f'{rate166:g}%（{n166}走）'
+                                    row166[label166 + '_走数'] = n166
+                                    covered166 += n166
+                            total166 = int(denominator166.get(horse166, 0))
+                            row166['分類済み'] = covered166
+                            row166['対象候補'] = total166
+                            row166['未確認'] = max(0, total166 - covered166)
+                            row166['確認率'] = f'{100*covered166/total166:.0f}%' if total166 else '—'
+                            wide_rows166.append(row166)
+                        wide166 = pd.DataFrame(wide_rows166)
+                        if not wide166.empty:
+                            wide166 = display_horse_column(wide166, horses, st.session_state.auto_numbers)
+                            st.subheader('展開タイプ別・全馬比較（Ver.16.6）')
+                            st.caption('複勝率（該当走数）で表示。— はデータなし、0%は該当レースで3着以内なし。1〜2走は参考値です。')
+                            main_cols166 = ['馬名', '瞬発戦', 'ロンスパ', '消耗戦']
+                            st.dataframe(wide166[main_cols166], hide_index=True, use_container_width=True,
+                                         height=min(690, 45 + 36 * len(wide166)),
+                                         column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
+                                                        '瞬発戦': st.column_config.TextColumn('瞬発戦 複勝率（走数）', width='medium'),
+                                                        'ロンスパ': st.column_config.TextColumn('ロンスパ 複勝率（走数）', width='medium'),
+                                                        '消耗戦': st.column_config.TextColumn('消耗戦 複勝率（走数）', width='medium')})
+                            all_cols166 = ['馬名', '瞬発戦', 'ロンスパ', '消耗戦', '保留', '分類済み',
+                                           '対象候補', '未確認', '確認率']
+                            st.download_button('展開別・全馬比較をCSVで保存',
+                                               wide166[all_cols166].to_csv(index=False).encode('utf-8-sig'),
+                                               file_name='keiba_lap_horse_wide_v166.csv',
                                                mime='text/csv', use_container_width=True)
-                            # Ver.17: 馬自身の位置取り・上がり順位と、レース全体のラップを統合表示。
-                            st.subheader('脚質 × 末脚 × 展開：総合診断（Ver.17）')
-                            st.caption('位置・上がりは**馬自身の成績**、展開は**レース全体のラップ**。診断は暫定的な説明で、能力点や未来の勝率ではありません。')
-                            explanation_map17 = dict(zip(
-                                interpretation_df169['馬名'].astype(str),
-                                interpretation_df169['好走する展開の特徴'].astype(str)))
-                            diagnoses17 = []
-                            for h17 in ordered_horses166:
-                                hdata17 = numeric_source167.loc[numeric_source167['馬名'].eq(h17)].copy()
-                                diag17 = diagnose_horse_v17(hdata17, explanation_map17.get(h17, '不明'))
-                                diag17['馬名'] = h17
-                                diagnoses17.append(diag17)
-                            diagnosis_df17 = pd.DataFrame(diagnoses17)
-                            if not diagnosis_df17.empty:
-                                diagnosis_df17 = display_horse_column(diagnosis_df17, horses, st.session_state.auto_numbers)
-                                st.dataframe(diagnosis_df17[['馬名', '走りの総合診断', '展開', '信頼度', '好走走数']],
-                                             hide_index=True, use_container_width=True,
-                                             height=min(690, 45 + 36 * len(diagnosis_df17)),
-                                             column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
-                                                            '走りの総合診断': st.column_config.TextColumn('走りの特徴', width='medium'),
-                                                            '展開': st.column_config.TextColumn('好走展開', width='medium')})
-                                with st.expander('総合診断の根拠（馬ごとに確認）', expanded=False):
-                                    chosen17 = tap_choice('診断を見る馬', diagnosis_df17['馬名'].tolist(), 'diagnosis_horse_v17')
-                                    rec17 = diagnosis_df17.loc[diagnosis_df17['馬名'].eq(chosen17)].iloc[0]
-                                    st.markdown(f"**{rec17['走りの総合診断']}**　／　{rec17['信頼度']}")
-                                    st.write(rec17['根拠'])
-                                    st.caption(f"対象{rec17['対象走数']}走・好走{rec17['好走走数']}走・4角取得{rec17['位置取得']}走・上がり順位取得{rec17['上がり取得']}走")
-                                st.download_button('総合診断をCSVで保存',
-                                                   diagnosis_df17.to_csv(index=False).encode('utf-8-sig'),
-                                                   file_name='keiba_horse_total_diagnosis_v17.csv',
+                            # Ver.16.7: 分類保留のレースでも数値を活用する比較表。
+                            # いずれも各馬が記録した個別ラップではなく、出走したレース全体のラップ。
+                            metric_cols167 = ['終盤加速幅_秒', '残1000m相対加速_秒', '残1000mラップ幅_秒']
+                            shape_metrics167 = shapes16.copy()
+                            shape_metrics167['レースID'] = (shape_metrics167['レースID'].fillna('').astype(str)
+                                                               .str.strip().str.replace(r'\.0$', '', regex=True))
+                            shape_metrics167 = shape_metrics167.loc[
+                                shape_metrics167['検証'].eq('OK')].drop_duplicates('レースID').copy()
+                            for metric167 in metric_cols167:
+                                if metric167 not in shape_metrics167.columns:
+                                    shape_metrics167[metric167] = float('nan')
+                                shape_metrics167[metric167] = pd.to_numeric(shape_metrics167[metric167], errors='coerce')
+                            # 分類用ラップを取得できたものだけ対象にする（全件解析結果から再計算不要）。
+                            numeric_source167 = sample.merge(
+                                shape_metrics167[['レースID'] + metric_cols167],
+                                left_on='_rid16', right_on='レースID', how='inner')
+                            numeric_source167 = numeric_source167.drop_duplicates(['馬名', '_rid16']).copy()
+                            numeric_source167['着順_数値'] = pd.to_numeric(
+                                numeric_source167['着順_数値'], errors='coerce')
+                            numeric_source167['馬券内167'] = numeric_source167['着順_数値'].between(1, 3)
+                            numeric_rows167 = []
+                            for horse167 in ordered_horses166:
+                                horse_df167 = numeric_source167.loc[numeric_source167['馬名'].eq(horse167)]
+                                good_df167 = horse_df167.loc[horse_df167['馬券内167']]
+                                row167 = {'馬名': horse167,
+                                          'ラップ確認走数': len(horse_df167),
+                                          '好走走数': len(good_df167)}
+                                for source_col167, short_col167 in [
+                                    ('終盤加速幅_秒', '好走時_終盤加速秒'),
+                                    ('残1000m相対加速_秒', '好走時_残1000m加速秒'),
+                                    ('残1000mラップ幅_秒', '好走時_残1000mラップ幅秒')]:
+                                    series167 = good_df167[source_col167].dropna()
+                                    row167[short_col167] = round(float(series167.mean()), 2) if not series167.empty else float('nan')
+                                    row167[short_col167 + '_対象走数'] = int(len(series167))
+                                numeric_rows167.append(row167)
+                            numeric_wide167 = pd.DataFrame(numeric_rows167)
+                            if not numeric_wide167.empty:
+                                numeric_wide167 = display_horse_column(
+                                    numeric_wide167, horses, st.session_state.auto_numbers)
+                                st.subheader('加速・持続ラップの比較（Ver.16.7）')
+                                st.caption('**3着以内に好走したレースの平均値**。馬自身の個別ラップ・能力値ではなく、経験したレース全体のラップ構成です。分類保留のレースも含めます。')
+                                st.caption('終盤加速：直前600mよりラスト600mが何秒/200m速いか。残1000m加速：直前基準より残1000m平均が何秒速いか。ラップ幅：残1000mの最速と最遅の差（小さいほど一定）。')
+                                display_cols167 = ['馬名', '好走時_終盤加速秒',
+                                                   '好走時_残1000m加速秒', '好走時_残1000mラップ幅秒',
+                                                   '好走走数', 'ラップ確認走数']
+                                display167 = numeric_wide167[display_cols167].copy()
+                                st.dataframe(display167, hide_index=True, use_container_width=True,
+                                             height=min(690, 45 + 36 * len(display167)),
+                                             column_config={
+                                                 '馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
+                                                 '好走時_終盤加速秒': st.column_config.NumberColumn('終盤加速', format='%.2f'),
+                                                 '好走時_残1000m加速秒': st.column_config.NumberColumn('残1000m加速', format='%.2f'),
+                                                 '好走時_残1000mラップ幅秒': st.column_config.NumberColumn('残1000mラップ幅', format='%.2f'),
+                                                 '好走走数': st.column_config.NumberColumn('好走数', format='%d走'),
+                                                 'ラップ確認走数': st.column_config.NumberColumn('確認数', format='%d走')
+                                             })
+                                st.download_button('加速・持続ラップ比較をCSVで保存',
+                                                   numeric_wide167.to_csv(index=False).encode('utf-8-sig'),
+                                                   file_name='keiba_lap_numeric_v167.csv',
                                                    mime='text/csv', use_container_width=True)
-                            st.download_button('好走・凡走ラップ比較をCSVで保存',
-                                               comparison168.to_csv(index=False).encode('utf-8-sig'),
-                                               file_name='keiba_good_bad_lap_v168.csv',
-                                               mime='text/csv', use_container_width=True)
-                        else:
-                            st.info('比較対象の着順・ラップがありません。')
-                        with st.expander('確認率・保留レース・データ量を見る', expanded=False):
-                            st.dataframe(wide166[['馬名','保留','分類済み','対象候補','未確認','確認率']],
-                                         hide_index=True, use_container_width=True)
-                            st.caption('「分類済み」はラップ検証済み（保留を含む）。「未確認」は対象候補のうち展開分類を確認できなかった走数。確認率は能力の信頼度ではありません。')
-                        with st.expander('集計に使ったレース名・着順を見る', expanded=False):
-                            race_detail166 = linked16.copy()
-                            race_detail166['レースID_照合'] = race_detail166['_rid16'].astype(str)
-                            shape_info166_cols = ['レースID'] + [c for c in ['開催日','レース名','レース距離'] if c in shapes16.columns]
-                            shape_info166 = shapes16[shape_info166_cols].drop_duplicates('レースID').copy()
-                            shape_info166['レースID'] = shape_info166['レースID'].astype(str)
-                            race_detail166 = race_detail166.merge(shape_info166, left_on='レースID_照合',
-                                                                  right_on='レースID', how='left', suffixes=('', '_ラップ'))
-                            # レース名は過去成績の原文を優先し、欠損時だけラップ取得結果を使用。
-                            if 'レース名_ラップ' in race_detail166.columns:
-                                name166 = race_detail166['レース名'].fillna('').astype(str).str.strip() if 'レース名' in race_detail166 else pd.Series('',index=race_detail166.index)
-                                race_detail166['レース名'] = name166.where(name166.ne(''), race_detail166['レース名_ラップ'])
-                            if 'レース名' not in race_detail166.columns:
-                                race_detail166['レース名'] = '不明'
-                            if '日付' not in race_detail166.columns:
-                                race_detail166['日付'] = ''
-                            race_detail166['馬名_内部'] = race_detail166['馬名'].astype(str)
-                            race_detail166 = display_horse_column(race_detail166, horses, st.session_state.auto_numbers)
-                            chosen166 = st.radio('表示する展開タイプ', ['全タイプ', '瞬発戦寄り', 'ロングスパート戦寄り', '消耗戦寄り', '混合・判定保留'],
-                                                    horizontal=True, key='shape_detail_type_v166')
-                            if chosen166 != '全タイプ':
-                                race_detail166 = race_detail166[race_detail166['展開タイプ'].eq(chosen166)]
-                            detailed_cols166 = ['馬名', '日付', 'レース名', '展開タイプ', '着順_数値',
-                                                '4角順位', '上がり順位', 'レースID_照合']
-                            detail_out166 = race_detail166[detailed_cols166].rename(columns={'レースID_照合':'レースID'})
-                            st.dataframe(detail_out166, hide_index=True, use_container_width=True,
-                                         height=min(600, 48 + 34*len(detail_out166)))
-                            st.download_button('集計対象レースの詳細をCSVで保存',
-                                               detail_out166.to_csv(index=False).encode('utf-8-sig'),
-                                               file_name='keiba_lap_horse_races_v166.csv', mime='text/csv',
-                                               use_container_width=True)
-                        with st.expander('指標別の詳しい成績（勝率・上がり・4角）', expanded=False):
-                            detail_metrics166 = display_horse_column(overview16, horses, st.session_state.auto_numbers)
-                            st.dataframe(detail_metrics166, hide_index=True, use_container_width=True)
-                            st.download_button('展開タイプ別の指標をCSVで保存',
-                                               detail_metrics166.to_csv(index=False).encode('utf-8-sig'),
-                                               file_name='keiba_lap_horse_metrics_v166.csv', mime='text/csv',
-                                               use_container_width=True)
-            st.warning('展開タイプは独自の暫定分類です。200mで割り切れない距離や地方・海外レースは取得不可の場合があります。少数走数では適性を断定できません。')
+                                with st.expander('数値の根拠になったレースを確認（Ver.16.7.1）', expanded=False):
+                                    reason167 = numeric_source167.loc[numeric_source167['馬券内167']].copy()
+                                    if not reason167.empty:
+                                        # sampleにもレースIDが存在する場合、merge後はレースID_x / レースID_y
+                                        # になり得る。常に正規化済みの_rid16を照合キーに使う。
+                                        info167 = shapes16[['レースID'] + [
+                                            c for c in ['レース名', '開催日', '展開タイプ'] if c in shapes16.columns
+                                        ]].drop_duplicates('レースID').copy()
+                                        info167['_rid16'] = (info167['レースID'].fillna('').astype(str)
+                                            .str.strip().str.replace(r'\.0$', '', regex=True))
+                                        info167 = info167.drop(columns=['レースID']).drop_duplicates('_rid16')
+                                        # 同名の既存列は混在させず、ラップ集計側を表示する。
+                                        reason167 = reason167.drop(columns=[
+                                            c for c in ['レース名', '開催日', '展開タイプ'] if c in reason167.columns
+                                        ])
+                                        reason167 = reason167.merge(info167, on='_rid16', how='left')
+                                        reason167 = display_horse_column(reason167, horses, st.session_state.auto_numbers)
+                                        for col167 in ['レース名', '開催日', '展開タイプ']:
+                                            if col167 not in reason167.columns:
+                                                reason167[col167] = ''
+                                        detail_cols167 = ['馬名', 'レース名', '開催日', '着順_数値', '展開タイプ'] + metric_cols167
+                                        st.dataframe(reason167[detail_cols167], hide_index=True,
+                                                     use_container_width=True)
+                                    else:
+                                        st.info('この条件で3着以内のラップ確認レースはありません。')
+                            # Ver.16.8: 3着以内と4着以下のレース全体ラップを比較。
+                            # 取消・中止・失格など着順が数値でないレースは比較から除外する。
+                            st.subheader('好走時 vs 凡走時：ラップ比較（Ver.16.8）')
+                            st.caption('3着以内＝好走、4着以下＝凡走。表示値は**各馬が出走したレース全体**のラップ平均であり、馬自身の個別ラップではありません。差＝好走時 − 凡走時。')
+                            valid168 = numeric_source167.loc[
+                                numeric_source167['着順_数値'].ge(1)].copy()
+                            valid168['結果区分168'] = valid168['着順_数値'].apply(
+                                lambda x: '好走' if x <= 3 else '凡走')
+                            pairs168 = [
+                                ('終盤加速幅_秒', '終盤加速'),
+                                ('残1000m相対加速_秒', '残1000m加速'),
+                                ('残1000mラップ幅_秒', '残1000mラップ幅'),
+                            ]
+                            rows168 = []
+                            for horse168 in ordered_horses166:
+                                subset168 = valid168.loc[valid168['馬名'].eq(horse168)]
+                                row168 = {'馬名': horse168,
+                                          '好走走数': int(subset168['結果区分168'].eq('好走').sum()),
+                                          '凡走走数': int(subset168['結果区分168'].eq('凡走').sum())}
+                                for original168, label168 in pairs168:
+                                    good168 = pd.to_numeric(subset168.loc[
+                                        subset168['結果区分168'].eq('好走'), original168],
+                                        errors='coerce').dropna()
+                                    bad168 = pd.to_numeric(subset168.loc[
+                                        subset168['結果区分168'].eq('凡走'), original168],
+                                        errors='coerce').dropna()
+                                    row168[label168 + '_好走走数'] = int(len(good168))
+                                    row168[label168 + '_凡走走数'] = int(len(bad168))
+                                    row168[label168 + '_好走'] = round(float(good168.mean()), 2) if len(good168) else float('nan')
+                                    row168[label168 + '_凡走'] = round(float(bad168.mean()), 2) if len(bad168) else float('nan')
+                                    row168[label168 + '_差'] = (round(float(good168.mean() - bad168.mean()), 2)
+                                                                if len(good168) and len(bad168) else float('nan'))
+                                rows168.append(row168)
+                            comparison168 = pd.DataFrame(rows168)
+                            if not comparison168.empty:
+                                comparison168 = display_horse_column(
+                                    comparison168, horses, st.session_state.auto_numbers)
+                                def show_sec168(x):
+                                    return f'{float(x):+.2f}' if pd.notna(x) else '—'
+                                main168 = comparison168[['馬名', '終盤加速_好走', '終盤加速_凡走',
+                                                          '終盤加速_差', '好走走数', '凡走走数']].copy()
+                                for c168 in ['終盤加速_好走', '終盤加速_凡走', '終盤加速_差']:
+                                    main168[c168] = main168[c168].map(show_sec168)
+                                main168 = main168.rename(columns={
+                                    '終盤加速_好走': '好走時', '終盤加速_凡走': '凡走時',
+                                    '終盤加速_差': '差（秒）', '好走走数': '好走', '凡走走数': '凡走'})
+                                st.dataframe(main168, hide_index=True, use_container_width=True,
+                                             height=min(690, 45 + 36 * len(main168)))
+                                st.caption('上の表は**終盤加速**（秒/200m）の比較。— はデータなし。差がプラスでも「その展開が得意」と断定できず、1〜2走の数字は参考値です。')
+                                with st.expander('残1000m加速・持続性・指標別の対象走数を見る', expanded=False):
+                                    extra168 = ['馬名', '好走走数', '凡走走数']
+                                    for _, name168 in pairs168:
+                                        extra168.extend([name168 + '_好走', name168 + '_凡走',
+                                                         name168 + '_差', name168 + '_好走走数',
+                                                         name168 + '_凡走走数'])
+                                    st.dataframe(comparison168[extra168], hide_index=True,
+                                                 use_container_width=True)
+                                    st.caption('残1000mラップ幅は小さいほど一定。ただし差の正負だけで良し悪しは判断できません。')
+                                st.subheader('どんな展開で好走しやすい？（Ver.17.0・自動解説）')
+                                st.caption('好走・凡走の**レース全体のラップ差**から特徴を自動要約。馬自身のラップや能力値ではありません。分類基準は試験用で、統計的な有意差を示すものではありません。')
+                                interpretations169 = []
+                                for _, row169 in comparison168.iterrows():
+                                    label169, confidence169, reason169 = interpret_running_pattern(row169)
+                                    interpretations169.append({'馬名': row169['馬名'],
+                                        '好走する展開の特徴': label169,
+                                        '判定の確かさ': confidence169,
+                                        '好走走数': int(row169['好走走数']),
+                                        '凡走走数': int(row169['凡走走数']),
+                                        '判定理由': reason169})
+                                interpretation_df169 = pd.DataFrame(interpretations169)
+                                st.dataframe(interpretation_df169[['馬名', '好走する展開の特徴', '判定の確かさ', '好走走数', '凡走走数']],
+                                             hide_index=True, use_container_width=True,
+                                             height=min(690, 45 + 36 * len(interpretation_df169)))
+                                with st.expander('なぜこの判定になった？（馬ごとの説明）', expanded=False):
+                                    selected169 = tap_choice('確認する馬', interpretation_df169['馬名'].tolist(), 'interpret_horse169')
+                                    rec169 = interpretation_df169[interpretation_df169['馬名'].eq(selected169)].iloc[0]
+                                    st.markdown(f"**{rec169['好走する展開の特徴']}**　／　{rec169['判定の確かさ']}")
+                                    st.write(rec169['判定理由'])
+                                    st.caption('好走時と凡走時の比較で、各指標の差が0.25秒以上（ラップ幅は0.30秒以上）の場合に特徴として表示。閾値は暫定です。')
+                                st.download_button('好走展開の自動解説をCSVで保存',
+                                                   interpretation_df169.to_csv(index=False).encode('utf-8-sig'),
+                                                   file_name='keiba_running_pattern_v169.csv',
+                                                   mime='text/csv', use_container_width=True)
+                                # Ver.17: 馬自身の位置取り・上がり順位と、レース全体のラップを統合表示。
+                                st.subheader('脚質 × 末脚 × 展開：総合診断（Ver.17）')
+                                st.caption('位置・上がりは**馬自身の成績**、展開は**レース全体のラップ**。診断は暫定的な説明で、能力点や未来の勝率ではありません。')
+                                explanation_map17 = dict(zip(
+                                    interpretation_df169['馬名'].astype(str),
+                                    interpretation_df169['好走する展開の特徴'].astype(str)))
+                                diagnoses17 = []
+                                for h17 in ordered_horses166:
+                                    hdata17 = numeric_source167.loc[numeric_source167['馬名'].eq(h17)].copy()
+                                    diag17 = diagnose_horse_v17(hdata17, explanation_map17.get(h17, '不明'))
+                                    diag17['馬名'] = h17
+                                    diagnoses17.append(diag17)
+                                diagnosis_df17 = pd.DataFrame(diagnoses17)
+                                if not diagnosis_df17.empty:
+                                    diagnosis_df17 = display_horse_column(diagnosis_df17, horses, st.session_state.auto_numbers)
+                                    st.dataframe(diagnosis_df17[['馬名', '走りの総合診断', '展開', '信頼度', '好走走数']],
+                                                 hide_index=True, use_container_width=True,
+                                                 height=min(690, 45 + 36 * len(diagnosis_df17)),
+                                                 column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
+                                                                '走りの総合診断': st.column_config.TextColumn('走りの特徴', width='medium'),
+                                                                '展開': st.column_config.TextColumn('好走展開', width='medium')})
+                                    with st.expander('総合診断の根拠（馬ごとに確認）', expanded=False):
+                                        chosen17 = tap_choice('診断を見る馬', diagnosis_df17['馬名'].tolist(), 'diagnosis_horse_v17')
+                                        rec17 = diagnosis_df17.loc[diagnosis_df17['馬名'].eq(chosen17)].iloc[0]
+                                        st.markdown(f"**{rec17['走りの総合診断']}**　／　{rec17['信頼度']}")
+                                        st.write(rec17['根拠'])
+                                        st.caption(f"対象{rec17['対象走数']}走・好走{rec17['好走走数']}走・4角取得{rec17['位置取得']}走・上がり順位取得{rec17['上がり取得']}走")
+                                    st.download_button('総合診断をCSVで保存',
+                                                       diagnosis_df17.to_csv(index=False).encode('utf-8-sig'),
+                                                       file_name='keiba_horse_total_diagnosis_v17.csv',
+                                                       mime='text/csv', use_container_width=True)
+                                st.download_button('好走・凡走ラップ比較をCSVで保存',
+                                                   comparison168.to_csv(index=False).encode('utf-8-sig'),
+                                                   file_name='keiba_good_bad_lap_v168.csv',
+                                                   mime='text/csv', use_container_width=True)
+                            else:
+                                st.info('比較対象の着順・ラップがありません。')
+                            with st.expander('確認率・保留レース・データ量を見る', expanded=False):
+                                st.dataframe(wide166[['馬名','保留','分類済み','対象候補','未確認','確認率']],
+                                             hide_index=True, use_container_width=True)
+                                st.caption('「分類済み」はラップ検証済み（保留を含む）。「未確認」は対象候補のうち展開分類を確認できなかった走数。確認率は能力の信頼度ではありません。')
+                            with st.expander('集計に使ったレース名・着順を見る', expanded=False):
+                                race_detail166 = linked16.copy()
+                                race_detail166['レースID_照合'] = race_detail166['_rid16'].astype(str)
+                                shape_info166_cols = ['レースID'] + [c for c in ['開催日','レース名','レース距離'] if c in shapes16.columns]
+                                shape_info166 = shapes16[shape_info166_cols].drop_duplicates('レースID').copy()
+                                shape_info166['レースID'] = shape_info166['レースID'].astype(str)
+                                race_detail166 = race_detail166.merge(shape_info166, left_on='レースID_照合',
+                                                                      right_on='レースID', how='left', suffixes=('', '_ラップ'))
+                                # レース名は過去成績の原文を優先し、欠損時だけラップ取得結果を使用。
+                                if 'レース名_ラップ' in race_detail166.columns:
+                                    name166 = race_detail166['レース名'].fillna('').astype(str).str.strip() if 'レース名' in race_detail166 else pd.Series('',index=race_detail166.index)
+                                    race_detail166['レース名'] = name166.where(name166.ne(''), race_detail166['レース名_ラップ'])
+                                if 'レース名' not in race_detail166.columns:
+                                    race_detail166['レース名'] = '不明'
+                                if '日付' not in race_detail166.columns:
+                                    race_detail166['日付'] = ''
+                                race_detail166['馬名_内部'] = race_detail166['馬名'].astype(str)
+                                race_detail166 = display_horse_column(race_detail166, horses, st.session_state.auto_numbers)
+                                chosen166 = st.radio('表示する展開タイプ', ['全タイプ', '瞬発戦寄り', 'ロングスパート戦寄り', '消耗戦寄り', '混合・判定保留'],
+                                                        horizontal=True, key='shape_detail_type_v166')
+                                if chosen166 != '全タイプ':
+                                    race_detail166 = race_detail166[race_detail166['展開タイプ'].eq(chosen166)]
+                                detailed_cols166 = ['馬名', '日付', 'レース名', '展開タイプ', '着順_数値',
+                                                    '4角順位', '上がり順位', 'レースID_照合']
+                                detail_out166 = race_detail166[detailed_cols166].rename(columns={'レースID_照合':'レースID'})
+                                st.dataframe(detail_out166, hide_index=True, use_container_width=True,
+                                             height=min(600, 48 + 34*len(detail_out166)))
+                                st.download_button('集計対象レースの詳細をCSVで保存',
+                                                   detail_out166.to_csv(index=False).encode('utf-8-sig'),
+                                                   file_name='keiba_lap_horse_races_v166.csv', mime='text/csv',
+                                                   use_container_width=True)
+                            with st.expander('指標別の詳しい成績（勝率・上がり・4角）', expanded=False):
+                                detail_metrics166 = display_horse_column(overview16, horses, st.session_state.auto_numbers)
+                                st.dataframe(detail_metrics166, hide_index=True, use_container_width=True)
+                                st.download_button('展開タイプ別の指標をCSVで保存',
+                                                   detail_metrics166.to_csv(index=False).encode('utf-8-sig'),
+                                                   file_name='keiba_lap_horse_metrics_v166.csv', mime='text/csv',
+                                                   use_container_width=True)
+                st.warning('展開タイプは独自の暫定分類です。200mで割り切れない距離や地方・海外レースは取得不可の場合があります。少数走数では適性を断定できません。')
 
-    with st.expander('ペース判定の精度チェック（Ver.15.8）', expanded=False):
-        st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
-        audit = pace_compare_base.copy()
-        # レースIDが取得できた場合は最優先で使用。ない場合はレース日、競馬場、レース名、距離を組み合わせる。
-        rid_series = (audit['レースID'].fillna('').astype(str).str.strip()
-                      if 'レースID' in audit.columns else pd.Series('', index=audit.index))
-        valid_rid = rid_series.str.fullmatch(r'\d{12}').fillna(False)
-        day_series = pd.to_datetime(audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
-        name_series = audit['レース名'].fillna('').astype(str) if 'レース名' in audit else pd.Series('', index=audit.index)
-        venue_series = audit['競馬場'].fillna('').astype(str)
-        dist_series = audit['距離_m'].astype('Int64').astype(str)
-        backup = day_series + '|' + venue_series + '|' + name_series + '|' + dist_series
-        # レースを識別できない場合、別レースを無理にまとめない。
-        backup_ok = day_series.ne('') & name_series.str.strip().ne('') & venue_series.str.strip().ne('')
-        audit['_race_key'] = ['ID:' + r if ok else '補完:' + b if bk else '行:' + str(i)
-                              for i, (r, ok, b, bk) in enumerate(zip(rid_series, valid_rid, backup, backup_ok))]
-        audit['_識別方法'] = ['レースID' if ok else '日付・場所・レース名' if bk else '識別不可（行単位）'
-                              for ok, bk in zip(valid_rid, backup_ok)]
-        pace_order = ['ハイ寄り', 'ミドル寄り', 'スロー寄り', '不明']
-        dist_bins = [-float('inf'), 1600, 1800, 2200, 2400, float('inf')]
-        dist_labels = ['1600m以下', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上']
-        audit['_距離帯'] = pd.cut(audit['距離_m'], bins=dist_bins, labels=dist_labels)
-        rows_audit = []
-        for key, grp in audit.groupby('_race_key', sort=False):
-            first = grp.iloc[0]
-            classifications = sorted(set(grp['推定ペース'].fillna('不明').astype(str)))
-            f3 = pd.to_numeric(grp['前半3F'], errors='coerce').dropna()
-            l3 = pd.to_numeric(grp['後半3F'], errors='coerce').dropna()
-            d3 = pd.to_numeric(grp['前後半3F差'], errors='coerce').dropna()
-            # 同一レースで数値が異なる場合、分類が同じでもデータ不一致として検出する。
-            numeric_conflict = any(len(vals) >= 2 and vals.max() - vals.min() > 0.11 for vals in [f3, l3, d3])
-            status = ('識別不可' if first['_識別方法'] == '識別不可（行単位）'
-                      else '不一致' if len(classifications) > 1 or numeric_conflict
-                      else '判定不能' if classifications == ['不明'] else '一致')
-            rid = str(first['レースID']).strip() if 'レースID' in grp.columns else ''
-            rows_audit.append({'日付': day_series.loc[grp.index[0]], 'レース名': first['レース名'],
-                               '競馬場': first['競馬場'], '距離_m': first['距離_m'],
-                               '距離帯': str(first['_距離帯']) if pd.notna(first['_距離帯']) else '距離不明',
-                               'レースID': rid if re.fullmatch(r'\d{12}', rid) else '',
-                               '識別方法': first['_識別方法'], '登録馬数': len(grp),
-                               '前半3F': round(f3.iloc[0], 1) if not f3.empty else float('nan'),
-                               '後半3F': round(l3.iloc[0], 1) if not l3.empty else float('nan'),
-                               '前後半3F差': round(d3.iloc[0], 1) if not d3.empty else float('nan'),
-                               '推定ペース': ' / '.join(classifications), '判定元': ' / '.join(sorted(set(grp['ペース判定元'].fillna('不明').astype(str)))), '判定チェック': status,
-                               'レース結果URL': f'https://race.netkeiba.com/race/result.html?race_id={rid}' if re.fullmatch(r'\d{12}', rid) else ''})
-        race_audit = pd.DataFrame(rows_audit)
-        if race_audit.empty:
-            st.info('この分析条件では検証できるレースがありません。')
-        else:
-            total = len(race_audit)
-            conflicts = int((race_audit['判定チェック'] == '不一致').sum())
-            unknown = int((race_audit['判定チェック'] == '判定不能').sum())
-            unidentified = int((race_audit['判定チェック'] == '識別不可').sum())
-            c1, c2, c3 = st.columns(3)
-            c1.metric('異なるレース数', total)
-            c2.metric('判定不一致', conflicts)
-            c3.metric('判定不能', unknown)
-            if unidentified:
-                st.warning(f'識別に必要な情報がない成績が{unidentified}件あり、行単位で扱っています。レース数は概算です。')
-            if conflicts:
-                st.error(f'同じレースなのにペースの分類または数値が違うレースが{conflicts}件あります。下の一覧で確認してください。')
+        with st.expander('ペース判定の精度チェック（Ver.15.8）', expanded=False):
+            st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
+            audit = pace_compare_base.copy()
+            # レースIDが取得できた場合は最優先で使用。ない場合はレース日、競馬場、レース名、距離を組み合わせる。
+            rid_series = (audit['レースID'].fillna('').astype(str).str.strip()
+                          if 'レースID' in audit.columns else pd.Series('', index=audit.index))
+            valid_rid = rid_series.str.fullmatch(r'\d{12}').fillna(False)
+            day_series = pd.to_datetime(audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+            name_series = audit['レース名'].fillna('').astype(str) if 'レース名' in audit else pd.Series('', index=audit.index)
+            venue_series = audit['競馬場'].fillna('').astype(str)
+            dist_series = audit['距離_m'].astype('Int64').astype(str)
+            backup = day_series + '|' + venue_series + '|' + name_series + '|' + dist_series
+            # レースを識別できない場合、別レースを無理にまとめない。
+            backup_ok = day_series.ne('') & name_series.str.strip().ne('') & venue_series.str.strip().ne('')
+            audit['_race_key'] = ['ID:' + r if ok else '補完:' + b if bk else '行:' + str(i)
+                                  for i, (r, ok, b, bk) in enumerate(zip(rid_series, valid_rid, backup, backup_ok))]
+            audit['_識別方法'] = ['レースID' if ok else '日付・場所・レース名' if bk else '識別不可（行単位）'
+                                  for ok, bk in zip(valid_rid, backup_ok)]
+            pace_order = ['ハイ寄り', 'ミドル寄り', 'スロー寄り', '不明']
+            dist_bins = [-float('inf'), 1600, 1800, 2200, 2400, float('inf')]
+            dist_labels = ['1600m以下', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上']
+            audit['_距離帯'] = pd.cut(audit['距離_m'], bins=dist_bins, labels=dist_labels)
+            rows_audit = []
+            for key, grp in audit.groupby('_race_key', sort=False):
+                first = grp.iloc[0]
+                classifications = sorted(set(grp['推定ペース'].fillna('不明').astype(str)))
+                f3 = pd.to_numeric(grp['前半3F'], errors='coerce').dropna()
+                l3 = pd.to_numeric(grp['後半3F'], errors='coerce').dropna()
+                d3 = pd.to_numeric(grp['前後半3F差'], errors='coerce').dropna()
+                # 同一レースで数値が異なる場合、分類が同じでもデータ不一致として検出する。
+                numeric_conflict = any(len(vals) >= 2 and vals.max() - vals.min() > 0.11 for vals in [f3, l3, d3])
+                status = ('識別不可' if first['_識別方法'] == '識別不可（行単位）'
+                          else '不一致' if len(classifications) > 1 or numeric_conflict
+                          else '判定不能' if classifications == ['不明'] else '一致')
+                rid = str(first['レースID']).strip() if 'レースID' in grp.columns else ''
+                rows_audit.append({'日付': day_series.loc[grp.index[0]], 'レース名': first['レース名'],
+                                   '競馬場': first['競馬場'], '距離_m': first['距離_m'],
+                                   '距離帯': str(first['_距離帯']) if pd.notna(first['_距離帯']) else '距離不明',
+                                   'レースID': rid if re.fullmatch(r'\d{12}', rid) else '',
+                                   '識別方法': first['_識別方法'], '登録馬数': len(grp),
+                                   '前半3F': round(f3.iloc[0], 1) if not f3.empty else float('nan'),
+                                   '後半3F': round(l3.iloc[0], 1) if not l3.empty else float('nan'),
+                                   '前後半3F差': round(d3.iloc[0], 1) if not d3.empty else float('nan'),
+                                   '推定ペース': ' / '.join(classifications), '判定元': ' / '.join(sorted(set(grp['ペース判定元'].fillna('不明').astype(str)))), '判定チェック': status,
+                                   'レース結果URL': f'https://race.netkeiba.com/race/result.html?race_id={rid}' if re.fullmatch(r'\d{12}', rid) else ''})
+            race_audit = pd.DataFrame(rows_audit)
+            if race_audit.empty:
+                st.info('この分析条件では検証できるレースがありません。')
             else:
-                st.success('識別できたレースについて、馬ごとのペース判定の食い違いは見つかりませんでした。')
-            st.markdown('**距離別のペース分布（重複レース除外）**')
-            valid_once = race_audit[race_audit['判定チェック'] == '一致'].copy()
-            counts_pace = pd.crosstab(valid_once['距離帯'], valid_once['推定ペース']).reindex(columns=pace_order[:3], fill_value=0)
-            counts_pace['判定可能レース数'] = counts_pace.sum(axis=1)
-            if unknown:
-                missing_by_dist = race_audit[race_audit['判定チェック'] == '判定不能'].groupby('距離帯').size()
-                counts_pace['判定不能'] = missing_by_dist.reindex(counts_pace.index, fill_value=0).astype(int)
-            st.dataframe(counts_pace.reset_index(), hide_index=True, use_container_width=True)
-            st.caption('ハイ寄りの割合が少なくても「ハイに弱い」ことは意味しません。距離ごとのサンプル数と判定不能数を見てください。')
-            st.markdown('**判定基準を変えた場合の分布（感度チェック）**')
-            st.caption('以下は前後半3F差の閾値を変えた参考比較。netkeibaのS/M/Hとは別の方法です。')
-            sensitivity = []
-            eligible = race_audit[(race_audit['判定チェック'] == '一致') &
-                                  pd.to_numeric(race_audit['前後半3F差'], errors='coerce').notna()].copy()
-            diff_values = pd.to_numeric(eligible['前後半3F差'], errors='coerce')
-            for threshold in [0.5, 1.0, 1.5]:
-                high = int((diff_values < -threshold).sum())
-                slow = int((diff_values > threshold).sum())
-                middle = int(len(diff_values) - high - slow)
-                sensitivity.append({'閾値': f'±{threshold:.1f}秒' + ('（現行）' if threshold == 1.0 else ''),
-                                    'ハイ寄り': high, 'ミドル寄り': middle, 'スロー寄り': slow,
-                                    '判定可能レース': len(diff_values)})
-            sensitivity_df = pd.DataFrame(sensitivity)
-            st.dataframe(sensitivity_df, hide_index=True, use_container_width=True)
-            st.download_button('閾値感度チェックをCSVで保存', sensitivity_df.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_pace_threshold_v153.csv', mime='text/csv', use_container_width=True)
-            st.info('今の取得データにはレース中盤の区間ラップがありません。中盤まで考慮したペース判定は、別途ラップ取得の実装・検証が必要です。今回は本番のペース判定基準は変更していません。')
-            st.markdown('**各馬のペース経験数**')
-            horse_pace = pd.crosstab(audit['馬名'], audit['推定ペース']).reindex(columns=pace_order, fill_value=0)
-            horse_pace = horse_pace.reindex(sorted(audit['馬名'].dropna().unique()), fill_value=0)
-            horse_pace['判定可能走数'] = horse_pace[pace_order[:3]].sum(axis=1)
-            horse_pace['ハイ実績'] = horse_pace['ハイ寄り'].map(lambda n: 'データなし' if n == 0 else f'{n}走')
-            horse_pace.index.name = '馬名'
-            st.dataframe(display_horse_column(horse_pace.reset_index(), horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
-            st.markdown('**レース単位の判定一覧**')
-            st.dataframe(race_audit, hide_index=True, use_container_width=True,
-                         column_config={'レース名': st.column_config.TextColumn('レース名', width='medium'),
-                                        'レース結果URL': st.column_config.LinkColumn('レース結果')})
-            st.download_button('ペース精度チェックをCSVで保存', race_audit.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_pace_validation_v151.csv', mime='text/csv', use_container_width=True)
+                total = len(race_audit)
+                conflicts = int((race_audit['判定チェック'] == '不一致').sum())
+                unknown = int((race_audit['判定チェック'] == '判定不能').sum())
+                unidentified = int((race_audit['判定チェック'] == '識別不可').sum())
+                c1, c2, c3 = st.columns(3)
+                c1.metric('異なるレース数', total)
+                c2.metric('判定不一致', conflicts)
+                c3.metric('判定不能', unknown)
+                if unidentified:
+                    st.warning(f'識別に必要な情報がない成績が{unidentified}件あり、行単位で扱っています。レース数は概算です。')
+                if conflicts:
+                    st.error(f'同じレースなのにペースの分類または数値が違うレースが{conflicts}件あります。下の一覧で確認してください。')
+                else:
+                    st.success('識別できたレースについて、馬ごとのペース判定の食い違いは見つかりませんでした。')
+                st.markdown('**距離別のペース分布（重複レース除外）**')
+                valid_once = race_audit[race_audit['判定チェック'] == '一致'].copy()
+                counts_pace = pd.crosstab(valid_once['距離帯'], valid_once['推定ペース']).reindex(columns=pace_order[:3], fill_value=0)
+                counts_pace['判定可能レース数'] = counts_pace.sum(axis=1)
+                if unknown:
+                    missing_by_dist = race_audit[race_audit['判定チェック'] == '判定不能'].groupby('距離帯').size()
+                    counts_pace['判定不能'] = missing_by_dist.reindex(counts_pace.index, fill_value=0).astype(int)
+                st.dataframe(counts_pace.reset_index(), hide_index=True, use_container_width=True)
+                st.caption('ハイ寄りの割合が少なくても「ハイに弱い」ことは意味しません。距離ごとのサンプル数と判定不能数を見てください。')
+                st.markdown('**判定基準を変えた場合の分布（感度チェック）**')
+                st.caption('以下は前後半3F差の閾値を変えた参考比較。netkeibaのS/M/Hとは別の方法です。')
+                sensitivity = []
+                eligible = race_audit[(race_audit['判定チェック'] == '一致') &
+                                      pd.to_numeric(race_audit['前後半3F差'], errors='coerce').notna()].copy()
+                diff_values = pd.to_numeric(eligible['前後半3F差'], errors='coerce')
+                for threshold in [0.5, 1.0, 1.5]:
+                    high = int((diff_values < -threshold).sum())
+                    slow = int((diff_values > threshold).sum())
+                    middle = int(len(diff_values) - high - slow)
+                    sensitivity.append({'閾値': f'±{threshold:.1f}秒' + ('（現行）' if threshold == 1.0 else ''),
+                                        'ハイ寄り': high, 'ミドル寄り': middle, 'スロー寄り': slow,
+                                        '判定可能レース': len(diff_values)})
+                sensitivity_df = pd.DataFrame(sensitivity)
+                st.dataframe(sensitivity_df, hide_index=True, use_container_width=True)
+                st.download_button('閾値感度チェックをCSVで保存', sensitivity_df.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_pace_threshold_v153.csv', mime='text/csv', use_container_width=True)
+                st.info('今の取得データにはレース中盤の区間ラップがありません。中盤まで考慮したペース判定は、別途ラップ取得の実装・検証が必要です。今回は本番のペース判定基準は変更していません。')
+                st.markdown('**各馬のペース経験数**')
+                horse_pace = pd.crosstab(audit['馬名'], audit['推定ペース']).reindex(columns=pace_order, fill_value=0)
+                horse_pace = horse_pace.reindex(sorted(audit['馬名'].dropna().unique()), fill_value=0)
+                horse_pace['判定可能走数'] = horse_pace[pace_order[:3]].sum(axis=1)
+                horse_pace['ハイ実績'] = horse_pace['ハイ寄り'].map(lambda n: 'データなし' if n == 0 else f'{n}走')
+                horse_pace.index.name = '馬名'
+                st.dataframe(display_horse_column(horse_pace.reset_index(), horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
+                st.markdown('**レース単位の判定一覧**')
+                st.dataframe(race_audit, hide_index=True, use_container_width=True,
+                             column_config={'レース名': st.column_config.TextColumn('レース名', width='medium'),
+                                            'レース結果URL': st.column_config.LinkColumn('レース結果')})
+                st.download_button('ペース精度チェックをCSVで保存', race_audit.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_pace_validation_v151.csv', mime='text/csv', use_container_width=True)
 
-    st.download_button('📥 分析結果をCSVで保存', data=display_horse_column(result, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
+        st.download_button('📥 分析結果をCSVで保存', data=display_horse_column(result, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
