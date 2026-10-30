@@ -1,6 +1,3 @@
-競馬分析ラボ Ver.18.1
-コード全文をコピー
-タップするとapp.py全体をコピーします。
 import re
 import json
 from pathlib import Path
