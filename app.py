@@ -1,4 +1,6 @@
-import re
+Ver.20.8.5 更新用 app.py
+コードをコピーする場合は下のボタン。おすすめは app.py を直接保存して GitHub にアップロードする方法です。
+コード全文をコピーimport re
 import json
 from pathlib import Path
 import time
@@ -12,7 +14,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.8.4')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.8.5')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2127,51 +2129,6 @@ if st.session_state.get('nav_page_v208') == '🧰 管理・検証':
                 except Exception as exc_v192:
                     st.error(f'再取得を完了できませんでした。以前の保存データは維持しています：{exc_v192}')
 
-horses = st.session_state.auto_horses
-# バックアップの注意書きはデータ管理を開いたときだけ案内。
-with st.expander('📥 手入力・Excel/CSV（必要なときだけ）', expanded=False):
-    st.caption('サーバーの保存データは再起動で消える可能性があります。必要な場合はExcelへバックアップしてください。')
-    if horses:
-        st.write(f'出走馬：{len(horses)}頭')
-        st.write('、'.join(horse_display(n, horses, st.session_state.auto_numbers) for n in horses.values()))
-    if st.session_state.auto_df is not None:
-        available = int(st.session_state.auto_df['上がり順位'].notna().sum())
-        st.caption(f'保存済みの過去成績：{len(st.session_state.auto_df)}走／上がり順位取得済み：{available}走')
-    manual = st.text_area('手入力する出走馬名（任意・1行に1頭）', height=95)
-    st.caption('自動取得に失敗したときや、外部のExcel/CSVを使うときだけ設定します。')
-    uploads = st.file_uploader('分析データを追加（任意）', type=['xlsx', 'csv'], accept_multiple_files=True)
-
-target_horses = list(dict.fromkeys([n.strip() for n in manual.splitlines() if n.strip()] or list(horses.values())))
-datasets = []
-if st.session_state.auto_df is not None:
-    datasets.append(st.session_state.auto_df.copy())
-for file in uploads or []:
-    try:
-        datasets.append(read_upload(file))
-    except Exception as e:
-        st.error(f'{file.name} の読み込みに失敗：{e}')
-        st.stop()
-if not datasets:
-    st.info('レースURLを入力して「一括取得」を押すか、「データ管理」からExcel/CSVを追加してください。')
-    st.stop()
-df = pd.concat(datasets, ignore_index=True, sort=False).drop_duplicates().reset_index(drop=True)
-with st.expander('取得データをExcelでバックアップ', expanded=False):
-    st.caption(f'{len(df)}走・{df["馬名"].nunique()}頭を読み込み済み。')
-    st.download_button('Excelを保存', data=make_excel(df), file_name='競馬分析_統合データ.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', width='stretch')
-
-analysis_df = df.copy()
-if target_horses:
-    names_available = set(analysis_df['馬名'].unique())
-    missing = [n for n in target_horses if n not in names_available]
-    analysis_df = analysis_df[analysis_df['馬名'].isin(target_horses)].copy()
-    if missing:
-        st.warning('データが見つからない馬：' + '、'.join(missing))
-if analysis_df.empty:
-    st.error('分析対象の馬の成績がありません。')
-    st.stop()
-st.caption(f'分析対象：{analysis_df["馬名"].nunique()}頭・{len(analysis_df)}走')
-
-_keiba_data_t = time.perf_counter()
 # Ver.20.8: iPhoneでは左上☰から縦型メニューを選択。
 # ペース予測式、データ取得、各馬の分析内容はVer.20.7から変更しない。
 with st.sidebar:
@@ -2184,7 +2141,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.8.4')
+    st.caption('競馬分析ラボ Ver.20.8.5')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2214,6 +2171,56 @@ if selected_page208 == '🧰 管理・検証':
 else:
     st.caption('左上の ☰ から画面を切り替えられます。')
 
+
+horses = st.session_state.auto_horses
+# バックアップの注意書きはデータ管理を開いたときだけ案内。
+manual = ''
+uploads = []
+if selected_page208 == '🧰 管理・検証':
+    with st.expander('📥 手入力・Excel/CSV（必要なときだけ）', expanded=False):
+        st.caption('サーバーの保存データは再起動で消える可能性があります。必要な場合はExcelへバックアップしてください。')
+        if horses:
+            st.write(f'出走馬：{len(horses)}頭')
+            st.write('、'.join(horse_display(n, horses, st.session_state.auto_numbers) for n in horses.values()))
+        if st.session_state.auto_df is not None:
+            available = int(st.session_state.auto_df['上がり順位'].notna().sum())
+            st.caption(f'保存済みの過去成績：{len(st.session_state.auto_df)}走／上がり順位取得済み：{available}走')
+        manual = st.text_area('手入力する出走馬名（任意・1行に1頭）', height=95)
+        st.caption('自動取得に失敗したときや、外部のExcel/CSVを使うときだけ設定します。')
+        uploads = st.file_uploader('分析データを追加（任意）', type=['xlsx', 'csv'], accept_multiple_files=True)
+
+target_horses = list(dict.fromkeys([n.strip() for n in manual.splitlines() if n.strip()] or list(horses.values())))
+datasets = []
+if st.session_state.auto_df is not None:
+    datasets.append(st.session_state.auto_df.copy())
+for file in uploads or []:
+    try:
+        datasets.append(read_upload(file))
+    except Exception as e:
+        st.error(f'{file.name} の読み込みに失敗：{e}')
+        st.stop()
+if not datasets:
+    st.info('レースURLを入力して「一括取得」を押すか、「データ管理」からExcel/CSVを追加してください。')
+    st.stop()
+df = pd.concat(datasets, ignore_index=True, sort=False).drop_duplicates().reset_index(drop=True)
+if selected_page208 == '🧰 管理・検証':
+    with st.expander('取得データをExcelでバックアップ', expanded=False):
+        st.caption(f'{len(df)}走・{df["馬名"].nunique()}頭を読み込み済み。')
+        st.download_button('Excelを保存', data=make_excel(df), file_name='競馬分析_統合データ.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', width='stretch')
+
+analysis_df = df.copy()
+if target_horses:
+    names_available = set(analysis_df['馬名'].unique())
+    missing = [n for n in target_horses if n not in names_available]
+    analysis_df = analysis_df[analysis_df['馬名'].isin(target_horses)].copy()
+    if missing:
+        st.warning('データが見つからない馬：' + '、'.join(missing))
+if analysis_df.empty:
+    st.error('分析対象の馬の成績がありません。')
+    st.stop()
+st.caption(f'分析対象：{analysis_df["馬名"].nunique()}頭・{len(analysis_df)}走')
+
+_keiba_data_t = time.perf_counter()
 if selected_page208 == '🧰 管理・検証':
     quality_holder208 = st.empty()
     with quality_holder208.container():
@@ -2430,6 +2437,10 @@ if selected_page208 in ('🏇 総合診断', '🐎 各馬の特徴'):
                                file_name='keiba_quick_diagnosis_v171.csv', mime='text/csv', width='stretch')
         else:
             st.info('診断に使える出走馬データがありません。')
+
+# 各馬の特徴では総合診断の計算結果だけを再利用し、総合診断画面は表示しない。
+if selected_page208 == '🐎 各馬の特徴':
+    main_holder208.empty()
 
 if selected_page208 == '🐎 各馬の特徴':
     detail_holder208 = st.empty()
