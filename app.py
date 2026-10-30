@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.20.5')
+st.title('🏇 競馬分析ラボ Ver.20.6')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1877,9 +1877,9 @@ if race_id and st.session_state.auto_df is not None:
     prepared_data = st.session_state.auto_df
     st.success(f'データ準備完了｜{len(prepared_data)}走。総合診断はこの下に表示しています。')
 if st.session_state.get('fetch_issues_v174') and st.session_state.get('fetch_issues_race_v174') == race_id:
-    st.warning('一部のデータを取得できませんでした。詳細は「精度チェック」で確認できます。')
+    st.warning('一部のデータを取得できませんでした。詳細は「管理・検証」→「運用品質チェック」で確認できます。')
 if st.session_state.get('fetch_fatal_v174') and st.session_state.get('fetch_issues_race_v174') == race_id:
-    st.error('一括取得を完了できませんでした。詳細は「精度チェック」を確認してください。')
+    st.error('一括取得を完了できませんでした。詳細は「管理・検証」を確認してください。')
 
 
 # URL入力から1タップで、出走馬・過去成績・上がり順位まで取得する。
@@ -1989,7 +1989,7 @@ if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='prim
                     st.success(f'S/M/Hの差分取得完了：今回 {len(pending_pids)-len(errors)}/{len(pending_pids)} レース')
                     if errors:
                         st.session_state['fetch_issues_v174'].append(f'S/M/H取得不可：{len(errors)}レース')
-                        st.warning(f'S/M/Hを取得できなかったレース：{len(errors)}件。精度チェックで確認できます。')
+                        st.warning(f'S/M/Hを取得できなかったレース：{len(errors)}件。管理・検証で確認できます。')
                 else:
                     st.caption('S/M/H判定は保存済みデータを再利用しました。')
         except Exception as e:
@@ -2172,7 +2172,29 @@ st.caption(f'分析準備完了：{analysis_df["馬名"].nunique()}頭・{len(an
 
 # Ver.17.1: 通常利用は診断を最優先。保存済みラップから自動で計算する。
 # Streamlitのタブにより詳細分析のボタンや長い表を通常画面から分離する。
-tab_main171, tab_detail_short205, tab_quality172, tab_detail171 = st.tabs(['🏇 総合診断', '📊 詳細分析', '🛠️ 精度チェック', '📚 詳細設定'])
+# Ver.20.6: 通常の予想は3つの主タブだけ。品質確認と開発実験は別部門へ。
+tab_main171, tab_detail_short205, tab_detail171 = st.tabs(['🏇 総合診断', '📊 詳細分析', '⚙️ 詳細設定'])
+with st.expander('🧰 管理・検証（オプション）', expanded=False):
+    st.caption('普段の予想には不要です。取得状況の確認や開発中の検証を行う場合だけ使用してください。')
+    tab_quality_live206, tab_quality172 = st.tabs(['✅ 運用品質チェック', '🧪 開発・実験ラボ'])
+with tab_quality_live206:
+    st.subheader('運用品質チェック')
+    st.caption('本番運用でも必要なデータ取得・欠測・エラーの確認だけを表示します。')
+    if st.session_state.get('fetch_issues_race_v174') == race_id and st.session_state.get('fetch_issues_v174'):
+        with st.expander('直近の取得時の注意事項', expanded=False):
+            for issue in st.session_state['fetch_issues_v174']:
+                st.write('・' + str(issue))
+    if st.session_state.get('fetch_fatal_v174') and st.session_state.get('fetch_issues_race_v174') == race_id:
+        st.error(str(st.session_state['fetch_fatal_v174']))
+    with st.expander('S/M/Hデータの取得状況・未取得分の再取得', expanded=False):
+        render_pace_check_and_retry()
+    with st.expander('データの欠測を確認', expanded=False):
+        st.write(f'分析対象：{analysis_df["馬名"].nunique()}頭／{len(analysis_df)}走')
+        for label, field in [('序盤通過順','通過'), ('馬場状態','馬場状態'), ('レース格','レース格')]:
+            if field in analysis_df.columns:
+                good = int(analysis_df[field].notna().sum())
+                st.caption(f'{label}：値あり {good}/{len(analysis_df)}走（値の妥当性は別途確認が必要）')
+
 with tab_main171:
     st.subheader('出走馬の総合診断')
     st.caption('初期条件：各馬の直近10走のうちG1・G2・G3。操作なしで自動表示。条件を変える場合は「詳細分析」へ。')
@@ -2381,17 +2403,9 @@ with tab_detail_short205:
         st.info('先に出走馬の成績を取得してください。')
 
 with tab_quality172:
-    st.subheader('データの精度チェック')
-    if st.session_state.get('fetch_issues_race_v174') == race_id and st.session_state.get('fetch_issues_v174'):
-        with st.expander('直近の一括取得で発生した注意事項', expanded=False):
-            for issue in st.session_state['fetch_issues_v174']:
-                st.write('・' + str(issue))
-    if st.session_state.get('fetch_fatal_v174') and st.session_state.get('fetch_issues_race_v174') == race_id:
-        st.error(str(st.session_state['fetch_fatal_v174']))
-    with st.expander('netkeiba S/M/H取得状況・未取得分の再取得', expanded=False):
-        render_pace_check_and_retry()
-    st.caption('普段の予想画面から独立した検証スペースです。取得元や判定根拠を必要なときだけ確認できます。')
-    with st.expander('ペース予測の過去レース再現テスト（Ver.19.4）', expanded=False):
+    st.subheader('開発・実験ラボ')
+    st.caption('以下は開発中の検証用です。正式な予測画面には出さず、必要なときだけ開いて確認します。')
+    with st.expander('旧式・部分データ再現テスト（開発用）', expanded=False):
         st.caption('保存済みの馬だけで、当時のレース前までの履歴から予測を再計算します。'
                    ' **過去レースの全出走馬は含まれないため、表示する一致率は本番の予測的中率ではありません。**')
         st.caption('当日の成績は予測に使用しません。実際のS/M/Hはnetkeiba表示を正解ラベルとして比較します。')
@@ -2426,7 +2440,7 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.20.5）',expanded=False):
+    with st.expander('全出走馬での再現テスト（開発用）',expanded=False):
         st.caption('全出走馬の当該レース以前の成績だけでS/M/Hを再現。レース選定時には正解ラベルを利用しますが、予測器には渡しません。')
         st.caption('Hを指定して検証した結果は、意図的に抽出したサンプルです。全体の的中率とは混ぜて評価しないでください。')
         candidates196 = analysis_df.copy()
@@ -2636,7 +2650,7 @@ with tab_quality172:
                     else:
                         st.info('比較可能な予測がありません。取得失敗詳細・判定保留を確認してください。')
 
-    st.subheader('レース格の判定チェック')
+    st.subheader('旧式・レース格の詳細監査（開発用）')
     st.caption('元のレース名と格付け根拠を見ながら、誤判定・判定不明を確認できます。ここで表示するのはフィルター適用前のデータです。')
     audit = analysis_df.copy()
     if '日付' in audit.columns:
