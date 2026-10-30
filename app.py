@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.7.1')
+st.title('🏇 競馬分析ラボ Ver.16.8')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1752,6 +1752,70 @@ if st.session_state['analysis_visible_v1581']:
                                                  use_container_width=True)
                                 else:
                                     st.info('この条件で3着以内のラップ確認レースはありません。')
+                        # Ver.16.8: 3着以内と4着以下のレース全体ラップを比較。
+                        # 取消・中止・失格など着順が数値でないレースは比較から除外する。
+                        st.subheader('好走時 vs 凡走時：ラップ比較（Ver.16.8）')
+                        st.caption('3着以内＝好走、4着以下＝凡走。表示値は**各馬が出走したレース全体**のラップ平均であり、馬自身の個別ラップではありません。差＝好走時 − 凡走時。')
+                        valid168 = numeric_source167.loc[
+                            numeric_source167['着順_数値'].ge(1)].copy()
+                        valid168['結果区分168'] = valid168['着順_数値'].apply(
+                            lambda x: '好走' if x <= 3 else '凡走')
+                        pairs168 = [
+                            ('終盤加速幅_秒', '終盤加速'),
+                            ('残1000m相対加速_秒', '残1000m加速'),
+                            ('残1000mラップ幅_秒', '残1000mラップ幅'),
+                        ]
+                        rows168 = []
+                        for horse168 in ordered_horses166:
+                            subset168 = valid168.loc[valid168['馬名'].eq(horse168)]
+                            row168 = {'馬名': horse168,
+                                      '好走走数': int(subset168['結果区分168'].eq('好走').sum()),
+                                      '凡走走数': int(subset168['結果区分168'].eq('凡走').sum())}
+                            for original168, label168 in pairs168:
+                                good168 = pd.to_numeric(subset168.loc[
+                                    subset168['結果区分168'].eq('好走'), original168],
+                                    errors='coerce').dropna()
+                                bad168 = pd.to_numeric(subset168.loc[
+                                    subset168['結果区分168'].eq('凡走'), original168],
+                                    errors='coerce').dropna()
+                                row168[label168 + '_好走走数'] = int(len(good168))
+                                row168[label168 + '_凡走走数'] = int(len(bad168))
+                                row168[label168 + '_好走'] = round(float(good168.mean()), 2) if len(good168) else float('nan')
+                                row168[label168 + '_凡走'] = round(float(bad168.mean()), 2) if len(bad168) else float('nan')
+                                row168[label168 + '_差'] = (round(float(good168.mean() - bad168.mean()), 2)
+                                                            if len(good168) and len(bad168) else float('nan'))
+                            rows168.append(row168)
+                        comparison168 = pd.DataFrame(rows168)
+                        if not comparison168.empty:
+                            comparison168 = display_horse_column(
+                                comparison168, horses, st.session_state.auto_numbers)
+                            def show_sec168(x):
+                                return f'{float(x):+.2f}' if pd.notna(x) else '—'
+                            main168 = comparison168[['馬名', '終盤加速_好走', '終盤加速_凡走',
+                                                      '終盤加速_差', '好走走数', '凡走走数']].copy()
+                            for c168 in ['終盤加速_好走', '終盤加速_凡走', '終盤加速_差']:
+                                main168[c168] = main168[c168].map(show_sec168)
+                            main168 = main168.rename(columns={
+                                '終盤加速_好走': '好走時', '終盤加速_凡走': '凡走時',
+                                '終盤加速_差': '差（秒）', '好走走数': '好走', '凡走走数': '凡走'})
+                            st.dataframe(main168, hide_index=True, use_container_width=True,
+                                         height=min(690, 45 + 36 * len(main168)))
+                            st.caption('上の表は**終盤加速**（秒/200m）の比較。— はデータなし。差がプラスでも「その展開が得意」と断定できず、1〜2走の数字は参考値です。')
+                            with st.expander('残1000m加速・持続性・指標別の対象走数を見る', expanded=False):
+                                extra168 = ['馬名', '好走走数', '凡走走数']
+                                for _, name168 in pairs168:
+                                    extra168.extend([name168 + '_好走', name168 + '_凡走',
+                                                     name168 + '_差', name168 + '_好走走数',
+                                                     name168 + '_凡走走数'])
+                                st.dataframe(comparison168[extra168], hide_index=True,
+                                             use_container_width=True)
+                                st.caption('残1000mラップ幅は小さいほど一定。ただし差の正負だけで良し悪しは判断できません。')
+                            st.download_button('好走・凡走ラップ比較をCSVで保存',
+                                               comparison168.to_csv(index=False).encode('utf-8-sig'),
+                                               file_name='keiba_good_bad_lap_v168.csv',
+                                               mime='text/csv', use_container_width=True)
+                        else:
+                            st.info('比較対象の着順・ラップがありません。')
                         with st.expander('確認率・保留レース・データ量を見る', expanded=False):
                             st.dataframe(wide166[['馬名','保留','分類済み','対象候補','未確認','確認率']],
                                          hide_index=True, use_container_width=True)
