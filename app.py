@@ -1,4 +1,6 @@
-import re
+Ver.20.8.5 更新用 app.py
+コードをコピーする場合は下のボタン。おすすめは app.py を直接保存して GitHub にアップロードする方法です。
+コード全文をコピーimport re
 import json
 from pathlib import Path
 import time
