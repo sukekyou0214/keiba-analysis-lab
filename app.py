@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.14.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.14.1')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -323,7 +323,7 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
-    """横スクロール中も馬番＋馬名2文字を固定。元の馬名は欠落させない。"""
+    """横スクロール中も馬番＋馬名3文字を固定。元の馬名は欠落させない。"""
     import html as _html
     labels = labels or {}
     cols = [c for c in columns if c in frame.columns]
@@ -338,7 +338,7 @@ def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
             if idx == 0 and cols[0] == '馬名':
                 # 既存の馬番表示が「1 クロワデュノール」でも、元の正式馬名だけでも対応。
                 m = re.match(r'^([0-9０-９]+)\s*(.+)$', raw)
-                short = m.group(1) + ' ' + m.group(2)[:2] if m else raw[:4]
+                short = m.group(1) + ' ' + m.group(2)[:3] if m else raw[:5]
                 cells.append('<td class="k-name" title="' + _html.escape(raw, quote=True)
                              + '">' + _html.escape(short) + '</td>')
             else:
@@ -354,7 +354,7 @@ def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
         'vertical-align:top;white-space:normal;background:#111827;color:#f4f5f8;}'
         '.k-table th{position:sticky;top:0;background:#263040;z-index:1;}'
         '.k-table td:first-child,.k-table th:first-child{position:sticky;left:0;'
-        'width:88px;min-width:88px;max-width:88px;white-space:nowrap;'
+        'width:118px;min-width:118px;max-width:118px;white-space:nowrap;'
         'background:#1c2534;z-index:2;box-shadow:2px 0 5px #0007;font-weight:700;}'
         '.k-table th:first-child{background:#263040;z-index:3;'
         'font-size:0;} .k-table th:first-child:after{content:"馬番＋馬名";font-size:13px;}</style>',
@@ -2219,7 +2219,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.14.0')
+    st.caption('競馬分析ラボ Ver.20.14.1')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
