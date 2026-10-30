@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.7')
+st.title('🏇 競馬分析ラボ Ver.16.7.1')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1727,16 +1727,25 @@ if st.session_state['analysis_visible_v1581']:
                                                numeric_wide167.to_csv(index=False).encode('utf-8-sig'),
                                                file_name='keiba_lap_numeric_v167.csv',
                                                mime='text/csv', use_container_width=True)
-                            with st.expander('数値の根拠になったレースを確認（Ver.16.7）', expanded=False):
+                            with st.expander('数値の根拠になったレースを確認（Ver.16.7.1）', expanded=False):
                                 reason167 = numeric_source167.loc[numeric_source167['馬券内167']].copy()
                                 if not reason167.empty:
-                                    reason167 = reason167.merge(
-                                        shapes16[['レースID'] + [c for c in ['レース名', '開催日', '展開タイプ'] if c in shapes16.columns]]
-                                        .drop_duplicates('レースID'),
-                                        on='レースID', how='left', suffixes=('', '_ラップ'))
+                                    # sampleにもレースIDが存在する場合、merge後はレースID_x / レースID_y
+                                    # になり得る。常に正規化済みの_rid16を照合キーに使う。
+                                    info167 = shapes16[['レースID'] + [
+                                        c for c in ['レース名', '開催日', '展開タイプ'] if c in shapes16.columns
+                                    ]].drop_duplicates('レースID').copy()
+                                    info167['_rid16'] = (info167['レースID'].fillna('').astype(str)
+                                        .str.strip().str.replace(r'\.0$', '', regex=True))
+                                    info167 = info167.drop(columns=['レースID']).drop_duplicates('_rid16')
+                                    # 同名の既存列は混在させず、ラップ集計側を表示する。
+                                    reason167 = reason167.drop(columns=[
+                                        c for c in ['レース名', '開催日', '展開タイプ'] if c in reason167.columns
+                                    ])
+                                    reason167 = reason167.merge(info167, on='_rid16', how='left')
                                     reason167 = display_horse_column(reason167, horses, st.session_state.auto_numbers)
                                     for col167 in ['レース名', '開催日', '展開タイプ']:
-                                        if col167 not in reason167:
+                                        if col167 not in reason167.columns:
                                             reason167[col167] = ''
                                     detail_cols167 = ['馬名', 'レース名', '開催日', '着順_数値', '展開タイプ'] + metric_cols167
                                     st.dataframe(reason167[detail_cols167], hide_index=True,
