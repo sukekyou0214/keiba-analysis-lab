@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.6.1')
+st.title('🏇 競馬分析ラボ Ver.16.7')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1667,6 +1667,82 @@ if st.session_state['analysis_visible_v1581']:
                                            wide166[all_cols166].to_csv(index=False).encode('utf-8-sig'),
                                            file_name='keiba_lap_horse_wide_v166.csv',
                                            mime='text/csv', use_container_width=True)
+                        # Ver.16.7: 分類保留のレースでも数値を活用する比較表。
+                        # いずれも各馬が記録した個別ラップではなく、出走したレース全体のラップ。
+                        metric_cols167 = ['終盤加速幅_秒', '残1000m相対加速_秒', '残1000mラップ幅_秒']
+                        shape_metrics167 = shapes16.copy()
+                        shape_metrics167['レースID'] = (shape_metrics167['レースID'].fillna('').astype(str)
+                                                           .str.strip().str.replace(r'\.0$', '', regex=True))
+                        shape_metrics167 = shape_metrics167.loc[
+                            shape_metrics167['検証'].eq('OK')].drop_duplicates('レースID').copy()
+                        for metric167 in metric_cols167:
+                            if metric167 not in shape_metrics167.columns:
+                                shape_metrics167[metric167] = float('nan')
+                            shape_metrics167[metric167] = pd.to_numeric(shape_metrics167[metric167], errors='coerce')
+                        # 分類用ラップを取得できたものだけ対象にする（全件解析結果から再計算不要）。
+                        numeric_source167 = sample.merge(
+                            shape_metrics167[['レースID'] + metric_cols167],
+                            left_on='_rid16', right_on='レースID', how='inner')
+                        numeric_source167 = numeric_source167.drop_duplicates(['馬名', '_rid16']).copy()
+                        numeric_source167['着順_数値'] = pd.to_numeric(
+                            numeric_source167['着順_数値'], errors='coerce')
+                        numeric_source167['馬券内167'] = numeric_source167['着順_数値'].between(1, 3)
+                        numeric_rows167 = []
+                        for horse167 in ordered_horses166:
+                            horse_df167 = numeric_source167.loc[numeric_source167['馬名'].eq(horse167)]
+                            good_df167 = horse_df167.loc[horse_df167['馬券内167']]
+                            row167 = {'馬名': horse167,
+                                      'ラップ確認走数': len(horse_df167),
+                                      '好走走数': len(good_df167)}
+                            for source_col167, short_col167 in [
+                                ('終盤加速幅_秒', '好走時_終盤加速秒'),
+                                ('残1000m相対加速_秒', '好走時_残1000m加速秒'),
+                                ('残1000mラップ幅_秒', '好走時_残1000mラップ幅秒')]:
+                                series167 = good_df167[source_col167].dropna()
+                                row167[short_col167] = round(float(series167.mean()), 2) if not series167.empty else float('nan')
+                                row167[short_col167 + '_対象走数'] = int(len(series167))
+                            numeric_rows167.append(row167)
+                        numeric_wide167 = pd.DataFrame(numeric_rows167)
+                        if not numeric_wide167.empty:
+                            numeric_wide167 = display_horse_column(
+                                numeric_wide167, horses, st.session_state.auto_numbers)
+                            st.subheader('加速・持続ラップの比較（Ver.16.7）')
+                            st.caption('**3着以内に好走したレースの平均値**。馬自身の個別ラップ・能力値ではなく、経験したレース全体のラップ構成です。分類保留のレースも含めます。')
+                            st.caption('終盤加速：直前600mよりラスト600mが何秒/200m速いか。残1000m加速：直前基準より残1000m平均が何秒速いか。ラップ幅：残1000mの最速と最遅の差（小さいほど一定）。')
+                            display_cols167 = ['馬名', '好走時_終盤加速秒',
+                                               '好走時_残1000m加速秒', '好走時_残1000mラップ幅秒',
+                                               '好走走数', 'ラップ確認走数']
+                            display167 = numeric_wide167[display_cols167].copy()
+                            st.dataframe(display167, hide_index=True, use_container_width=True,
+                                         height=min(690, 45 + 36 * len(display167)),
+                                         column_config={
+                                             '馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
+                                             '好走時_終盤加速秒': st.column_config.NumberColumn('終盤加速', format='%.2f'),
+                                             '好走時_残1000m加速秒': st.column_config.NumberColumn('残1000m加速', format='%.2f'),
+                                             '好走時_残1000mラップ幅秒': st.column_config.NumberColumn('残1000mラップ幅', format='%.2f'),
+                                             '好走走数': st.column_config.NumberColumn('好走数', format='%d走'),
+                                             'ラップ確認走数': st.column_config.NumberColumn('確認数', format='%d走')
+                                         })
+                            st.download_button('加速・持続ラップ比較をCSVで保存',
+                                               numeric_wide167.to_csv(index=False).encode('utf-8-sig'),
+                                               file_name='keiba_lap_numeric_v167.csv',
+                                               mime='text/csv', use_container_width=True)
+                            with st.expander('数値の根拠になったレースを確認（Ver.16.7）', expanded=False):
+                                reason167 = numeric_source167.loc[numeric_source167['馬券内167']].copy()
+                                if not reason167.empty:
+                                    reason167 = reason167.merge(
+                                        shapes16[['レースID'] + [c for c in ['レース名', '開催日', '展開タイプ'] if c in shapes16.columns]]
+                                        .drop_duplicates('レースID'),
+                                        on='レースID', how='left', suffixes=('', '_ラップ'))
+                                    reason167 = display_horse_column(reason167, horses, st.session_state.auto_numbers)
+                                    for col167 in ['レース名', '開催日', '展開タイプ']:
+                                        if col167 not in reason167:
+                                            reason167[col167] = ''
+                                    detail_cols167 = ['馬名', 'レース名', '開催日', '着順_数値', '展開タイプ'] + metric_cols167
+                                    st.dataframe(reason167[detail_cols167], hide_index=True,
+                                                 use_container_width=True)
+                                else:
+                                    st.info('この条件で3着以内のラップ確認レースはありません。')
                         with st.expander('確認率・保留レース・データ量を見る', expanded=False):
                             st.dataframe(wide166[['馬名','保留','分類済み','対象候補','未確認','確認率']],
                                          hide_index=True, use_container_width=True)
