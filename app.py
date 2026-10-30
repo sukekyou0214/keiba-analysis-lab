@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.1')
+st.title('🏇 競馬分析ラボ Ver.16.2')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -620,7 +620,7 @@ def get_lap_table_test_v1594(race_id):
 
 
 def classify_lap_shape_v16(lap_text, distance, validation='OK'):
-    """200mラップによる試験分類。レース展開の特徴であり、個々の馬の適性ではない。"""
+    """200mラップ試験分類。持続性と絶対的な速さを分けて評価する（暫定）。"""
     if str(validation) != 'OK':
         return {'展開タイプ': '判定不可', '判定根拠': 'ラップ検証がOKではありません'}
     try:
@@ -633,15 +633,13 @@ def classify_lap_shape_v16(lap_text, distance, validation='OK'):
     except (ValueError, TypeError):
         return {'展開タイプ': '判定不可', '判定根拠': '距離とラップ数が不一致・不正'}
 
-    # 最初の200mはスタート加速区間なので序盤基準から除く。
     n = len(laps)
-    early = laps[1:max(3, n//2)]
+    early = laps[1:max(3, n // 2)]  # スタートの200mは除く
     early_avg = sum(early) / len(early)
     late = sum(laps[-3:]) / 3
     before = sum(laps[-6:-3]) / 3
     accel = before - late
     fade = late - early_avg
-    # 最後の1000m（5区間）で、序盤基準より速いラップがどれだけ持続したか。
     tail5 = laps[-5:]
     threshold = early_avg - 0.20
     quick = [x <= threshold for x in tail5]
@@ -651,9 +649,24 @@ def classify_lap_shape_v16(lap_text, distance, validation='OK'):
         longest = max(longest, run)
     sustained_count = sum(quick)
     tail_spread = max(tail5) - min(tail5)
-    # 持続性は「ラストだけの加速」と区別するため、残り1000〜600mにも速い区間を要求。
-    long_spurt = (sustained_count >= 4 and longest >= 3 and
-                  sum(quick[:2]) >= 1 and tail_spread <= 1.2 and fade < 0.7)
+
+    # 「速さ」と「持続」を切り離す。距離の違いに対する最適化は未実施。
+    tail_mean = sum(tail5) / len(tail5)
+    # 残り1000m直前の200m×3（1600mは最初の加速区間を除いた2区間）。
+    baseline = laps[-8:-5] if n >= 9 else laps[1:-5]
+    baseline_mean = sum(baseline) / len(baseline)
+    relative_gain = baseline_mean - tail_mean  # 正なら後半1000mが速い
+    early_tail_mean = sum(tail5[:2]) / 2  # 残1000〜600m
+    late_tail_mean = sum(tail5[-3:]) / 3
+    evenness = tail_spread <= 0.45
+    # 残1000〜600mの時点ですでに速く、後半1000m全体で持続しているか。
+    early_activation = early_tail_mean <= baseline_mean - 0.15
+    relative_sustained = (evenness and relative_gain >= 0.20 and
+                          early_activation and fade < 0.70)
+    # 旧方式の「高速ラップ」判定も根拠として残す。
+    absolute_sustained = (sustained_count >= 4 and longest >= 3 and
+                          sum(quick[:2]) >= 1 and tail_spread <= 1.2 and fade < 0.7)
+    long_spurt = relative_sustained or absolute_sustained
     sharp = accel >= 0.70 and not long_spurt
     exhausting = fade >= 0.70 and accel < 0.35
     if long_spurt:
@@ -664,18 +677,31 @@ def classify_lap_shape_v16(lap_text, distance, validation='OK'):
         kind = '消耗戦寄り'
     else:
         kind = '混合・判定保留'
-    reason = (f'序盤平均{early_avg:.2f}s／終盤600m{late:.2f}s／直前600m{before:.2f}s。'
-              f'終盤加速{accel:+.2f}s、終盤減速{fade:+.2f}s。'
-              f'残り1000m中の高速区間{sustained_count}/5、最長連続{longest}区間、ばらつき{tail_spread:.2f}s。'
-              '※独自の試作基準。距離・馬場・相手関係の影響に注意')
+    if long_spurt:
+        approach = '持続性＋相対加速' if relative_sustained else '高速区間連続（旧基準）'
+    else:
+        approach = '非該当'
+    reason = (f'残1000m平均{tail_mean:.2f}s／直前基準{baseline_mean:.2f}s／相対加速{relative_gain:+.2f}s。'
+              f'残1000〜600m平均{early_tail_mean:.2f}s／ラップ幅{tail_spread:.2f}s。'
+              f'高速区間{sustained_count}/5・連続最長{longest}。'
+              f'終盤600m加速{accel:+.2f}s／序盤比減速{fade:+.2f}s。'
+              f'ロンスパ根拠：{approach}。※独自の暫定分類であり各馬の脚質判定ではありません')
     return {'展開タイプ': kind, '判定根拠': reason,
-            '序盤平均_秒': round(early_avg,2),
-            '終盤600m平均_秒': round(late,2),
-            '終盤加速幅_秒': round(accel,2),
-            '終盤減速幅_秒': round(fade,2),
+            '序盤平均_秒': round(early_avg, 2),
+            '終盤600m平均_秒': round(late, 2),
+            '終盤加速幅_秒': round(accel, 2),
+            '終盤減速幅_秒': round(fade, 2),
             '高速区間数_残1000m': sustained_count,
             '最長高速連続区間数': longest,
-            '残1000mラップ幅_秒': round(tail_spread,2),
+            '残1000mラップ幅_秒': round(tail_spread, 2),
+            '残1000m平均_秒': round(tail_mean, 2),
+            '残1000m直前基準_秒': round(baseline_mean, 2),
+            '残1000m相対加速_秒': round(relative_gain, 2),
+            '残1000〜600m平均_秒': round(early_tail_mean, 2),
+            '残600m平均_秒': round(late_tail_mean, 2),
+            '持続性_ラップ幅045以内': '該当' if evenness else '非該当',
+            '早めの加速': '該当' if early_activation else '非該当',
+            'ロンスパ判定方法': approach,
             '持続判定': '該当' if long_spurt else '非該当'}
 
 
@@ -1415,8 +1441,8 @@ if st.session_state['analysis_visible_v1581']:
                                file_name='keiba_lap_table_test_v1594.csv', mime='text/csv',
                                use_container_width=True)
 
-    with st.expander('200mラップ展開タイプの試験分析（Ver.16.1）', expanded=False):
-        st.caption('先ほど成功した200mラップ取得処理を利用。判定基準は試作段階で、S/M/Hとは別軸です。過去成績やペースランキングを変更しません。')
+    with st.expander('200mラップ展開タイプの試験分析（Ver.16.2）', expanded=False):
+        st.caption('S/M/Hとは別軸の暫定分類。高速区間・残1000mの持続性・相対加速を別々に計算します。既存ランキングは変更しません。')
         sample = pace_compare_base.copy()
         if 'レースID' in sample.columns:
             sample['_rid16'] = sample['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
@@ -1453,7 +1479,7 @@ if st.session_state['analysis_visible_v1581']:
             st.write('**レース単位の暫定判定結果**')
             st.dataframe(shapes16, hide_index=True, use_container_width=True)
             st.download_button('展開タイプ試験結果をCSVで保存', shapes16.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_shape_v161.csv', mime='text/csv', use_container_width=True)
+                               file_name='keiba_lap_shape_v162.csv', mime='text/csv', use_container_width=True)
             valid16 = shapes16[shapes16['展開タイプ'].ne('判定不可')][['レースID','展開タイプ']].copy()
             if not valid16.empty and 'レースID' in sample.columns:
                 linked16 = sample.merge(valid16, left_on='_rid16', right_on='レースID', how='inner', suffixes=('', '_分類'))
