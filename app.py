@@ -11,8 +11,8 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.17.3')
-st.caption('URLを入れて取得 → 総合診断を見る。細かい管理・検証は別画面に収納。')
+st.title('🏇 競馬分析ラボ Ver.17.4')
+st.caption('URLを入力して一括取得。完了後は総合診断をすぐ表示。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
@@ -1087,7 +1087,7 @@ if race_id:
     st.query_params['race_id'] = race_id
 if race_input.strip():
     if race_id:
-        st.success(f'レースID：{race_id}')
+        st.caption(f'レースID：{race_id}')
     else:
         st.warning('正しいURLまたは12桁のレースIDを入力してください。')
 
@@ -1114,109 +1114,129 @@ if race_id and st.session_state.auto_race_id != race_id:
     except Exception as e:
         st.warning(f'保存済みデータの復元に失敗しました：{e}')
 if race_id and st.session_state.auto_df is not None:
-    st.success(f'データ準備済み｜{len(st.session_state.auto_df)}走。下の総合診断をすぐ確認できます。')
+    prepared_data = st.session_state.auto_df
+    st.success(f'データ準備完了｜{len(prepared_data)}走。総合診断はこの下に表示しています。')
+if st.session_state.get('fetch_issues_v174') and st.session_state.get('fetch_issues_race_v174') == race_id:
+    st.warning('一部のデータを取得できませんでした。詳細は「精度チェック」で確認できます。')
+if st.session_state.get('fetch_fatal_v174') and st.session_state.get('fetch_issues_race_v174') == race_id:
+    st.error('一括取得を完了できませんでした。詳細は「精度チェック」を確認してください。')
+
 
 # URL入力から1タップで、出走馬・過去成績・上がり順位まで取得する。
 # 保存済みの成績は再利用し、上がり順位がまだない場合は追加照合する。
 if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='primary',
              disabled=not race_id, use_container_width=True):
-    horses_now = st.session_state.auto_horses.copy()
-    data_now = st.session_state.auto_df
-    try:
-        # 出馬表の表記が変わった場合も正式馬名・馬番を更新。既存成績は再取得しない。
+    st.session_state.pop('fetch_fatal_v174', None)
+    transient_progress_v174 = st.empty()
+    with transient_progress_v174.container():
+        st.caption('取得中だけ進捗と処理結果を表示します。完了後は自動で閉じます。')
+        st.session_state['fetch_issues_v174'] = []
+        st.session_state['fetch_issues_race_v174'] = race_id
+        horses_now = st.session_state.auto_horses.copy()
+        data_now = st.session_state.auto_df
         try:
-            latest_horses, latest_numbers = get_horses(race_id)
-            horses_now = latest_horses
-            st.session_state.auto_horses = latest_horses
-            st.session_state.auto_numbers = latest_numbers
-            if data_now is not None:
-                data_now = update_cached_names(data_now, latest_horses)
-                st.session_state.auto_df = data_now
-                save_race_cache(race_id, latest_horses, data_now)
-        except Exception as e:
+            # 出馬表の表記が変わった場合も正式馬名・馬番を更新。既存成績は再取得しない。
+            try:
+                latest_horses, latest_numbers = get_horses(race_id)
+                horses_now = latest_horses
+                st.session_state.auto_horses = latest_horses
+                st.session_state.auto_numbers = latest_numbers
+                if data_now is not None:
+                    data_now = update_cached_names(data_now, latest_horses)
+                    st.session_state.auto_df = data_now
+                    save_race_cache(race_id, latest_horses, data_now)
+            except Exception as e:
+                if not horses_now:
+                    raise
+                st.session_state['fetch_issues_v174'].append(f'出馬表更新情報：{e}')
+                st.warning(f'出馬表の更新情報は取得できませんでした：{e}')
             if not horses_now:
-                raise
-            st.warning(f'出馬表の更新情報は取得できませんでした：{e}')
-        if not horses_now:
-            with st.spinner('① 出馬表から出走馬を取得中…'):
-                horses_now, nums_now = get_horses(race_id)
-                st.session_state.auto_horses = horses_now
-                st.session_state.auto_numbers = nums_now
-        if data_now is None:
-            datasets = []
-            horse_errors = []
-            progress = st.progress(0)
-            status = st.empty()
-            for i, (horse_id, name) in enumerate(horses_now.items(), 1):
-                status.write(f'② 過去成績を取得中：{name}（{i}/{len(horses_now)}）')
-                try:
-                    datasets.append(get_results(horse_id, name))
-                except Exception as e:
-                    horse_errors.append(f'{name}：{e}')
-                progress.progress(i / len(horses_now))
-                if i < len(horses_now):
-                    time.sleep(1)
-            status.empty()
-            progress.empty()
-            if not datasets:
-                raise ValueError('過去成績を1件も取得できませんでした')
-            data_now = prepare(convert_auto(pd.concat(datasets, ignore_index=True)))
-            st.session_state.auto_df = data_now
-            save_race_cache(race_id, horses_now, data_now)
-            st.success(f'過去成績：{len(data_now)}走を取得・保存しました')
-            if horse_errors:
-                st.warning('取得できなかった馬：' + ' / '.join(horse_errors))
-        else:
-            st.info(f'② 保存済みの過去成績 {len(data_now)}走を再利用します')
-
-        # 1レースにつき最大1回の照合。失敗があっても、取得済みデータを保持する。
-        try:
-            with st.spinner('③ 直近5走の上がり順位を照合しています…'):
-                updated, checked, agari_errors = add_recent_agari_ranks(data_now)
-            st.session_state.auto_df = updated
-            save_race_cache(race_id, horses_now, updated)
-            count = int(updated['上がり順位'].notna().sum())
-            st.success(f'取得完了！ 出走馬{len(horses_now)}頭・過去成績{len(updated)}走・上がり順位{count}走（今回照合{checked}レース）')
-            if agari_errors:
-                st.warning(f'上がり順位を取得できなかったレース：{len(agari_errors)}件。例：{agari_errors[0]}')
-        except Exception as e:
-            st.warning(f'過去成績は保存済みですが、上がり順位の照合は失敗しました：{e}。同じボタンで再試行できます。')
-
-        # Ver.17.3: netkeibaのペースも同じボタンで差分取得。途中10件ごとに保存する。
-        pace_work = st.session_state.auto_df
-        if pace_work is not None and 'レースID' in pace_work.columns:
-            pids = pace_work['レースID'].fillna('').astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-            valid_pids = pids[pids.str.fullmatch(r'\d{12}')].drop_duplicates().tolist()
-            old_pace = pace_work['netkeibaペース'].fillna('').astype(str).str.strip() if 'netkeibaペース' in pace_work.columns else pd.Series('', index=pace_work.index)
-            acquired = set(pids[old_pace.isin(['スロー寄り','ミドル寄り','ハイ寄り'])])
-            pending_pids = [r for r in valid_pids if r not in acquired]
-            if pending_pids:
-                st.caption(f'S/M/Hの未取得分 {len(pending_pids)}レースを追加取得中（10件ごと保存）')
-                pace_progress = st.progress(0)
-                new_paces, errors = {}, []
-                for j, pr in enumerate(pending_pids, 1):
+                with st.spinner('① 出馬表から出走馬を取得中…'):
+                    horses_now, nums_now = get_horses(race_id)
+                    st.session_state.auto_horses = horses_now
+                    st.session_state.auto_numbers = nums_now
+            if data_now is None:
+                datasets = []
+                horse_errors = []
+                progress = st.progress(0)
+                status = st.empty()
+                for i, (horse_id, name) in enumerate(horses_now.items(), 1):
+                    status.write(f'② 過去成績を取得中：{name}（{i}/{len(horses_now)}）')
                     try:
-                        new_paces[pr] = get_netkeiba_pace(pr)
-                    except Exception as ex:
-                        errors.append({'レースID':pr,'状態':'取得不可','理由':str(ex)[:180]})
-                    if j % 10 == 0 or j == len(pending_pids):
-                        if new_paces:
-                            pace_work = apply_netkeiba_pace(pace_work, new_paces)
-                            st.session_state.auto_df = pace_work
-                            save_race_cache(race_id, horses_now, pace_work)
-                            new_paces.clear()
-                        st.session_state['pace_v157_failed'] = errors.copy()
-                    pace_progress.progress(j/len(pending_pids))
-                    if j < len(pending_pids):
-                        time.sleep(0.35)
-                pace_progress.empty()
-                st.success(f'S/M/Hの差分取得完了：今回 {len(pending_pids)-len(errors)}/{len(pending_pids)} レース')
-                if errors:
-                    st.warning(f'S/M/Hを取得できなかったレース：{len(errors)}件。精度チェックで確認できます。')
+                        datasets.append(get_results(horse_id, name))
+                    except Exception as e:
+                        horse_errors.append(f'{name}：{e}')
+                    progress.progress(i / len(horses_now))
+                    if i < len(horses_now):
+                        time.sleep(1)
+                status.empty()
+                progress.empty()
+                if not datasets:
+                    raise ValueError('過去成績を1件も取得できませんでした')
+                data_now = prepare(convert_auto(pd.concat(datasets, ignore_index=True)))
+                st.session_state.auto_df = data_now
+                save_race_cache(race_id, horses_now, data_now)
+                st.success(f'過去成績：{len(data_now)}走を取得・保存しました')
+                if horse_errors:
+                    st.session_state['fetch_issues_v174'].append('過去成績の取得失敗：' + ' / '.join(horse_errors))
+                    st.warning('取得できなかった馬：' + ' / '.join(horse_errors))
             else:
-                st.caption('S/M/H判定は保存済みデータを再利用しました。')
-    except Exception as e:
-        st.error(f'まとめて取得できませんでした：{e}')
+                st.info(f'② 保存済みの過去成績 {len(data_now)}走を再利用します')
+
+            # 1レースにつき最大1回の照合。失敗があっても、取得済みデータを保持する。
+            try:
+                with st.spinner('③ 直近5走の上がり順位を照合しています…'):
+                    updated, checked, agari_errors = add_recent_agari_ranks(data_now)
+                st.session_state.auto_df = updated
+                save_race_cache(race_id, horses_now, updated)
+                count = int(updated['上がり順位'].notna().sum())
+                st.success(f'取得完了！ 出走馬{len(horses_now)}頭・過去成績{len(updated)}走・上がり順位{count}走（今回照合{checked}レース）')
+                if agari_errors:
+                    st.session_state['fetch_issues_v174'].append(f'上がり順位取得不可：{len(agari_errors)}レース')
+                    st.warning(f'上がり順位を取得できなかったレース：{len(agari_errors)}件。例：{agari_errors[0]}')
+            except Exception as e:
+                st.session_state['fetch_issues_v174'].append(f'上がり順位の照合失敗：{e}')
+                st.warning(f'過去成績は保存済みですが、上がり順位の照合は失敗しました：{e}。同じボタンで再試行できます。')
+
+            # Ver.17.3: netkeibaのペースも同じボタンで差分取得。途中10件ごとに保存する。
+            pace_work = st.session_state.auto_df
+            if pace_work is not None and 'レースID' in pace_work.columns:
+                pids = pace_work['レースID'].fillna('').astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+                valid_pids = pids[pids.str.fullmatch(r'\d{12}')].drop_duplicates().tolist()
+                old_pace = pace_work['netkeibaペース'].fillna('').astype(str).str.strip() if 'netkeibaペース' in pace_work.columns else pd.Series('', index=pace_work.index)
+                acquired = set(pids[old_pace.isin(['スロー寄り','ミドル寄り','ハイ寄り'])])
+                pending_pids = [r for r in valid_pids if r not in acquired]
+                if pending_pids:
+                    st.caption(f'S/M/Hの未取得分 {len(pending_pids)}レースを追加取得中（10件ごと保存）')
+                    pace_progress = st.progress(0)
+                    new_paces, errors = {}, []
+                    for j, pr in enumerate(pending_pids, 1):
+                        try:
+                            new_paces[pr] = get_netkeiba_pace(pr)
+                        except Exception as ex:
+                            errors.append({'レースID':pr,'状態':'取得不可','理由':str(ex)[:180]})
+                        if j % 10 == 0 or j == len(pending_pids):
+                            if new_paces:
+                                pace_work = apply_netkeiba_pace(pace_work, new_paces)
+                                st.session_state.auto_df = pace_work
+                                save_race_cache(race_id, horses_now, pace_work)
+                                new_paces.clear()
+                            st.session_state['pace_v157_failed'] = errors.copy()
+                        pace_progress.progress(j/len(pending_pids))
+                        if j < len(pending_pids):
+                            time.sleep(0.35)
+                    pace_progress.empty()
+                    st.success(f'S/M/Hの差分取得完了：今回 {len(pending_pids)-len(errors)}/{len(pending_pids)} レース')
+                    if errors:
+                        st.session_state['fetch_issues_v174'].append(f'S/M/H取得不可：{len(errors)}レース')
+                        st.warning(f'S/M/Hを取得できなかったレース：{len(errors)}件。精度チェックで確認できます。')
+                else:
+                    st.caption('S/M/H判定は保存済みデータを再利用しました。')
+        except Exception as e:
+            st.session_state['fetch_fatal_v174'] = str(e)
+            st.error(f'まとめて取得できませんでした：{e}')
+    transient_progress_v174.empty()
+    st.rerun()
 
 def render_pace_check_and_retry():
     st.subheader('netkeibaのS/M/Hを全レース取得（Ver.15.8）')
@@ -1404,6 +1424,12 @@ with tab_main171:
 
 with tab_quality172:
     st.subheader('データの精度チェック')
+    if st.session_state.get('fetch_issues_race_v174') == race_id and st.session_state.get('fetch_issues_v174'):
+        with st.expander('直近の一括取得で発生した注意事項', expanded=False):
+            for issue in st.session_state['fetch_issues_v174']:
+                st.write('・' + str(issue))
+    if st.session_state.get('fetch_fatal_v174') and st.session_state.get('fetch_issues_race_v174') == race_id:
+        st.error(str(st.session_state['fetch_fatal_v174']))
     with st.expander('netkeiba S/M/H取得状況・未取得分の再取得', expanded=False):
         render_pace_check_and_retry()
     st.caption('普段の予想画面から独立した検証スペースです。取得元や判定根拠を必要なときだけ確認できます。')
