@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.8')
+st.title('🏇 競馬分析ラボ Ver.15.8.1')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -681,6 +681,7 @@ if 'auto_df' not in st.session_state:
     st.session_state.auto_df = None
 
 if race_id and st.session_state.auto_race_id != race_id:
+    st.session_state['analysis_visible_v1581'] = False
     st.session_state.auto_race_id = race_id
     st.session_state.auto_horses = {}
     st.session_state.auto_numbers = {}
@@ -929,7 +930,13 @@ else:
 view = st.radio('表示方法', ['横並び表', 'スマホ用カード'], horizontal=True)
 
 st.header('⑦ 分析する')
+# Streamlitはどのボタンでも再実行されるので、分析済み状態を保持する。
+# ラップ取得・CSVダウンロード等を押しても分析結果を消さない。
+if 'analysis_visible_v1581' not in st.session_state:
+    st.session_state['analysis_visible_v1581'] = False
 if st.button('分析する', type='primary', use_container_width=True):
+    st.session_state['analysis_visible_v1581'] = True
+if st.session_state['analysis_visible_v1581']:
     # Ver.14.6：先に各馬の「直近N走」を確定し、その範囲内で条件を適用する。
     # 日付が取得できない走は末尾に置き、元の並びを保持する。
     base = analysis_df.copy()
