@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.20.7')
+st.title('🏇 競馬分析ラボ Ver.20.8')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2170,57 +2170,52 @@ if analysis_df.empty:
     st.stop()
 st.caption(f'分析準備完了：{analysis_df["馬名"].nunique()}頭・{len(analysis_df)}走')
 
-# Ver.17.1: 通常利用は診断を最優先。保存済みラップから自動で計算する。
-# Streamlitのタブにより詳細分析のボタンや長い表を通常画面から分離する。
-# Ver.20.7: 通常の予想は3つの主タブだけ。品質確認と開発実験は別部門へ。
-# Ver.20.7: メイン3タブをiPhoneで押しやすい大型ナビゲーションにする。
-# ボタン以外の既存分析処理は変更せず、従来の詳細分析を維持。
+# Ver.20.8: iPhoneでは左上☰から縦型メニューを選択。
+# ペース予測式、データ取得、各馬の分析内容はVer.20.7から変更しない。
+with st.sidebar:
+    st.markdown('## 🏇 メニュー')
+    st.caption('見たい画面を選択してください。スマホでは左上の ☰ から開けます。')
+    selected_page208 = st.radio(
+        'メインメニュー',
+        ['🏇 総合診断', '🐎 各馬の特徴', '⚙️ 分析条件', '🧰 管理・検証'],
+        key='nav_page_v208', label_visibility='collapsed',
+    )
+    st.caption('管理・検証は通常の予想では使わないオプションです。')
+    st.divider()
+    st.caption('競馬分析ラボ Ver.20.8')
+
+# サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
+# 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
+# 非選択画面だけ描画後に消去し、既存の計算・操作を壊さないようにする。
 st.markdown("""
 <style>
-/* 画面幅いっぱいに表示する3つの主タブ。 */
-div[data-testid="stTabs"] > div[data-baseweb="tab-list"] {
-    display: flex !important;
-    width: 100% !important;
-    gap: 6px !important;
-    overflow: visible !important;
-    padding: 4px 0 10px !important;
-}
-div[data-testid="stTabs"] > div[data-baseweb="tab-list"] > button[role="tab"] {
-    flex: 1 1 0 !important;
-    min-width: 0 !important;
-    min-height: 70px !important;
-    white-space: normal !important;
-    overflow-wrap: anywhere !important;
-    padding: 12px 5px !important;
-    line-height: 1.4 !important;
+/* iPhoneの縦メニュー項目を大きく押しやすくする */
+section[data-testid="stSidebar"] div[role="radiogroup"] label {
+    min-height: 64px !important;
+    padding: 13px 14px !important;
+    border: 1px solid rgba(125,135,150,.32) !important;
+    border-radius: 12px !important;
+    margin-bottom: 8px !important;
     font-size: 18px !important;
-    font-weight: 750 !important;
-    text-align: center !important;
-    justify-content: center !important;
-    border: 1px solid rgba(130,140,160,.35) !important;
-    border-radius: 12px 12px 7px 7px !important;
-    background-color: rgba(120,130,150,.09) !important;
+    font-weight: 650 !important;
+    background: rgba(125,135,150,.08) !important;
 }
-div[data-testid="stTabs"] > div[data-baseweb="tab-list"] > button[role="tab"][aria-selected="true"] {
-    background-color: rgba(228,75,91,.14) !important;
-    border: 2px solid #ef5264 !important;
-    color: inherit !important;
-}
-@media (max-width: 600px) {
-    div[data-testid="stTabs"] > div[data-baseweb="tab-list"] { gap: 5px !important; }
-    div[data-testid="stTabs"] > div[data-baseweb="tab-list"] > button[role="tab"] {
-        min-height: 78px !important;
-        font-size: 16px !important;
-        padding: 11px 4px !important;
-    }
+section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+    border-color: #e45565 !important;
+    background: rgba(228,85,101,.14) !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
-tab_main171, tab_detail_short205, tab_detail171 = st.tabs(['🏇 総合診断', '📊 詳細分析', '⚙️ 詳細設定'])
-with st.expander('🧰 管理・検証（オプション）', expanded=False):
-    st.caption('普段の予想には不要です。取得状況の確認や開発中の検証を行う場合だけ使用してください。')
+if selected_page208 == '🧰 管理・検証':
+    st.caption('管理・検証（オプション）：本番用の品質確認と開発中の実験を分離しています。')
+else:
+    st.caption('画面の切り替え：左上の ☰ → 総合診断／各馬の特徴／分析条件')
+
+quality_holder208 = st.empty()
+with quality_holder208.container():
     tab_quality_live206, tab_quality172 = st.tabs(['✅ 運用品質チェック', '🧪 開発・実験ラボ'])
+
 with tab_quality_live206:
     st.subheader('運用品質チェック')
     st.caption('本番運用でも必要なデータ取得・欠測・エラーの確認だけを表示します。')
@@ -2239,9 +2234,10 @@ with tab_quality_live206:
                 good = int(analysis_df[field].notna().sum())
                 st.caption(f'{label}：値あり {good}/{len(analysis_df)}走（値の妥当性は別途確認が必要）')
 
-with tab_main171:
+main_holder208 = st.empty()
+with main_holder208.container():
     st.subheader('出走馬の総合診断')
-    st.caption('初期条件：各馬の直近10走のうちG1・G2・G3。操作なしで自動表示。条件を変える場合は「詳細分析」へ。')
+    st.caption('初期条件：各馬の直近10走のうちG1・G2・G3。操作なしで自動表示。条件を変える場合は「分析条件」へ。')
     quick171 = analysis_df.copy()
     if '日付' in quick171.columns:
         quick171 = quick171.sort_values('日付', ascending=False, na_position='last', kind='stable')
@@ -2418,7 +2414,7 @@ with tab_main171:
                                file_name='keiba_scenario_v182.csv',mime='text/csv',
                                use_container_width=True)
         if quick_shapes171.empty:
-            st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。詳細分析からラップを取得すると展開診断も加わります。')
+            st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。分析条件からラップを取得すると展開診断も加わります。')
         st.caption('「参考」「暫定」は少数データの目印。レース全体のラップを馬自身の個別ラップとして扱いません。')
         with st.expander('気になる馬の診断根拠を見る', expanded=False):
             chosen171 = tap_choice('馬を選ぶ', quick_display171['馬名'].tolist(), 'quick_diagnosis_horse_v171')
@@ -2431,9 +2427,13 @@ with tab_main171:
     else:
         st.info('診断に使える出走馬データがありません。')
 
-with tab_detail_short205:
+if selected_page208 != '🏇 総合診断':
+    main_holder208.empty()
+
+detail_holder208 = st.empty()
+with detail_holder208.container():
     st.subheader('各馬の特徴・根拠')
-    st.caption('普段の比較はここだけでOK。複雑な絞り込みや旧式の集計は「詳細設定」タブに移動しました。')
+    st.caption('普段の比較はここだけでOK。複雑な絞り込みや旧式の集計は「分析条件」にあります。')
     if 'quick_display171' in locals() and isinstance(quick_display171, pd.DataFrame) and not quick_display171.empty:
         summary_cols205 = [c for c in ['馬名','走りの総合診断','展開','信頼度'] if c in quick_display171.columns]
         st.dataframe(quick_display171[summary_cols205],hide_index=True,use_container_width=True,
@@ -2445,6 +2445,9 @@ with tab_detail_short205:
             st.caption(f"対象 {rec205.get('対象走数','—')}走／ラップ {rec205.get('ラップ確認走数','—')}走")
     else:
         st.info('先に出走馬の成績を取得してください。')
+
+if selected_page208 != '🐎 各馬の特徴':
+    detail_holder208.empty()
 
 with tab_quality172:
     st.subheader('開発・実験ラボ')
@@ -2729,7 +2732,11 @@ with tab_quality172:
         st.caption('格付け判定は取得ページの表記に依存します。G1・G2・G3と表示されても、根拠欄や実際のレース名と一致しているか確認してください。')
 
 
-with tab_detail171:
+if selected_page208 != '🧰 管理・検証':
+    quality_holder208.empty()
+
+settings_holder208 = st.empty()
+with settings_holder208.container():
     st.subheader('分析条件')
     mode = st.radio('分析モード', ['ランキング', '馬を比較'], horizontal=True)
     venue = tap_choice('競馬場', ['すべて'] + sorted(analysis_df['競馬場'].unique().tolist()), 'tap_競馬場_v153')
@@ -3547,3 +3554,6 @@ with tab_detail171:
                                        file_name='keiba_pace_validation_v151.csv', mime='text/csv', use_container_width=True)
 
         st.download_button('📥 分析結果をCSVで保存', data=display_horse_column(result, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
+
+if selected_page208 != '⚙️ 分析条件':
+    settings_holder208.empty()
