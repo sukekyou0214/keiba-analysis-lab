@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.9.1')
+st.title('🏇 競馬分析ラボ Ver.15.9.2')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -500,7 +500,7 @@ def parse_lap_html_v1591(html, race_id):
                 m = re.fullmatch(r'\s*(\d{3,4})\s*m\s*', cell.get_text(' ', strip=True), re.I)
                 if m:
                     vals.append(int(m.group(1)))
-            if len(vals) >= 2 and all(v % 200 == 0 for v in vals):
+            if len(vals) >= 1 and all(v % 200 == 0 for v in vals):
                 blocks.append((idx, vals))
         if not blocks:
             continue
@@ -511,12 +511,21 @@ def parse_lap_html_v1591(html, race_id):
             lines = []
             for tr in rows[header_index+1:end]:
                 cells = tr.find_all(['th','td'], recursive=False)
-                if len(cells) >= 2:
+                if len(cells) >= 1:
                     vals = [numbers(x) for x in cells]
                     if any(vals):
                         lines.append(vals)
             if not lines:
                 continue
+            # 最終ブロックが「1800m」の1列だけになる場合を処理。
+            # 累積と区間ラップが同一セル、別セル、別行のいずれでも拾う。
+            if width == 1:
+                flat = [v for line in lines for cell in line for v in cell]
+                if len(flat) >= 2:
+                    cv, lv = flat[0], flat[1]
+                    if 8 <= lv <= 25 and cv >= lv:
+                        segments[distances[0]] = (cv, lv)
+                        continue
             # ① 通過タイムの横1行＋ラップの横1行
             if len(lines) >= 2 and all(len(v)==1 for v in lines[0]) and all(len(v)==1 for v in lines[1]) and len(lines[0]) >= width and len(lines[1]) >= width and all(lines[1][i][0] < 30 for i in range(width)):
                 for d, cv, lv in zip(distances, lines[0], lines[1]):
@@ -544,6 +553,8 @@ def parse_lap_html_v1591(html, race_id):
             checks.append('途中の200m区間が欠けています')
         if race_distance is None:
             checks.append('レース距離を特定できません')
+        elif race_distance % 200 != 0:
+            checks.append('200m単位でないレース距離です')
         elif observed[-1] != race_distance or len(observed) != race_distance//200:
             checks.append(f'区間不足：{len(observed)}/{race_distance//200}区間')
         if any(not (8 <= v <= 25) for v in laps):
@@ -1221,16 +1232,27 @@ if st.session_state['analysis_visible_v1581']:
         st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
 
-    with st.expander('200mラップの試験取得（最大5レース・Ver.15.9.1）', expanded=False):
+    with st.expander('200mラップの試験取得（5レース＋1600m確認・Ver.15.9.2）', expanded=False):
         st.caption('ラップ表の上段（通過タイム）と下段（200mラップ）を区別して読み込み、合計・累積タイムを検証します。ランキングは変更しません。')
         sample_ids = []
         if 'レースID' in pace_compare_base.columns:
             sample_ids = (pace_compare_base['レースID'].fillna('').astype(str)
                           .str.replace(r'\.0$', '', regex=True))
             sample_ids = sample_ids[sample_ids.str.fullmatch(r'\d{12}')].drop_duplicates().head(5).tolist()
+        # 通常5レースに加えて、該当データがあれば1600mのレースを1件検証。
+        extra_1600 = ''
+        if 'レースID' in pace_compare_base.columns and '距離' in pace_compare_base.columns:
+            distance_1600 = pd.to_numeric(pace_compare_base['距離'], errors='coerce').eq(1600)
+            ids_1600 = (pace_compare_base.loc[distance_1600, 'レースID'].fillna('').astype(str)
+                        .str.replace(r'\.0$', '', regex=True))
+            candidates_1600 = ids_1600[ids_1600.str.fullmatch(r'\d{12}')]
+            extra_1600 = next((r for r in candidates_1600 if r not in sample_ids), '')
+            if extra_1600:
+                sample_ids.append(extra_1600)
+        st.caption('対象：通常の先頭5レース' + (' ＋1600mの追加1レース' if extra_1600 else '（1600mの追加対象なし）'))
         if not sample_ids:
             st.info('試験取得できるレースIDがありません。')
-        elif st.button('200mラップを5レース試験取得', key='lap_table_v1591'):
+        elif st.button('200mラップを試験取得', key='lap_table_v1592'):
             rows = []
             progress_lap = st.progress(0)
             for i, rid in enumerate(sample_ids, 1):
@@ -1242,13 +1264,13 @@ if st.session_state['analysis_visible_v1581']:
                                  '区間数':0, 'レース距離':'', '期待区間数':'', '合計秒':'', '検証':str(e)[:200], '表の一部':'',
                                  'ページURL':f'https://db.sp.netkeiba.com/race/{rid}/'})
                 progress_lap.progress(i / len(sample_ids))
-            st.session_state['lap_table_v1591_result'] = pd.DataFrame(rows)
-        if 'lap_table_v1591_result' in st.session_state:
-            lap_result = st.session_state['lap_table_v1591_result']
+            st.session_state['lap_table_v1592_result'] = pd.DataFrame(rows)
+        if 'lap_table_v1592_result' in st.session_state:
+            lap_result = st.session_state['lap_table_v1592_result']
             st.dataframe(lap_result, hide_index=True, use_container_width=True)
             st.download_button('200mラップ試験結果をCSVで保存',
                                lap_result.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_table_test_v1591.csv', mime='text/csv',
+                               file_name='keiba_lap_table_test_v1592.csv', mime='text/csv',
                                use_container_width=True)
 
     with st.expander('ペース判定の精度チェック（Ver.15.8）', expanded=False):
