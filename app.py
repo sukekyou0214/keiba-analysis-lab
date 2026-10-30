@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.5')
+st.title('🏇 競馬分析ラボ Ver.19.5.1')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -163,7 +163,11 @@ def estimate_field_pace_v19(data, names):
         lead = int((valid & p.eq(1)).sum())
         front = int((valid & p.le((f * .35).clip(lower=2))).sum())
         corners = h['通過順'] if '通過順' in h.columns else pd.Series('', index=h.index)
-        race_paces = h['推定ペース'] if '推定ペース' in h.columns else pd.Series('', index=h.index)
+        # 全頭再現では取得直後のnetkeibaペースが最も信頼できる。
+        # prepare()前に追加取得した場合、推定ペース列が未更新でも正しく使用する。
+        race_paces = (h['netkeibaペース'] if 'netkeibaペース' in h.columns
+                      else h['推定ペース'] if '推定ペース' in h.columns
+                      else pd.Series('', index=h.index))
         early_lead = early_front = en = 0
         lead_paces = {'S': 0, 'M': 0, 'H': 0}
         front_paces = {'S': 0, 'M': 0, 'H': 0}
@@ -316,7 +320,7 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 
-# ===== Ver.19.5: 過去レース全出走馬を対象とする事前データ検証 =====
+# ===== Ver.19.5.1: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
 # ただし、事前の走歴不足は必ず明示し、欠測を予測的中扱いしない。
 V195_TAG = {'スロー寄り': 'S', 'ミドル寄り': 'M', 'ハイ寄り': 'H'}
@@ -439,7 +443,10 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
             '序盤位置2走以上':int(known_count),'実際':actual,
             '予測':pred_tag or '保留','一致':('一致' if pred_tag==actual else '不一致') if pred_tag else '対象外',
             '取得状況':status,'逃げ候補':lead,'先行候補':front,
-            'S/M/H追加照会':pace_calls,'取得失敗詳細':' / '.join(failed)[:500],
+            'S/M/H追加照会':pace_calls,
+            '過去走ペース判定あり':int(full['netkeibaペース'].isin(V195_TAG).sum()) if not full.empty and 'netkeibaペース' in full.columns else 0,
+            '過去走対象':len(full),
+            '取得失敗詳細':' / '.join(failed)[:500],
             '予測根拠':explanation}
 
 
@@ -1966,7 +1973,7 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5・試験版）',expanded=False):
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5.1・試験版）',expanded=False):
         st.caption('まず3レースまで試験。結果表から当時の全出走馬を取得し、開催日より前の各馬の成績のみを使って予測します。')
         st.caption('出走全頭を取得しても、当時の事前走歴が欠けていれば「参考」扱いです。S/M/Hの照合結果は未検証モデルの試験結果です。')
         candidates195 = analysis_df.copy()
