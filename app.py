@@ -1,6 +1,4 @@
-Ver.20.8.4 iPhone用
-GitHubでapp.pyを更新するためのコード全文です。長いコピペが難しい場合は直接保存版を使ってね。
-コード全文をコピーimport re
+import re
 import json
 from pathlib import Path
 import time
