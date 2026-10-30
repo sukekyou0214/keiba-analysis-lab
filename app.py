@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.8')
+st.title('🏇 競馬分析ラボ Ver.16.9')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -20,6 +20,60 @@ METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
 ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード'], 'レース名': ['レース名'], '格付け根拠': ['格付け根拠']}
 
+
+
+def interpret_running_pattern(row):
+    """好走/凡走した *レース全体* のラップ差を説明する。能力スコアではない。"""
+    ng = int(row.get('好走走数', 0) or 0)
+    nb = int(row.get('凡走走数', 0) or 0)
+    if ng == 0:
+        return '好走データなし', '判定不可', '3着以内に入ったラップ確認レースがありません。'
+    if nb == 0:
+        return '凡走データなし', '判定不可', '4着以下のラップ確認レースがないため、好走・凡走の比較はできません。'
+    if min(ng, nb) < 2:
+        confidence = '参考（片側1走）'
+    elif min(ng, nb) < 3:
+        confidence = '暫定（片側2走）'
+    else:
+        confidence = '傾向（各3走以上）'
+    def diff(k):
+        x = row.get(k + '_差', float('nan'))
+        try:
+            x = float(x)
+            return x if pd.notna(x) else None
+        except (ValueError, TypeError):
+            return None
+    end, early, width = diff('終盤加速'), diff('残1000m加速'), diff('残1000mラップ幅')
+    labels, explanations = [], []
+    # 0.25秒/200mという差は表示上の仮閾値。統計的有意性を意味しない。
+    if end is not None and end >= 0.25:
+        labels.append('終盤加速型')
+        explanations.append('好走時は凡走時より終盤600mの加速が大きい')
+    elif end is not None and end <= -0.25:
+        labels.append('急加速に頼らない型')
+        explanations.append('好走時は凡走時ほど終盤の急加速を伴わない')
+    if early is not None and early >= 0.25:
+        labels.append('早め加速型')
+        explanations.append('好走時は残り1000mからのペースアップが大きい')
+    elif early is not None and early <= -0.25:
+        labels.append('早仕掛け不要型')
+        explanations.append('好走時は残り1000mからのペースアップが小さい')
+    if width is not None and width <= -0.30:
+        labels.append('一定ラップ型')
+        explanations.append('好走時は残り1000mのラップ変動が小さい')
+    elif width is not None and width >= 0.30:
+        labels.append('緩急対応型')
+        explanations.append('好走時は残り1000mのラップ変動が大きい')
+    if not labels:
+        return '特徴差が小さい', confidence, '今回の集計では好走時と凡走時に明瞭なラップ差がありません。'
+    # ラベルは多くても2つに整理。複数指標を総合し、元データを確認できるようにする。
+    ranked = list(zip(labels, explanations))
+    # 展開を説明する順番: 終盤加速 → 早め加速 → 持続性。3つ目は補足文だけに残す。
+    title = '＋'.join(x[0] for x in ranked[:2])
+    reason = '。'.join(x[1] for x in ranked) + '。'
+    if confidence.startswith('参考'):
+        reason += ' ※片側1走のため特に不確実です。'
+    return title, confidence, reason
 
 
 def tap_choice(label, options, key, format_func=None):
@@ -1810,6 +1864,31 @@ if st.session_state['analysis_visible_v1581']:
                                 st.dataframe(comparison168[extra168], hide_index=True,
                                              use_container_width=True)
                                 st.caption('残1000mラップ幅は小さいほど一定。ただし差の正負だけで良し悪しは判断できません。')
+                            st.subheader('どんな展開で好走しやすい？（Ver.16.9・自動解説）')
+                            st.caption('好走・凡走の**レース全体のラップ差**から特徴を自動要約。馬自身のラップや能力値ではありません。分類基準は試験用で、統計的な有意差を示すものではありません。')
+                            interpretations169 = []
+                            for _, row169 in comparison168.iterrows():
+                                label169, confidence169, reason169 = interpret_running_pattern(row169)
+                                interpretations169.append({'馬名': row169['馬名'],
+                                    '好走する展開の特徴': label169,
+                                    '判定の確かさ': confidence169,
+                                    '好走走数': int(row169['好走走数']),
+                                    '凡走走数': int(row169['凡走走数']),
+                                    '判定理由': reason169})
+                            interpretation_df169 = pd.DataFrame(interpretations169)
+                            st.dataframe(interpretation_df169[['馬名', '好走する展開の特徴', '判定の確かさ', '好走走数', '凡走走数']],
+                                         hide_index=True, use_container_width=True,
+                                         height=min(690, 45 + 36 * len(interpretation_df169)))
+                            with st.expander('なぜこの判定になった？（馬ごとの説明）', expanded=False):
+                                selected169 = tap_choice('確認する馬', interpretation_df169['馬名'].tolist(), 'interpret_horse169')
+                                rec169 = interpretation_df169[interpretation_df169['馬名'].eq(selected169)].iloc[0]
+                                st.markdown(f"**{rec169['好走する展開の特徴']}**　／　{rec169['判定の確かさ']}")
+                                st.write(rec169['判定理由'])
+                                st.caption('好走時と凡走時の比較で、各指標の差が0.25秒以上（ラップ幅は0.30秒以上）の場合に特徴として表示。閾値は暫定です。')
+                            st.download_button('好走展開の自動解説をCSVで保存',
+                                               interpretation_df169.to_csv(index=False).encode('utf-8-sig'),
+                                               file_name='keiba_running_pattern_v169.csv',
+                                               mime='text/csv', use_container_width=True)
                             st.download_button('好走・凡走ラップ比較をCSVで保存',
                                                comparison168.to_csv(index=False).encode('utf-8-sig'),
                                                file_name='keiba_good_bad_lap_v168.csv',
