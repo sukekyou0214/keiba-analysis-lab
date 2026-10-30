@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.3')
+st.title('🏇 競馬分析ラボ Ver.15.4')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -33,7 +33,10 @@ def tap_choice(label, options, key, format_func=None):
     shown = str(format_func(current) if format_func else current)
     with st.popover(f'{label}：{shown}', use_container_width=True):
         # 選択はラジオボタン。iPhoneの文字入力キーボードは開かない。
-        st.radio(label, choices, key=key, format_func=format_func, label_visibility='collapsed')
+        radio_args = {'key': key, 'label_visibility': 'collapsed'}
+        if format_func is not None:
+            radio_args['format_func'] = format_func
+        st.radio(label, choices, **radio_args)
     return st.session_state[key]
 
 
@@ -164,22 +167,89 @@ def parse_race_id(raw):
     return ''
 
 
+def clean_horse_name(raw):
+    """馬番が混入したリンク文字列を正規化。省略形は採用しない。"""
+    raw = re.sub(r'\s+', '', str(raw or ''))
+    return re.sub(r'^[0-9０-９]{1,2}(?:番)?', '', raw).strip()
+
+
+def horse_name_candidate(a):
+    """出馬表の正式表記（リンクのtitleなど）を優先。"""
+    names = [a.get('title', ''), a.get('aria-label', ''), a.get_text(' ', strip=True)]
+    for el in [a.find('span', class_=re.compile('HorseName', re.I)), a.find('img')]:
+        if el is not None:
+            names.extend([el.get('title', ''), el.get('alt', '')])
+    names = [clean_horse_name(x) for x in names]
+    names = [x for x in names if re.fullmatch(r'[\u3040-\u30ff\u3400-\u9fffー・Ａ-Ｚａ-ｚA-Za-z]+', x)]
+    return max(names, key=len, default='')
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def get_horses(race_id):
+    """馬名は正式表記の最良候補を採用し、同じ馬IDの後続短縮リンクで上書きしない。"""
     url = f'https://race.netkeiba.com/race/shutuba.html?race_id={race_id}'
     res = requests.get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, 'html.parser')
-    horses = {}
+    horses, numbers = {}, {}
+    # 出馬表の各馬の行を優先（馬番は枠番ではなく「馬番」欄から取得）。
+    for row in soup.select('tr.HorseList, tr[class*="HorseList"]'):
+        links = row.select('td.HorseInfo a[href*="/horse/"], td[class*="HorseInfo"] a[href*="/horse/"]')
+        if not links:
+            links = row.select('a[href*="/horse/"]')
+        for a in links:
+            hit = re.search(r'/horse/(\d{10})', a.get('href', ''))
+            if not hit:
+                continue
+            hid = hit.group(1)
+            name = horse_name_candidate(a)
+            if name and (hid not in horses or len(name) > len(horses[hid])):
+                horses[hid] = name
+            cell = row.select_one('td.Umaban, td[class*="Umaban"], .Umaban')
+            if cell is not None:
+                txt = cell.get_text(' ', strip=True)
+                num = re.search(r'(?<!\d)(1[0-9]|[1-9]|2[0-9])(?!\d)', txt)
+                if num:
+                    numbers[hid] = int(num.group(1))
+            break
+    # HTML構造が変わっても最低限取得できるようにする。
     for a in soup.select('a[href*="/horse/"]'):
-        name = a.get_text(' ', strip=True)
-        match = re.search(r'/horse/(\d{10})', a.get('href', ''))
-        if match and name:
-            horses[match.group(1)] = name
+        hit = re.search(r'/horse/(\d{10})', a.get('href', ''))
+        if not hit:
+            continue
+        hid = hit.group(1)
+        name = horse_name_candidate(a)
+        if name and (hid not in horses or len(name) > len(horses[hid])):
+            horses[hid] = name
     if not horses:
         raise ValueError('出走馬を取得できませんでした。ページ構造やアクセス制限を確認してください。')
-    return horses
+    return horses, numbers
+
+
+def update_cached_names(data, horses):
+    """既存キャッシュに短縮馬名があっても馬IDを使って正式名へ復元。"""
+    if data is None or '馬ID' not in data.columns or '馬名' not in data.columns:
+        return data
+    result = data.copy()
+    ids = result['馬ID'].astype(str).str.replace(r'\.0$', '', regex=True)
+    fixed = ids.map(horses)
+    result['馬名'] = fixed.fillna(result['馬名'])
+    return result
+
+
+def horse_display(name, horses, numbers):
+    hid = next((hid for hid, official in horses.items() if official == name), None)
+    num = numbers.get(hid) if hid else None
+    return f'{num} {name}' if num else name
+
+
+def display_horse_column(df, horses, numbers):
+    if '馬名' not in df.columns or not horses:
+        return df
+    shown = df.copy()
+    shown['馬名'] = shown['馬名'].map(lambda n: horse_display(n, horses, numbers))
+    return shown
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -516,12 +586,15 @@ if 'auto_race_id' not in st.session_state:
     st.session_state.auto_race_id = ''
 if 'auto_horses' not in st.session_state:
     st.session_state.auto_horses = {}
+if 'auto_numbers' not in st.session_state:
+    st.session_state.auto_numbers = {}
 if 'auto_df' not in st.session_state:
     st.session_state.auto_df = None
 
 if race_id and st.session_state.auto_race_id != race_id:
     st.session_state.auto_race_id = race_id
     st.session_state.auto_horses = {}
+    st.session_state.auto_numbers = {}
     st.session_state.auto_df = None
     try:
         restored = load_race_cache(race_id)
@@ -539,10 +612,25 @@ if st.button('出走馬・過去成績・上がり順位をまとめて取得', 
     horses_now = st.session_state.auto_horses.copy()
     data_now = st.session_state.auto_df
     try:
+        # 出馬表の表記が変わった場合も正式馬名・馬番を更新。既存成績は再取得しない。
+        try:
+            latest_horses, latest_numbers = get_horses(race_id)
+            horses_now = latest_horses
+            st.session_state.auto_horses = latest_horses
+            st.session_state.auto_numbers = latest_numbers
+            if data_now is not None:
+                data_now = update_cached_names(data_now, latest_horses)
+                st.session_state.auto_df = data_now
+                save_race_cache(race_id, latest_horses, data_now)
+        except Exception as e:
+            if not horses_now:
+                raise
+            st.warning(f'出馬表の更新情報は取得できませんでした：{e}')
         if not horses_now:
             with st.spinner('① 出馬表から出走馬を取得中…'):
-                horses_now = get_horses(race_id)
+                horses_now, nums_now = get_horses(race_id)
                 st.session_state.auto_horses = horses_now
+                st.session_state.auto_numbers = nums_now
         if data_now is None:
             datasets = []
             horse_errors = []
@@ -588,7 +676,7 @@ if st.button('出走馬・過去成績・上がり順位をまとめて取得', 
 horses = st.session_state.auto_horses
 if horses:
     st.success(f'出走馬：{len(horses)}頭')
-    st.write('、'.join(horses.values()))
+    st.write('、'.join(horse_display(name, horses, st.session_state.auto_numbers) for name in horses.values()))
 if st.session_state.auto_df is not None:
     available = int(st.session_state.auto_df['上がり順位'].notna().sum())
     st.caption(f'保存済みの過去成績：{len(st.session_state.auto_df)}走／上がり順位取得済み：{available}走。上がり順位は各馬の直近5走について照合します。')
@@ -658,12 +746,12 @@ with st.expander('過去レースの格付け一覧を確認', expanded=False):
         audit_view['レース結果URL'] = ids.apply(lambda v: f'https://race.netkeiba.com/race/result.html?race_id={v}' if re.fullmatch(r'\d{12}', v) else '')
         audit_view = audit_view.drop(columns=['レースID'])
     st.write(f'表示：{len(audit_view)}走（元データ：{len(analysis_df)}走）')
-    st.dataframe(audit_view, hide_index=True, use_container_width=True,
+    st.dataframe(display_horse_column(audit_view, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
                  column_config={'馬名': st.column_config.TextColumn('馬名', width='medium'),
                                 'レース名': st.column_config.TextColumn('レース名', width='medium'),
                                 '格付け根拠': st.column_config.TextColumn('格付け根拠', width='large'),
                                 'レース結果URL': st.column_config.LinkColumn('レース結果を確認', display_text='結果を見る')})
-    st.download_button('格付けチェック表をCSVで保存', audit_view.to_csv(index=False).encode('utf-8-sig'),
+    st.download_button('格付けチェック表をCSVで保存', display_horse_column(audit_view, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                        file_name='keiba_grade_audit.csv', mime='text/csv', use_container_width=True)
     missing_names = int(analysis_df['レース名'].fillna('').eq('').sum())
     if missing_names:
@@ -742,7 +830,7 @@ if st.button('分析する', type='primary', use_container_width=True):
     count_check = count_check.sort_values(['条件一致走数', '馬名'], ascending=[False, True])
     with st.expander('集計対象走数の確認（全馬）', expanded=False):
         st.caption('「直近対象走数」から、選んだレース格などに一致した「条件一致走数」だけをランキングに使用しています。0走の馬はランキングに出ません。')
-        st.dataframe(count_check, hide_index=True, use_container_width=True)
+        st.dataframe(display_horse_column(count_check, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
     rows = []
     for name, group in filtered.groupby('馬名'):
         row = summarize(group)
@@ -779,14 +867,14 @@ if st.button('分析する', type='primary', use_container_width=True):
             key_cols = ['順位', '馬名', '出走数', '指標対象走数', 'データ量', metric, '複勝率(%)', '平均4角', '上がり最速率(%)']
             compact_cols = [c for c in dict.fromkeys(key_cols) if c in result.columns]
             show_table = result if full_table else result[compact_cols]
-            st.dataframe(show_table, hide_index=True, use_container_width=True,
+            st.dataframe(display_horse_column(show_table, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
                          column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
         else:
-            st.dataframe(result.set_index('馬名').T, use_container_width=True)
+            st.dataframe(display_horse_column(result, horses, st.session_state.auto_numbers).set_index('馬名').T, use_container_width=True)
     else:
         for _, row in result.iterrows():
             with st.container(border=True):
-                label = f'🐎 {row["馬名"]}'
+                label = f'🐎 {horse_display(row["馬名"], horses, st.session_state.auto_numbers)}'
                 if mode == 'ランキング':
                     label = f'{int(row["順位"])}位 {label}'
                 st.markdown(f'### {label}')
@@ -803,10 +891,10 @@ if st.button('分析する', type='primary', use_container_width=True):
         used = filtered[[c for c in show_cols if c in filtered.columns]].copy()
         if '日付' in used.columns:
             used['日付'] = pd.to_datetime(used['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
-        st.dataframe(used, hide_index=True, use_container_width=True)
-        st.download_button('集計対象レース一覧をCSVで保存', data=used.to_csv(index=False).encode('utf-8-sig'),
+        st.dataframe(display_horse_column(used, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
+        st.download_button('集計対象レース一覧をCSVで保存', data=display_horse_column(used, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
-    st.subheader('ペース別の成績比較（Ver.15.3）')
+    st.subheader('ペース別の成績比較（Ver.15.4）')
     st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
     st.warning('これは前半・後半600mの差による暫定区分です。中間ラップを含む実際のレース全体のペースではありません。違う距離・競馬場のデータを混ぜた場合、適性判断は慎重に。')
     detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
@@ -828,9 +916,9 @@ if st.button('分析する', type='primary', use_container_width=True):
         order = {'ハイ寄り': 0, 'ミドル寄り': 1, 'スロー寄り': 2}
         comparison['_順'] = comparison['推定ペース'].map(order)
         comparison = comparison.sort_values(['馬名', '_順']).drop(columns='_順')
-        st.dataframe(comparison, hide_index=True, use_container_width=True,
+        st.dataframe(display_horse_column(comparison, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
                      column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
-        st.download_button('ペース別成績をCSVで保存', comparison.to_csv(index=False).encode('utf-8-sig'),
+        st.download_button('ペース別成績をCSVで保存', display_horse_column(comparison, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_compare_v15.csv', mime='text/csv', use_container_width=True)
     with st.expander('ペース判定の根拠（レースごとの前後半3F）', expanded=False):
         st.caption('差＝前半3F−後半3F。負なら前半が速く、正なら後半が速い。各レースの元データと分類を照合できます。')
@@ -839,12 +927,12 @@ if st.button('分析する', type='primary', use_container_width=True):
         if '日付' in pace_audit.columns:
             pace_audit['日付'] = pd.to_datetime(pace_audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         st.write(f'判定可能：{int(pace_audit["推定ペース"].ne("不明").sum())}走 ／ 全{len(pace_audit)}走')
-        st.dataframe(pace_audit, hide_index=True, use_container_width=True,
+        st.dataframe(display_horse_column(pace_audit, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True,
                      column_config={'馬名': st.column_config.TextColumn('馬名', width='medium')})
-        st.download_button('ペース判定根拠をCSVで保存', pace_audit.to_csv(index=False).encode('utf-8-sig'),
+        st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
 
-    with st.expander('ペース判定の精度チェック（Ver.15.3）', expanded=False):
+    with st.expander('ペース判定の精度チェック（Ver.15.4）', expanded=False):
         st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
         audit = pace_compare_base.copy()
         # レースIDが取得できた場合は最優先で使用。ない場合はレース日、競馬場、レース名、距離を組み合わせる。
@@ -940,7 +1028,7 @@ if st.button('分析する', type='primary', use_container_width=True):
             horse_pace['判定可能走数'] = horse_pace[pace_order[:3]].sum(axis=1)
             horse_pace['ハイ実績'] = horse_pace['ハイ寄り'].map(lambda n: 'データなし' if n == 0 else f'{n}走')
             horse_pace.index.name = '馬名'
-            st.dataframe(horse_pace.reset_index(), hide_index=True, use_container_width=True)
+            st.dataframe(display_horse_column(horse_pace.reset_index(), horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
             st.markdown('**レース単位の判定一覧**')
             st.dataframe(race_audit, hide_index=True, use_container_width=True,
                          column_config={'レース名': st.column_config.TextColumn('レース名', width='medium'),
@@ -948,4 +1036,4 @@ if st.button('分析する', type='primary', use_container_width=True):
             st.download_button('ペース精度チェックをCSVで保存', race_audit.to_csv(index=False).encode('utf-8-sig'),
                                file_name='keiba_pace_validation_v151.csv', mime='text/csv', use_container_width=True)
 
-    st.download_button('📥 分析結果をCSVで保存', data=result.to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
+    st.download_button('📥 分析結果をCSVで保存', data=display_horse_column(result, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'), file_name='keiba_analysis.csv', mime='text/csv', use_container_width=True)
