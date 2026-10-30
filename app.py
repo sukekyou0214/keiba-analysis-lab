@@ -1,3 +1,6 @@
+復旧版 Ver.20.8 — app.py
+GitHubの app.py の中身をこれに戻します。
+コード全文をコピーimport re
 import json
 from pathlib import Path
 import time
