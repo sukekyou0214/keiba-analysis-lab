@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.6')
+st.title('🏇 競馬分析ラボ Ver.16.6.1')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1470,6 +1470,12 @@ if st.session_state['analysis_visible_v1581']:
     with st.expander('200mラップ展開タイプ分析（Ver.16.5・全レース対応）', expanded=False):
         st.caption('20・30レースの試験、または保存済みの全過去成績を対象にできます。全件は重複レースを1回だけ取得し、5件ごとに途中保存。結果表は現在の分析条件で絞った馬を比較します。')
         sample = pace_compare_base.copy()
+        # Ver.16.6.1: 表示用の過去成績にも照合用レースIDを設定する。
+        # 以前は取得対象のコピーにだけ _rid16 を追加していたため、
+        # 展開タイプ分布は表示されても全馬比較表が表示されなかった。
+        if 'レースID' in sample.columns:
+            sample['_rid16'] = (sample['レースID'].fillna('').astype(str)
+                                .str.strip().str.replace(r'\.0$', '', regex=True))
         full_sample16 = analysis_df.copy()
         test_size = tap_choice('取得するレース数', [20, 30, '全レース'], 'lap_shape_v163_n')
         all_mode16 = test_size == '全レース'
@@ -1574,10 +1580,18 @@ if st.session_state['analysis_visible_v1581']:
             valid16 = shapes16.loc[shapes16['検証'].eq('OK') &
                                    shapes16['展開タイプ'].ne('判定不可'),
                                    ['レースID', '展開タイプ']].drop_duplicates('レースID')
+            # 表が出ないときに理由が分かるよう、照合数も明示する。
+            if '_rid16' not in sample.columns:
+                st.warning('展開別・全馬比較：過去成績にレースID列がありません。過去成績を再取得してください。')
+            elif valid16.empty:
+                st.warning('展開別・全馬比較：検証OKのラップがありません。ラップ取得結果を確認してください。')
             if not valid16.empty and '_rid16' in sample.columns:
                 linked16 = sample.merge(valid16, left_on='_rid16', right_on='レースID',
                                         how='inner', suffixes=('', '_分類'))
+                if linked16.empty:
+                    st.warning(f'展開別・全馬比較：レースIDの照合が0件です（現在の分析条件：{len(sample)}走／ラップ検証OK：{len(valid16)}レース）。フィルター条件またはレースIDを確認してください。')
                 if not linked16.empty:
+                    st.caption(f'展開別・全馬比較の照合結果：{len(linked16)}走（重複除去前）／{linked16["馬名"].nunique()}頭')
                     # 同一馬・同一レースの重複行は1走として数える。
                     linked16 = linked16.drop_duplicates(['馬名', '_rid16']).copy()
                     for field in ['着順_数値', '上がり順位', '4角順位']:
