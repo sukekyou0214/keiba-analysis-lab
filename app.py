@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.9')
+st.title('🏇 競馬分析ラボ Ver.20')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -320,10 +320,56 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 
-# ===== Ver.19.9: 過去レース全出走馬を対象とする事前データ検証 =====
+# ===== Ver.20: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
 # ただし、事前の走歴不足は必ず明示し、欠測を予測的中扱いしない。
 V195_TAG = {'スロー寄り': 'S', 'ミドル寄り': 'M', 'ハイ寄り': 'H'}
+
+# Ver.20: 馬場状態の表記揺れを統一（良・稍重・重・不良は別々）。
+# 「良」でも開催日・含水率・芝の傷みで時計は異なるため、完全補正とは扱わない。
+def normalize_going_v20(value):
+    text = str(value).replace(' ', '').replace('　', '').strip()
+    if '不良' in text:
+        return '不良'
+    if '稍' in text or 'やや重' in text or '稍重' in text:
+        return '稍重'
+    if '重' in text:
+        return '重'
+    if '良' in text:
+        return '良'
+    return '不明'
+
+
+def benchmark_laps_v20(candidate, pool, minimum=3):
+    """同一対象レースより前の、別レースのラップだけで基準を作る。
+
+    基準が不足したら馬場を無視して補正、とはせず、参照範囲を明示して段階的に緩和。
+    距離・芝ダート・馬場状態とコースの優先順位を守る。
+    同一レースを複数馬で二重カウントしない。
+    """
+    distance = pd.to_numeric(candidate.get('distance'), errors='coerce')
+    course = candidate.get('course','不明')
+    venue = candidate.get('venue','不明')
+    going = normalize_going_v20(candidate.get('going',''))
+    rid = candidate.get('id')
+    if pd.isna(distance) or course not in ('芝','ダ'):
+        return {'基準状態':'コース・距離不明', '基準レース数':0, '前半600m平均との差(秒)':None,
+                '前半1000m平均との差(秒)':None, '基準条件':'設定不可'}
+    rows = [r for k,r in pool.items() if k != rid and r['course']==course
+            and abs(r['distance']-float(distance))<=200]
+    rules=[('競馬場・距離・馬場一致',lambda r:r['venue']==venue and r['going']==going),
+           ('距離・馬場一致（競馬場横断）',lambda r:r['going']==going),
+           ('競馬場・距離一致（馬場混在）',lambda r:r['venue']==venue),
+           ('距離一致（競馬場・馬場混在）',lambda r:True)]
+    for label,rule in rules:
+        matching=[r for r in rows if rule(r)]
+        if len(matching)>=minimum:
+            return {'基準状態':'参考（比較可能）','基準レース数':len(matching),'基準条件':label,
+                    '前半600m平均との差(秒)':round(candidate['600']-sum(r['600'] for r in matching)/len(matching),3),
+                    '前半1000m平均との差(秒)':round(candidate['1000']-sum(r['1000'] for r in matching)/len(matching),3)}
+    return {'基準状態':'基準不足（3レース未満）','基準レース数':len(rows),'基準条件':'同一芝ダート・±200m',
+            '前半600m平均との差(秒)':None,'前半1000m平均との差(秒)':None}
+
 
 
 def historical_field_ids_v195(rid):
@@ -380,6 +426,10 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
                       '〜1600m' if distance_value <= 1600 else
                       '1601〜2000m' if distance_value <= 2000 else
                       '2001〜2400m' if distance_value <= 2400 else '2401m〜')
+    target_goings = target_rows['馬場状態'].dropna().astype(str) if '馬場状態' in target_rows else pd.Series(dtype=str)
+    target_going_v20 = normalize_going_v20(target_goings.iloc[0] if not target_goings.empty else '')
+    target_courses = target_rows['コース'].dropna().astype(str) if 'コース' in target_rows else pd.Series(dtype=str)
+    target_course_v20 = target_courses.iloc[0] if not target_courses.empty else '不明'
     entrants = historical_field_ids_v195(rid)
     frames=[]; failed=[]; pace_calls=0; local_paces={}
     # 再起動後の全件再取得は避け、当日の成績の混入も避ける。
@@ -471,7 +521,7 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
         predicted,explanation,detail,known_count,lead,front=estimate_field_pace_v19(full,names)
     else:
         known_count=0
-    # Ver.19.9: 結果を一切使用しない事前走歴ベースのH見逃し診断。
+    # Ver.20: 結果を一切使用しない事前走歴ベースのH見逃し診断。
     # 最初に記録された通過地点の順位であって、実際の発走直後の先手ではない。
     diag197 = {
         '先頭経験馬数': 0, '複数回先頭馬数': 0, '逃げ候補先頭合計': 0,
@@ -513,7 +563,7 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
         knownfront197 = int(front197['前方ペース確認'].sum())
         if knownfront197:
             diag197['前方H率(%)'] = round(100*front197['前方H'].sum()/knownfront197,1)
-    # Ver.19.9: 予測には一切使わず「検証対象レースより前」のラップを別途照会。
+    # Ver.20: 予測には一切使わず「検証対象レースより前」のラップを別途照会。
     # 同じ過去レースのラップは1度だけ取得。先頭・前方だった走を優先。
     # 前半600/1000mは【レース全体】のタイムであり、当該馬の個別タイムではない。
     diag198 = {'前半ラップ照会レース数': 0, '前半ラップ取得OKレース数': 0,
@@ -525,7 +575,13 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
                '先頭時前後半600m差平均(秒)': None, '前方時前後半600m差平均(秒)': None,
                '先頭時前半1000m相対差平均(秒/200m)': None, '前方時前半1000m相対差平均(秒/200m)': None,
                '同競馬場・近距離先頭時走数': 0, '同競馬場・近距離先頭時前後半600m差平均(秒)': None,
-               '大逃げの隊列差': '未取得（通過順位やレースラップのみでは判定不可）'}
+               '大逃げの隊列差': '未取得（通過順位やレースラップのみでは判定不可）',
+               '対象レース馬場状態':target_going_v20,
+               '先頭時馬場一致ラップ走数':0,'先頭時馬場一致前半1000m平均(秒)':None,
+               '前半ラップ相対基準作成走数':0,'基準不足走数':0,
+               '先頭時基準差600m平均(秒)':None,'先頭時基準差1000m平均(秒)':None,
+               '前方時基準差1000m平均(秒)':None,'相対ラップ条件詳細':'',
+               '馬場状態別先頭ラップ':'', '馬場状態別前方ラップ':''}
     if collect_early_laps and not full.empty and not detail.empty:
         roles = detail.set_index('馬名')[['逃げ候補', '先行候補']].to_dict('index')
         candidates198 = []
@@ -554,6 +610,8 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
                                   'lead':is_leader, 'front':is_forward,
                                   'date':past_date, 'distance':record.get('距離_m'),
                                   'venue':record.get('競馬場', ''),
+                                  'course':record.get('コース',''),
+                                  'going':normalize_going_v20(record.get('馬場状態', '')),
                                   'pace':record.get('netkeibaペース', '')})
         # 何走ラップを照会したかったのかを先に数える（取得上限に影響されない）。
         diag198['先頭時ラップ対象走数'] = sum(x['lead'] for x in candidates198)
@@ -604,6 +662,47 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
                 comparative = [m['1000相対差'] for _,m in group if m['1000相対差'] is not None]
                 if comparative:
                     diag198[label+'前半1000m相対差平均(秒/200m)'] = round(sum(comparative)/len(comparative),3)
+        # Ver.20: 取得した過去ラップをレースID単位でプール化して基準を作る。
+        # 12件上限かつ逃げ優先の便宜抽出なので、全レースの標準値ではない。
+        pool_v20={}
+        for item in candidates198:
+            lap=lap_by_id198.get(item['id'])
+            if lap is None or item['id'] in pool_v20:
+                continue
+            dd=pd.to_numeric(item.get('distance'),errors='coerce')
+            if pd.isna(dd):
+                continue
+            pool_v20[item['id']]={**lap, 'distance':float(dd), 'venue':item['venue'],
+                                  'course':item['course'],'going':item['going']}
+        benchmark_v20=[]
+        for item in candidates198:
+            lap=lap_by_id198.get(item['id'])
+            if lap is None:
+                continue
+            b=benchmark_laps_v20({**item,**lap},pool_v20)
+            benchmark_v20.append((item,lap,b))
+        diag198['前半ラップ相対基準作成走数']=sum(b['基準状態']=='参考（比較可能）' for _,_,b in benchmark_v20)
+        diag198['基準不足走数']=sum(b['基準状態']!='参考（比較可能）' for _,_,b in benchmark_v20)
+        for label,flag in [('先頭時','lead'),('前方時','front')]:
+            group=[(i,l,b) for i,l,b in benchmark_v20 if i[flag]]
+            valid=[(i,l,b) for i,l,b in group if b['基準状態']=='参考（比較可能）']
+            if valid:
+                diag198[label+'基準差1000m平均(秒)']=round(sum(b['前半1000m平均との差(秒)'] for _,_,b in valid)/len(valid),3)
+                if label=='先頭時':
+                    diag198['先頭時基準差600m平均(秒)']=round(sum(b['前半600m平均との差(秒)'] for _,_,b in valid)/len(valid),3)
+            going_breakdown=[]
+            for going in ['良','稍重','重','不良','不明']:
+                matches=[l for i,l,b in group if i['going']==going]
+                if matches:
+                    going_breakdown.append(f"{going}:{len(matches)}走/前半1000m{sum(m['1000'] for m in matches)/len(matches):.2f}秒")
+            diag198['馬場状態別'+label+'ラップ']=' / '.join(going_breakdown)
+        same_going=[lap for item,lap in valid_lead if item['going']==target_going_v20]
+        diag198['先頭時馬場一致ラップ走数']=len(same_going)
+        if same_going:
+            diag198['先頭時馬場一致前半1000m平均(秒)']=round(sum(x['1000'] for x in same_going)/len(same_going),2)
+        diag198['相対ラップ条件詳細']=' / '.join(
+            f"{i['horse']}({i['id']},{i['going']}):{b['基準条件']}/n={b['基準レース数']}/差={b['前半1000m平均との差(秒)']}"
+            for i,l,b in benchmark_v20 if i['lead'])[:1800]
         # 検証対象と同じ競馬場、距離差200m以内だけの前半・後半差を別集計。
         # サンプルが少なければ欠測のままにする。対象レース当日の結果は使わない。
         relevant199=[]
@@ -643,6 +742,7 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
     return {'レースID':rid,'開催日':date.strftime('%Y-%m-%d'),
             'レース名':str(target_rows['レース名'].dropna().iloc[0]) if 'レース名' in target_rows and target_rows['レース名'].notna().any() else '',
             '競馬場':venue_value,'距離(m)':distance_value,'距離区分':distance_group,
+            'コース':target_course_v20,'馬場状態':target_going_v20,
             '全出走頭数':len(entrants),'事前走歴取得頭数':len(frames),
             '序盤位置2走以上':int(known_count),'実際':actual,
             '予測':pred_tag or '保留','一致':('一致' if pred_tag==actual else '不一致') if pred_tag else '対象外',
@@ -2180,7 +2280,7 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.9・試験版）',expanded=False):
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.20・試験版）',expanded=False):
         st.caption('全出走馬の当該レース以前の成績だけでS/M/Hを再現。レース選定時には正解ラベルを利用しますが、予測器には渡しません。')
         st.caption('Hを指定して検証した結果は、意図的に抽出したサンプルです。全体の的中率とは混ぜて評価しないでください。')
         candidates196 = analysis_df.copy()
@@ -2219,8 +2319,8 @@ with tab_quality172:
             with st.expander('検証予定レースを確認',expanded=False):
                 st.dataframe(preview196,hide_index=True,use_container_width=True)
         st.caption('過去の逃げ・先行時の前半ラップを検証できます。ラップ取得は追加通信が多いため、まず1〜3レースがおすすめ。')
-        st.caption('同じ前半1000mでも後半が速ければS寄り、後半が落ちればH寄りになることがあります。ペース分類は出典の判定を使用し、この機能の前後半差とは別物です。')
-        do_laps198 = st.checkbox('前半ラップ＋前後半差も追加取得（Ver.19.9）', value=False, key='v198_laps')
+        st.caption('同じ前半1000mでも後半が速ければS寄り、後半が落ちればH寄りになることがあります。馬場状態（良・稍重・重・不良）と芝/ダート、距離・開催場も区別して参考比較します。')
+        do_laps198 = st.checkbox('前半ラップ＋前後半差＋馬場別基準を追加取得（Ver.20）', value=False, key='v198_laps')
         st.caption('チェック時は検証1レースにつき最大12件の過去レースのラップ表を追加照会。対象レース当日のラップは予測にも診断値にも使いません。')
         if st.button('全出走馬の事前データで検証を実行',key='v196_run',use_container_width=True,disabled=not bool(id_list196)):
             results196=[]
@@ -2244,7 +2344,7 @@ with tab_quality172:
             out196=st.session_state.get('full_replay_v196')
             if isinstance(out196,pd.DataFrame) and not out196.empty:
                 st.dataframe(out196,hide_index=True,use_container_width=True)
-                with st.expander('H見逃しの要因を比較（Ver.19.9）', expanded=False):
+                with st.expander('H見逃しの要因を比較（Ver.20）', expanded=False):
                     needed197 = ['レース名','実際','予測','逃げ候補','先頭経験馬数',
                                  '複数回先頭馬数','逃げ候補先頭率平均(%)',
                                  '先行圧力率(%)','逃げ候補_先頭S','逃げ候補_先頭M',
@@ -2254,9 +2354,9 @@ with tab_quality172:
                         st.dataframe(out196[available197],hide_index=True,use_container_width=True)
                         st.caption('先頭・前方は過去5走の最初に記録された通過地点。先行圧力率は逃げ候補以外の前方走数÷確認走数。結果は診断指標に使わず、比較のためだけに表示。')
                     else:
-                        st.info('Ver.19.9で再検証すると診断指標を表示できます。')
+                        st.info('Ver.20で再検証すると診断指標を表示できます。')
                 if st.session_state.get('full_replay_lap_flag_v198'):
-                    with st.expander('逃げ・先行時のラップ形状を比較（Ver.19.9）', expanded=True):
+                    with st.expander('逃げ・先行時のラップ形状を比較（Ver.20）', expanded=True):
                         cols198=['レース名','実際','予測','競馬場','距離(m)',
                                  '前半ラップ照会レース数','前半ラップ取得OKレース数',
                                  '先頭時ラップ対象走数','先頭時ラップ確認走数',
@@ -2265,12 +2365,19 @@ with tab_quality172:
                                  '前方時前半600m平均(秒)','前方時前半1000m平均(秒)',
                                  '先頭時前後半600m差平均(秒)','前方時前後半600m差平均(秒)',
                                  '先頭時前半1000m相対差平均(秒/200m)','前方時前半1000m相対差平均(秒/200m)',
-                                 '同競馬場・近距離先頭時走数','同競馬場・近距離先頭時前後半600m差平均(秒)']
+                                 '同競馬場・近距離先頭時走数','同競馬場・近距離先頭時前後半600m差平均(秒)',
+                                 '馬場状態','先頭時馬場一致ラップ走数','先頭時馬場一致前半1000m平均(秒)',
+                                 '前半ラップ相対基準作成走数','基準不足走数',
+                                 '先頭時基準差600m平均(秒)','先頭時基準差1000m平均(秒)',
+                                 '前方時基準差1000m平均(秒)']
                         cols198=[x for x in cols198 if x in out196.columns]
                         st.dataframe(out196[cols198],hide_index=True,use_container_width=True)
                         st.caption('前後半600m差＝前半600m−後半600m。負なら前半が速く、正なら後半が速い。前半1000m相対差は最初の1000mと残区間の200m平均の差。いずれもレース全体のラップで、馬自身の個別時計ではありません。')
                         st.info('大逃げ注意：1頭が後続を大きく離すと、先頭馬のペースと後続集団の体感ペースが異なります。現在の通過順位とレースラップだけでは先頭・後続の秒差を検証できないため、今回のモデルでは大逃げを確定判定しません。')
-                        st.caption('同競馬場・近距離は距離差200m以内で別集計。馬場・当日の風・展開・走路差は未補正。12レースの取得上限による欠測にも注意。')
+                        st.caption('Ver.20：芝/ダート・距離±200mを前提に、同競馬場・同馬場を優先。比較先3レース未満なら基準不足とし、条件を緩めた場合は名称を明記。差が負なら基準より前半が速い。参考基準は取得した最大12レースだけで作成するため統計的な標準値ではありません。良馬場内の時計差、含水率、芝の傷み、風、大逃げは未補正。')
+                        if '馬場状態別先頭ラップ' in out196.columns:
+                            with st.expander('馬場状態別・相対ラップの詳細（Ver.20）',expanded=False):
+                                st.dataframe(out196[[c for c in ['レース名','馬場状態','馬場状態別先頭ラップ','馬場状態別前方ラップ','相対ラップ条件詳細'] if c in out196.columns]],hide_index=True,use_container_width=True)
                         if {'実際','先頭時前半600m平均(秒)'}.issubset(out196.columns):
                             tmp198=out196.copy()
                             tmp198['先頭時前半600m平均(秒)']=pd.to_numeric(tmp198['先頭時前半600m平均(秒)'],errors='coerce')
@@ -2284,9 +2391,9 @@ with tab_quality172:
                         if '先頭時ラップ詳細' in out196.columns:
                             with st.expander('先頭時の過去走ラップ詳細', expanded=False):
                                 st.dataframe(out196[['レース名','先頭時ラップ詳細','ラップ取得エラー']],hide_index=True,use_container_width=True)
-                st.download_button('Ver.19.9 全頭再現テストCSVを保存',
+                st.download_button('Ver.20 全頭再現テストCSVを保存',
                                    out196.to_csv(index=False).encode('utf-8-sig'),
-                                   file_name='keiba_full_field_replay_v199.csv',mime='text/csv',use_container_width=True)
+                                   file_name='keiba_full_field_replay_v200.csv',mime='text/csv',use_container_width=True)
                 if {'予測','実際','一致'}.issubset(out196.columns):
                     verified196=out196.loc[out196['予測'].isin(['S','M','H']) & out196['実際'].isin(['S','M','H'])].copy()
                     if not verified196.empty:
@@ -2299,7 +2406,7 @@ with tab_quality172:
                             検証数=('一致','size'),一致数=('一致',lambda s:int(s.eq('一致').sum()))).reset_index())
                         by_actual196['一致率(%)']=(by_actual196['一致数']/by_actual196['検証数']*100).round(1)
                         st.dataframe(by_actual196,hide_index=True,use_container_width=True)
-                        for grouping196 in ['距離区分','競馬場']:
+                        for grouping196 in ['距離区分','競馬場','馬場状態']:
                             if grouping196 in verified196.columns:
                                 st.markdown(f'**{grouping196}別**')
                                 by_group196=(verified196.groupby(grouping196,dropna=False).agg(
