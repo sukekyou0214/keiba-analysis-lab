@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.9.3')
+st.title('🏇 競馬分析ラボ Ver.15.9.4')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -542,29 +542,33 @@ def parse_lap_html_v1591(html, race_id):
                 for d, line in zip(distances, lines[:width]):
                     segments[d] = (line[0][0], line[1][0])
 
-    # 最終200mが単独の小表・別ノードになる場合の補完。
-    # 表の文字列から距離、累積、区間ラップの3点を読み、
-    # 直前までの合計との整合がある場合に限って追加する。
+    # 最終区間の補完：CSVにも残るラップ表全文を第2経路で解析する。
+    # 最後の見出しが1列だけになっている場合のHTML構造差を吸収する。
+    lap_recovery = '不要'
     if race_distance and race_distance % 200 == 0 and race_distance not in segments:
         last = race_distance
-        before = last - 200
-        if before in segments and sorted(segments) == list(range(200, last, 200)):
-            expected_previous = segments[before][0]
-            # 見出しが別テーブルになっていても対応するため、見出し以降の
-            # テキストを表単位で走査する（他セクションの数字は使用しない）。
-            candidate_texts = list(samples)
-            candidate_texts.extend(t.get_text(' ', strip=True) for t in tables)
-            pattern = re.compile(r'(?<!\d)' + str(last) +
-                                 r'\s*m\s+((?:\d{1,2}:)?\d{1,3}\.\d)\s+'
-                                 r'(\d{1,2}\.\d)(?!\d)', re.I)
-            for txt in candidate_texts:
-                match = pattern.search(txt)
-                if not match:
-                    continue
-                cumulative, lap = seconds(match.group(1)), seconds(match.group(2))
-                if 8 <= lap <= 25 and abs(cumulative - expected_previous - lap) <= 0.25:
-                    segments[last] = (cumulative, lap)
+        prev = last - 200
+        if prev in segments:
+            # 先に各テーブルの文字列を採取する。構造を解析できない最終1列表も対象。
+            all_table_text = [t.get_text(' ', strip=True) for t in tables]
+            # 「1800m 1:45.5 11.6」のような3点組を解析。
+            # タイム差による検算なしの補完は絶対にしない。
+            distance_expr = r'(?<![0-9])' + str(last) + r'\s*m'
+            time_expr = r'((?:[0-9]{1,2}:)?[0-9]{1,3}\.[0-9])'
+            pattern = re.compile(distance_expr + r'\s+' + time_expr + r'\s+' + time_expr + r'(?![0-9])', re.I)
+            for raw in list(samples) + all_table_text:
+                normalized = re.sub(r'\s+', ' ', raw.replace('：', ':')).strip()
+                for match in pattern.finditer(normalized):
+                    cumulative = seconds(match.group(1))
+                    lap = seconds(match.group(2))
+                    if 8 <= lap <= 25 and abs(cumulative - segments[prev][0] - lap) < 0.21:
+                        segments[last] = (cumulative, lap)
+                        lap_recovery = '末尾3点組・累積差一致'
+                        break
+                if last in segments:
                     break
+            if last not in segments:
+                lap_recovery = '末尾候補なし／累積差不一致'
 
     observed = sorted(segments)
     laps = [segments[d][1] for d in observed]
@@ -597,11 +601,12 @@ def parse_lap_html_v1591(html, race_id):
             '区間数':len(laps), '期待区間数':race_distance//200 if race_distance else '',
             '合計秒':round(sum(laps),1) if laps else '',
             '検証':'OK' if not checks else ' / '.join(checks),
+            '末尾補完':lap_recovery,
             '表の一部':' / '.join(samples)[:1200], 'ページURL':url}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def get_lap_table_test(race_id):
+def get_lap_table_test_v1594(race_id):
     """netkeibaの200mラップを検証用に取得。ランキングは更新しない。"""
     if not re.fullmatch(r'\d{12}', str(race_id)):
         raise ValueError('レースID不正')
@@ -1256,7 +1261,7 @@ if st.session_state['analysis_visible_v1581']:
         st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
 
-    with st.expander('200mラップの試験取得（5レース＋1600m確認・Ver.15.9.3）', expanded=False):
+    with st.expander('200mラップの試験取得（5レース＋1600m確認・Ver.15.9.4）', expanded=False):
         st.caption('ラップ表の上段（通過タイム）と下段（200mラップ）を区別して読み込み、合計・累積タイムを検証します。ランキングは変更しません。')
         sample_ids = []
         if 'レースID' in pace_compare_base.columns:
@@ -1276,16 +1281,16 @@ if st.session_state['analysis_visible_v1581']:
         st.caption('対象：通常の先頭5レース' + (' ＋1600mの追加1レース' if extra_1600 else '（1600mの追加対象なし）'))
         if not sample_ids:
             st.info('試験取得できるレースIDがありません。')
-        elif st.button('200mラップを試験取得', key='lap_table_v1592'):
+        elif st.button('200mラップを試験取得', key='lap_table_v1594'):
             rows = []
             progress_lap = st.progress(0)
             for i, rid in enumerate(sample_ids, 1):
                 try:
-                    result_lap = get_lap_table_test(rid)
+                    result_lap = get_lap_table_test_v1594(rid)
                     rows.append({'レースID':rid, **result_lap})
                 except Exception as e:
                     rows.append({'レースID':rid, '状態':'取得不可', '200mラップ':'',
-                                 '区間数':0, 'レース距離':'', '期待区間数':'', '合計秒':'', '検証':str(e)[:200], '表の一部':'',
+                                 '区間数':0, 'レース距離':'', '期待区間数':'', '合計秒':'', '検証':str(e)[:200], '末尾補完':'例外', '表の一部':'',
                                  'ページURL':f'https://db.sp.netkeiba.com/race/{rid}/'})
                 progress_lap.progress(i / len(sample_ids))
             st.session_state['lap_table_v1592_result'] = pd.DataFrame(rows)
@@ -1294,7 +1299,7 @@ if st.session_state['analysis_visible_v1581']:
             st.dataframe(lap_result, hide_index=True, use_container_width=True)
             st.download_button('200mラップ試験結果をCSVで保存',
                                lap_result.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_table_test_v1592.csv', mime='text/csv',
+                               file_name='keiba_lap_table_test_v1594.csv', mime='text/csv',
                                use_container_width=True)
 
     with st.expander('ペース判定の精度チェック（Ver.15.8）', expanded=False):
