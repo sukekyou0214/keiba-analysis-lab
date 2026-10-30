@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.6')
+st.title('🏇 競馬分析ラボ Ver.15.7')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -537,16 +537,18 @@ def prepare(data):
                   & data['距離_m'].ge(1200))
     diff = (data['前半3F'] - data['後半3F']).where(valid_pace)
     data['前後半3F差'] = diff
-    data['推定ペース'] = '不明'
-    data.loc[diff.notna() & diff.lt(-1.0), '推定ペース'] = 'ハイ寄り'
-    data.loc[diff.notna() & diff.between(-1.0, 1.0), '推定ペース'] = 'ミドル寄り'
-    data.loc[diff.notna() & diff.gt(1.0), '推定ペース'] = 'スロー寄り'
+    data['暫定ペース'] = '不明'
+    data.loc[diff.notna() & diff.lt(-1.0), '暫定ペース'] = 'ハイ寄り'
+    data.loc[diff.notna() & diff.between(-1.0, 1.0), '暫定ペース'] = 'ミドル寄り'
+    data.loc[diff.notna() & diff.gt(1.0), '暫定ペース'] = 'スロー寄り'
     if 'netkeibaペース' not in data.columns:
         data['netkeibaペース'] = ''
     net_pace = data['netkeibaペース'].fillna('').astype(str).str.strip()
     valid_net = net_pace.isin(['スロー寄り', 'ミドル寄り', 'ハイ寄り'])
-    data['ペース判定元'] = '前後半3Fの暫定推定'
-    data.loc[data['推定ペース'].eq('不明'), 'ペース判定元'] = '不明'
+    # 実戦のペースランキングにはnetkeibaの明示判定のみ使用する。
+    # 独自計算は暫定ペースに別保存し、混ぜない。
+    data['推定ペース'] = '不明'
+    data['ペース判定元'] = '未取得・不明'
     data.loc[valid_net, '推定ペース'] = net_pace[valid_net]
     data.loc[valid_net, 'ペース判定元'] = 'netkeiba表示'
     pos = data['4角順位']
@@ -767,52 +769,61 @@ st.write(f'読み込んだファイル：{len(uploads or [])}個 / 削除した�
 st.caption('列構成の違う同一レースは重複して残る場合があります。')
 st.download_button('📥 統合データをExcelで保存', data=make_excel(df), file_name='競馬分析_統合データ.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
 
-st.subheader('netkeibaのS/M/H取得テスト（Ver.15.6）')
-st.caption('まずは直近の重複を除いた最大20レースを確認。netkeiba画面に表示されたS/M/Hだけを取得し、既存の暫定判定と比較します。')
+st.subheader('netkeibaのS/M/Hを全レース取得（Ver.15.7）')
+st.caption('保存済みの全過去成績から重複を除いたレースIDを対象にします。取得済みは再取得せず、10件ごとに結果を一時保存します。')
 if st.session_state.auto_df is not None and 'レースID' in st.session_state.auto_df.columns:
     source_df = st.session_state.auto_df.copy()
-    source_df['日付'] = pd.to_datetime(source_df['日付'], errors='coerce')
-    candidates = (source_df.sort_values('日付', ascending=False)['レースID']
-                  .dropna().astype(str).str.replace(r'\.0$', '', regex=True))
-    test_rids = candidates[candidates.str.fullmatch(r'\d{12}')].drop_duplicates().head(20).tolist()
-    if st.button('netkeibaのS/M/Hを20レース分テスト取得', use_container_width=True):
-        fetched, failures = {}, []
+    ids = source_df['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
+    valid_ids = ids[ids.str.fullmatch(r'\d{12}')].drop_duplicates().tolist()
+    # リストはレース日順にして、通信に失敗しても何が残ったか確認しやすくする。
+    if '日付' in source_df.columns:
+        ordering = source_df.assign(_rid=ids, _date=pd.to_datetime(source_df['日付'], errors='coerce'))
+        ordered = ordering.sort_values('_date', ascending=False, na_position='last')['_rid']
+        valid_ids = ordered[ordered.str.fullmatch(r'\d{12}')].drop_duplicates().tolist()
+    known = source_df['netkeibaペース'].fillna('').astype(str).str.strip() if 'netkeibaペース' in source_df.columns else pd.Series('', index=source_df.index)
+    confirmed_ids = set(ids[known.isin(['スロー寄り', 'ミドル寄り', 'ハイ寄り'])])
+    pending = [rid for rid in valid_ids if rid not in confirmed_ids]
+    st.write(f'対象：**{len(valid_ids)}レース** ／ netkeiba判定取得済み：**{len(valid_ids)-len(pending)}** ／ 未取得：**{len(pending)}**')
+    st.caption('レース単位で集計するため、同じレースに複数の出走馬がいても1回だけアクセスします。')
+    if st.button('未取得レースのS/M/Hをまとめて取得', disabled=not pending, type='primary', use_container_width=True):
+        working = st.session_state.auto_df.copy()
+        success, failed = {}, []
         progress = st.progress(0)
-        for i, rid in enumerate(test_rids, 1):
+        status = st.empty()
+        for i, rid in enumerate(pending, 1):
+            status.caption(f'取得中：{i}/{len(pending)}レース｜成功 {len(success)}件・取得不可 {len(failed)}件')
             try:
-                fetched[rid] = get_netkeiba_pace(rid)
+                success[rid] = get_netkeiba_pace(rid)
             except Exception as e:
-                failures.append({'レースID': rid, '取得結果': '取得不可', '理由': str(e)[:120]})
-            progress.progress(i / max(1, len(test_rids)))
-            if i < len(test_rids):
+                failed.append({'レースID': rid, '状態': '取得不可', '理由': str(e)[:180],
+                               '結果ページ': f'https://db.sp.netkeiba.com/race/{rid}/'})
+            if i % 10 == 0 or i == len(pending):
+                if success:
+                    working = apply_netkeiba_pace(working, success)
+                    st.session_state.auto_df = working
+                    save_race_cache(st.session_state.auto_race_id, st.session_state.auto_horses, working)
+                    success.clear()
+                st.session_state['pace_v157_failed'] = failed.copy()
+            progress.progress(i / len(pending))
+            if i < len(pending):
                 time.sleep(0.35)
         progress.empty()
-        current = st.session_state.auto_df
-        if fetched:
-            st.session_state.auto_df = apply_netkeiba_pace(current, fetched)
-            save_race_cache(st.session_state.auto_race_id, st.session_state.auto_horses, st.session_state.auto_df)
-        rows = []
-        for rid in test_rids:
-            race_rows = current[current['レースID'].fillna('').astype(str).eq(rid)]
-            prev = race_rows['推定ペース'].iloc[0] if not race_rows.empty else ''
-            rows.append({'レースID': rid, '旧判定（前後半3F）': prev,
-                         'netkeiba表示': fetched.get(rid, '取得不可'),
-                         '状態': '取得成功' if rid in fetched else '取得不可'})
-        audit_df = pd.DataFrame(rows)
-        st.session_state['pace_v156_audit'] = audit_df
-        st.session_state['pace_v156_failures'] = pd.DataFrame(failures)
-        st.success(f'netkeiba表示を{len(fetched)}/{len(test_rids)}レースで取得。取得できたものだけ更新・保存しました。')
-    if 'pace_v156_audit' in st.session_state:
-        audit_df = st.session_state['pace_v156_audit']
-        st.dataframe(audit_df, hide_index=True, use_container_width=True)
-        st.download_button('S/M/H取得テスト結果をCSVで保存', audit_df.to_csv(index=False).encode('utf-8-sig'),
-                           file_name='keiba_netkeiba_pace_test_v156.csv', mime='text/csv', use_container_width=True)
-        fails = st.session_state.get('pace_v156_failures')
-        if fails is not None and not fails.empty:
-            with st.expander('取得できなかった理由'):
-                st.dataframe(fails, hide_index=True, use_container_width=True)
+        status.empty()
+        st.session_state.auto_df = working
+        st.session_state['pace_v157_failed'] = failed
+        received = int(working['netkeibaペース'].fillna('').astype(str).isin(['スロー寄り', 'ミドル寄り', 'ハイ寄り']).groupby(working['レースID'].fillna('').astype(str)).any().sum())
+        st.success(f'取得処理が完了！netkeiba判定取得済み：{received}/{len(valid_ids)}レース。今回取得不可：{len(failed)}レース。')
+        if failed:
+            st.warning('取得不可は「不明」として扱います。再実行すると取得済みを飛ばして再試行できます。')
+    if st.session_state.get('pace_v157_failed'):
+        fails_df = pd.DataFrame(st.session_state['pace_v157_failed'])
+        with st.expander(f'取得不可のレース（{len(fails_df)}件）'):
+            st.dataframe(fails_df, hide_index=True, use_container_width=True)
+            st.download_button('取得不可一覧をCSVで保存', fails_df.to_csv(index=False).encode('utf-8-sig'),
+                               file_name='keiba_netkeiba_pace_fail_v157.csv', mime='text/csv', use_container_width=True)
+    st.caption('ペース別成績はnetkeiba明示判定だけを使用。以前の±1秒の推定値は「暫定ペース」として検証表に残します。')
 else:
-    st.caption('過去成績を取得すると、S/M/Hの取得テストができます。')
+    st.caption('過去成績を取得すると、全レースのS/M/H取得ができます。')
 
 st.header('④ 出走馬との照合')
 analysis_df = df.copy()
@@ -999,9 +1010,9 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.dataframe(display_horse_column(used, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
         st.download_button('集計対象レース一覧をCSVで保存', data=display_horse_column(used, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
-    st.subheader('ペース別の成績比較（Ver.15.6）')
+    st.subheader('ペース別の成績比較（Ver.15.7）')
     st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
-    st.warning('netkeiba表示を取得できたレースはそのS/M/Hを優先し、それ以外は前後半600m差による暫定推定です。判定元を必ず確認してください。')
+    st.info('netkeibaのS/M/Hが取得できたレースのみで集計します。未取得レースは「不明」として除外し、独自推定は混ぜません。')
     detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
     if detail.empty:
         st.info('今回の条件ではペースを分類できる成績がありません。')
@@ -1027,7 +1038,7 @@ if st.button('分析する', type='primary', use_container_width=True):
                            file_name='keiba_pace_compare_v15.csv', mime='text/csv', use_container_width=True)
     with st.expander('ペース判定の根拠（レースごとの前後半3F）', expanded=False):
         st.caption('差＝前半3F−後半3F。負なら前半が速く、正なら後半が速い。各レースの元データと分類を照合できます。')
-        cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '前半3F', '後半3F', '前後半3F差', '推定ペース', 'ペース判定元', '着順_数値']
+        cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '前半3F', '後半3F', '前後半3F差', '暫定ペース', '暫定ペース', '推定ペース', 'ペース判定元', '着順_数値']
         pace_audit = pace_compare_base[[c for c in cols if c in pace_compare_base.columns]].copy()
         if '日付' in pace_audit.columns:
             pace_audit['日付'] = pd.to_datetime(pace_audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
@@ -1037,7 +1048,7 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
 
-    with st.expander('ペース判定の精度チェック（Ver.15.6）', expanded=False):
+    with st.expander('ペース判定の精度チェック（Ver.15.7）', expanded=False):
         st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
         audit = pace_compare_base.copy()
         # レースIDが取得できた場合は最優先で使用。ない場合はレース日、競馬場、レース名、距離を組み合わせる。
@@ -1110,7 +1121,7 @@ if st.button('分析する', type='primary', use_container_width=True):
             st.dataframe(counts_pace.reset_index(), hide_index=True, use_container_width=True)
             st.caption('ハイ寄りの割合が少なくても「ハイに弱い」ことは意味しません。距離ごとのサンプル数と判定不能数を見てください。')
             st.markdown('**判定基準を変えた場合の分布（感度チェック）**')
-            st.caption('以下は前後半3F差の閾値だけを変えた参考比較。netkeibaのS/M/Hとは別の方法です。')
+            st.caption('以下は前後半3F差の閾値を変えた参考比較。netkeibaのS/M/Hとは別の方法です。')
             sensitivity = []
             eligible = race_audit[(race_audit['判定チェック'] == '一致') &
                                   pd.to_numeric(race_audit['前後半3F差'], errors='coerce').notna()].copy()
