@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.4')
+st.title('🏇 競馬分析ラボ Ver.19.5')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -312,6 +312,135 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
              '一致':int(comparable['一致'].eq('一致').sum()) if len(comparable) else 0,
              '不一致':int(comparable['一致'].eq('不一致').sum()) if len(comparable) else 0}
     return result, stats
+
+
+
+
+# ===== Ver.19.5: 過去レース全出走馬を対象とする事前データ検証 =====
+# 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
+# ただし、事前の走歴不足は必ず明示し、欠測を予測的中扱いしない。
+V195_TAG = {'スロー寄り': 'S', 'ミドル寄り': 'M', 'ハイ寄り': 'H'}
+
+
+def historical_field_ids_v195(rid):
+    """結果表の馬リンクのみから当時の全出走馬IDと馬名を復元する。"""
+    rid = str(rid).strip()
+    if not re.fullmatch(r'\d{12}', rid):
+        raise ValueError('レースIDが不正です')
+    url = f'https://race.netkeiba.com/race/result.html?race_id={rid}'
+    response = requests.get(url, headers=HEADERS, timeout=20)
+    response.raise_for_status()
+    response.encoding = response.apparent_encoding
+    soup = BeautifulSoup(response.text, 'html.parser')
+    table = soup.select_one('#All_Result_Table')
+    if table is None:
+        table = next((t for t in soup.select('table') if
+                      len(t.select('a[href*="/horse/"]')) >= 5 and
+                      '着' in t.get_text(' ', strip=True)[:250]), None)
+    if table is None:
+        raise ValueError('結果表から全出走馬を取得できません')
+    found = {}
+    for tr in table.select('tr'):
+        for a in tr.select('a[href*="/horse/"]'):
+            match = re.search(r'/horse/(\d{10})(?:/|[?\#]|$)', a.get('href',''))
+            if match:
+                name = a.get_text(' ', strip=True)
+                if name:
+                    found[match.group(1)] = name
+    if not 5 <= len(found) <= 22:
+        raise ValueError(f'結果表の馬ID数が異常: {len(found)}頭（5～22頭のみ対象）')
+    return found
+
+
+def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace_calls=25):
+    """レース当日の結果・S/M/Hを予測入力に混ぜないよう、当日より前だけ採用。"""
+    known = known_source.copy()
+    rid = str(rid).strip()
+    target_rows = known.loc[known['レースID'].fillna('').astype(str).str.replace(r'\.0$', '',regex=True).eq(rid)]
+    if target_rows.empty:
+        raise ValueError('検証対象のレースが保存データにありません')
+    date = pd.to_datetime(target_rows['日付'],errors='coerce').min()
+    if pd.isna(date):
+        raise ValueError('開催日が分かりません')
+    actual_raw = target_rows['netkeibaペース'].dropna().astype(str)
+    actual_raw = actual_raw[actual_raw.isin(V195_TAG)]
+    if actual_raw.empty or len(actual_raw.unique()) != 1:
+        raise ValueError('実際のS/M/Hを一意に確認できません')
+    actual = V195_TAG[actual_raw.iloc[0]]
+    entrants = historical_field_ids_v195(rid)
+    frames=[]; failed=[]; pace_calls=0; local_paces={}
+    # 再起動後の全件再取得は避け、当日の成績の混入も避ける。
+    known_ids = (known['馬ID'].astype(str).str.replace(r'\.0$', '',regex=True).unique().tolist()
+                 if '馬ID' in known.columns else [])
+    for index,(hid,name) in enumerate(entrants.items(),1):
+        try:
+            # 保存済みデータが5走以上あれば、既知データを優先。
+            if hid in known_ids:
+                pre = known.loc[(known['馬ID'].astype(str).str.replace(r'\.0$', '',regex=True)==hid) &
+                                (pd.to_datetime(known['日付'],errors='coerce')<date)].copy()
+            else:
+                pre = pd.DataFrame()
+            if len(pre) < 5:
+                raw = get_results(hid,name)
+                pre = prepare(convert_auto(raw))
+                pre = pre.loc[pd.to_datetime(pre['日付'],errors='coerce')<date].copy()
+            else:
+                pre = prepare(pre)
+            pre = pre.sort_values('日付',ascending=False).head(5).copy()
+            if pre.empty:
+                failed.append(f'{name}: レース前の成績なし')
+                continue
+            # 既知のS/M/Hを再利用。未知の場合のみ元ページから確認する。
+            if 'netkeibaペース' not in pre.columns:
+                pre['netkeibaペース']=''
+            for idx, rec in pre.iterrows():
+                raceid = str(rec.get('レースID','')).strip().removesuffix('.0')
+                if pre.at[idx,'netkeibaペース'] in V195_TAG:
+                    continue
+                if raceid in local_paces:
+                    pre.at[idx,'netkeibaペース']=local_paces[raceid]
+                    continue
+                shared = known.loc[known['レースID'].fillna('').astype(str).str.replace(r'\.0$', '',regex=True).eq(raceid)]
+                matches = (shared['netkeibaペース'].dropna().astype(str) if 'netkeibaペース' in shared else pd.Series(dtype=str))
+                matches = matches[matches.isin(V195_TAG)]
+                if not matches.empty:
+                    pre.at[idx,'netkeibaペース']=matches.iloc[0]
+                    local_paces[raceid]=matches.iloc[0]
+                elif re.fullmatch(r'\d{12}', raceid) and pace_calls < limit_pace_calls:
+                    pace_calls += 1
+                    try:
+                        pre.at[idx,'netkeibaペース']=get_netkeiba_pace(raceid)
+                        local_paces[raceid]=pre.at[idx,'netkeibaペース']
+                    except (requests.RequestException, ValueError, KeyError):
+                        pass
+            pre['馬名']=name
+            frames.append(pre)
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            failed.append(f'{name}: {str(exc)[:75]}')
+        if progress_callback:
+            progress_callback(index,len(entrants),name)
+    full = pd.concat(frames,ignore_index=True) if frames else pd.DataFrame()
+    known_horses = (full.groupby('馬名')['通過順'].apply(lambda s: int(s.fillna('').astype(str).str.contains(r'\d').sum()>=2)).sum()
+                    if not full.empty and '通過順' in full else 0)
+    predicted=None; explanation='事前の位置取り情報不足'; lead=front=0
+    if not full.empty:
+        names = full['馬名'].unique().tolist()
+        # 予測器は全頭が揃った場合のみ実行可能、欠測は別に記録する。
+        predicted,explanation,detail,known_count,lead,front=estimate_field_pace_v19(full,names)
+    else:
+        known_count=0
+    # 実際の全出走馬に対して予測器を再生。計算に欠けた馬はカバレッジに反映。
+    pred_tag = {'スロー（S）':'S','ミドル（M）':'M','ハイ（H）':'H'}.get(predicted)
+    status = ('全頭・事前走歴確認' if known_count==len(entrants) and not failed else
+              '一部欠測（参考）')
+    return {'レースID':rid,'開催日':date.strftime('%Y-%m-%d'),
+            'レース名':str(target_rows['レース名'].dropna().iloc[0]) if 'レース名' in target_rows and target_rows['レース名'].notna().any() else '',
+            '全出走頭数':len(entrants),'事前走歴取得頭数':len(frames),
+            '序盤位置2走以上':int(known_count),'実際':actual,
+            '予測':pred_tag or '保留','一致':('一致' if pred_tag==actual else '不一致') if pred_tag else '対象外',
+            '取得状況':status,'逃げ候補':lead,'先行候補':front,
+            'S/M/H追加照会':pace_calls,'取得失敗詳細':' / '.join(failed)[:500],
+            '予測根拠':explanation}
 
 
 def tap_choice(label, options, key, format_func=None):
@@ -1835,6 +1964,41 @@ with tab_quality172:
                 else:
                     st.info('照合可能なレースがありません。レースID・開催日・netkeibaペースの取得状況を確認してください。')
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
+
+
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5・試験版）',expanded=False):
+        st.caption('まず3レースまで試験。結果表から当時の全出走馬を取得し、開催日より前の各馬の成績のみを使って予測します。')
+        st.caption('出走全頭を取得しても、当時の事前走歴が欠けていれば「参考」扱いです。S/M/Hの照合結果は未検証モデルの試験結果です。')
+        candidates195 = analysis_df.copy()
+        candidates195['_rid195']=candidates195['レースID'].fillna('').astype(str).str.replace(r'\.0$', '',regex=True)
+        candidates195 = candidates195.loc[candidates195['_rid195'].str.fullmatch(r'\d{12}')]
+        candidates195 = candidates195.loc[candidates195['netkeibaペース'].isin(V195_TAG)]
+        candidates195 = candidates195.sort_values('日付',ascending=False).drop_duplicates('_rid195')
+        cids195 = candidates195['_rid195'].head(35).tolist()
+        test_count195 = st.radio('検証レース数',['1レース','3レース'],horizontal=True,key='v195_count',index=0)
+        if st.button('全出走馬の事前データを使って試験検証',key='v195_run',use_container_width=True):
+            n195 = 1 if test_count195=='1レース' else 3
+            selected195=cids195[:n195]
+            rows195=[]
+            bar195=st.progress(0,text='全出走馬を確認中')
+            for ri,rid195 in enumerate(selected195):
+                try:
+                    def cb195(done,total,name):
+                        bar195.progress((ri+done/total)/max(1,len(selected195)),text=f'{ri+1}/{len(selected195)}レース・{done}/{total}頭: {name}')
+                    rows195.append(full_field_replay_v195(rid195,analysis_df,progress_callback=cb195))
+                except Exception as exc:
+                    rows195.append({'レースID':rid195,'取得状況':'検証エラー','取得失敗詳細':str(exc)[:250]})
+                bar195.progress((ri+1)/max(1,len(selected195)))
+            bar195.empty()
+            st.session_state['full_replay_v195']=pd.DataFrame(rows195)
+            st.session_state['full_replay_race_v195']=race_id
+        if st.session_state.get('full_replay_race_v195') == race_id:
+            out195=st.session_state.get('full_replay_v195')
+            if isinstance(out195,pd.DataFrame) and not out195.empty:
+                st.dataframe(out195,hide_index=True,use_container_width=True)
+                st.download_button('全出走馬の再現テスト結果をCSVで保存',out195.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_full_field_replay_v195.csv',mime='text/csv',use_container_width=True)
+                st.caption('全出走頭数・事前走歴取得頭数・序盤位置2走以上を確認してください。取得率が低いレースの一致／不一致を過信しないでください。')
 
     st.subheader('レース格の判定チェック')
     st.caption('元のレース名と格付け根拠を見ながら、誤判定・判定不明を確認できます。ここで表示するのはフィルター適用前のデータです。')
