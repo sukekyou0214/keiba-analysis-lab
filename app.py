@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.20.3')
+st.title('🏇 競馬分析ラボ Ver.20.4')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2367,7 +2367,7 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.20.1・試験版）',expanded=False):
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.20.4・試験版）',expanded=False):
         st.caption('全出走馬の当該レース以前の成績だけでS/M/Hを再現。レース選定時には正解ラベルを利用しますが、予測器には渡しません。')
         st.caption('Hを指定して検証した結果は、意図的に抽出したサンプルです。全体の的中率とは混ぜて評価しないでください。')
         candidates196 = analysis_df.copy()
@@ -2407,7 +2407,7 @@ with tab_quality172:
                 st.dataframe(preview196,hide_index=True,use_container_width=True)
         st.caption('過去の逃げ・先行時の前半ラップを検証できます。ラップ取得は追加通信が多いため、まず1〜3レースがおすすめ。')
         st.caption('同じ前半1000mでも後半が速ければS寄り、後半が落ちればH寄りになることがあります。馬場状態（良・稍重・重・不良）と芝/ダート、距離・開催場も区別して参考比較します。')
-        do_laps198 = st.checkbox('前半ラップ＋前後半差＋馬場別基準を追加取得（Ver.20.3）', value=False, key='v198_laps')
+        do_laps198 = st.checkbox('前半ラップ＋前後半差＋馬場別基準を追加取得（Ver.20.4）', value=False, key='v198_laps')
         st.caption('チェック時は検証1レースにつき最大12件の過去レースのラップ表を追加照会。対象レース当日のラップは予測にも診断値にも使いません。')
         if st.button('全出走馬の事前データで検証を実行',key='v196_run',use_container_width=True,disabled=not bool(id_list196)):
             results196=[]
@@ -2431,7 +2431,7 @@ with tab_quality172:
             out196=st.session_state.get('full_replay_v196')
             if isinstance(out196,pd.DataFrame) and not out196.empty:
                 st.dataframe(out196,hide_index=True,use_container_width=True)
-                with st.expander('現行予測とラップ参考スコア（Ver.20.3）', expanded=True):
+                with st.expander('現行予測とラップ参考スコア（Ver.20.4）', expanded=True):
                     st.caption('ラップの秒速さは参考スコアです。現行予測は一切変更しません。実際のペースはスコア算出に使用しません。')
                     cols202=[c for c in ['レース名','競馬場','距離(m)','実際','予測','試験モデル予測',
                                 '一致','ラップ試験スコア(秒速さ)','ラップスコア状態','ラップ参考基準数(延べ走)',
@@ -2447,6 +2447,42 @@ with tab_quality172:
                         st.caption('参考スコア＝前方時のレース全体1000mラップが基準より何秒速いか。プラスは速め、マイナスは遅め。的中確率ではありません。高・中信頼度が延べ3走未満なら算出しません。')
                     else:
                         st.info('Ver.20.3で「ラップを追加取得」にチェックして再実行すると比較結果が表示されます。')
+                with st.expander('ラップスコアのペース別分布・算出率（Ver.20.4）', expanded=True):
+                    st.caption('実際のS/M/Hは検証結果のグループ分けにのみ使用し、予測や参考スコアの算出には使いません。通常抽出とH限定抽出の結果は別々に比較してください。')
+                    if {'実際','ラップ試験スコア(秒速さ)'}.issubset(out196.columns):
+                        compare204=out196.loc[out196['実際'].isin(['S','M','H'])].copy()
+                        compare204['_score204']=pd.to_numeric(compare204['ラップ試験スコア(秒速さ)'],errors='coerce')
+                        compare204['_audit204']=pd.to_numeric(compare204.get('事前走歴当日以降混入走数',pd.Series(0,index=compare204.index)),errors='coerce').fillna(0)
+                        compare204['_baseline_audit204']=pd.to_numeric(compare204.get('基準最終日_時系列違反',pd.Series(0,index=compare204.index)),errors='coerce').fillna(0)
+                        sumrows204=[]
+                        for pace204 in ['S','M','H']:
+                            s204=compare204.loc[compare204['実際'].eq(pace204)]
+                            valid204=s204['_score204'].dropna()
+                            n204=len(s204)
+                            sumrows204.append({'実際':pace204,'検証レース':n204,'スコア算出':len(valid204),
+                                '算出率(%)':round(100*len(valid204)/n204,1) if n204 else None,
+                                '平均スコア(秒)':round(float(valid204.mean()),3) if len(valid204) else None,
+                                '中央値(秒)':round(float(valid204.median()),3) if len(valid204) else None,
+                                '最小(秒)':round(float(valid204.min()),3) if len(valid204) else None,
+                                '最大(秒)':round(float(valid204.max()),3) if len(valid204) else None})
+                        table204=pd.DataFrame(sumrows204)
+                        st.dataframe(table204,hide_index=True,use_container_width=True)
+                        score_ok204=compare204.dropna(subset=['_score204'])
+                        if not score_ok204.empty:
+                            st.markdown('**各レースのスコア（比較できたものだけ）**')
+                            display204=[c for c in ['レース名','実際','予測','ラップ試験スコア(秒速さ)',
+                                'ラップ参考基準数(延べ走)','比較用基準品質','時系列監査'] if c in score_ok204.columns]
+                            st.dataframe(score_ok204[display204],hide_index=True,use_container_width=True)
+                        failed204=int((compare204['_audit204']>0).sum()+(compare204['_baseline_audit204']>0).sum())
+                        unknown204=int(pd.to_numeric(compare204.get('事前走歴日付不明走数',pd.Series(0,index=compare204.index)),errors='coerce').fillna(0).sum())
+                        st.caption(f'今回の確認：走歴・基準日の監査違反を含むレース延べ件数 {failed204}、事前走歴の日付不明 {unknown204}走。監査は取得したデータの範囲内です。')
+                        if st.session_state.get('full_replay_selection_v196') != '直近から選ぶ':
+                            st.warning('この抽出は実際のペースを利用してレースを選んでいます。通常の一致率やスコア分布と単純合算しないでください。')
+                        if len(score_ok204)<10:
+                            st.info('スコア算出レースが10件未満。平均値の差だけで、スコアが予測に有効とは判断できません。')
+                        st.caption('「基準不足」のレースは算出率の分母に含み、スコアの平均には含みません。偏った欠測による見かけの差に注意してください。')
+                    else:
+                        st.info('前半ラップ取得をONにして検証を再実行すると、ペース別の分布が表示されます。')
                 with st.expander('時系列監査（Ver.20.3）', expanded=True):
                     audit_cols203=[c for c in ['レース名','開催日','時系列監査','監査対象の事前走歴数',
                                '事前走歴最新日','事前走歴日付不明走数',
@@ -2503,9 +2539,9 @@ with tab_quality172:
                         if '先頭時ラップ詳細' in out196.columns:
                             with st.expander('先頭時の過去走ラップ詳細', expanded=False):
                                 st.dataframe(out196[['レース名','先頭時ラップ詳細','ラップ取得エラー']],hide_index=True,use_container_width=True)
-                st.download_button('Ver.20.3 スコア・監査付き全頭再現テストCSVを保存',
+                st.download_button('Ver.20.4 分布・監査付き全頭再現テストCSVを保存',
                                    out196.to_csv(index=False).encode('utf-8-sig'),
-                                   file_name='keiba_full_field_replay_v203.csv',mime='text/csv',use_container_width=True)
+                                   file_name='keiba_full_field_replay_v204.csv',mime='text/csv',use_container_width=True)
                 if {'予測','実際','一致'}.issubset(out196.columns):
                     verified196=out196.loc[out196['予測'].isin(['S','M','H']) & out196['実際'].isin(['S','M','H'])].copy()
                     if not verified196.empty:
