@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.0')
+st.title('🏇 競馬分析ラボ Ver.16.1')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -620,49 +620,93 @@ def get_lap_table_test_v1594(race_id):
 
 
 def classify_lap_shape_v16(lap_text, distance, validation='OK'):
-    """検証済み200mラップ限定の暫定的なレース展開タイプ。個馬の脚質分類ではない。"""
+    """200mラップによる試験分類。レース展開の特徴であり、個々の馬の適性ではない。"""
     if str(validation) != 'OK':
-        return {'展開タイプ':'判定不可', '判定根拠':'ラップ検証がOKではありません'}
+        return {'展開タイプ': '判定不可', '判定根拠': 'ラップ検証がOKではありません'}
     try:
         distance = int(distance)
-        values = [float(v.strip()) for v in str(lap_text).split(' - ')]
-        if distance < 1200 or distance % 200 or len(values) != distance // 200:
-            raise ValueError('距離と区間数が一致しません')
-        if not all(8 <= v <= 25 for v in values):
-            raise ValueError('異常な区間タイム')
+        laps = [float(x.strip()) for x in str(lap_text).split(' - ')]
+        if distance < 1200 or distance % 200 or len(laps) != distance // 200:
+            raise ValueError('区間数不一致')
+        if any(not (8 <= x <= 25) for x in laps):
+            raise ValueError('ラップ値異常')
     except (ValueError, TypeError):
-        return {'展開タイプ':'判定不可', '判定根拠':'200mラップを正しく解釈できません'}
+        return {'展開タイプ': '判定不可', '判定根拠': '距離とラップ数が不一致・不正'}
 
-    # 200mの平均値で比較。先頭200mはスタート負荷が特殊なため、前半比較から除外。
-    n = len(values)
-    first = values[1:max(2, n//2)]
-    middle = values[max(2, n//2):max(3, n-3)]
-    last3 = values[-3:]
-    first_avg = sum(first)/len(first)
-    late_avg = sum(last3)/3
-    # ラスト3区間の直前3区間を、加速が始まった時点の参考値とする
-    before_last3 = values[-6:-3]
-    before_avg = sum(before_last3)/len(before_last3)
-    last2_avg = sum(values[-2:])/2
-    # 終盤だけの明確な加速を最優先で検知する。
-    late_accel = before_avg - late_avg  # 正ほど後半加速
-    sustained = (sum(values[-5:-2])/3 <= first_avg - 0.35 and
-                 max(values[-5:]) - min(values[-5:]) <= 1.5)
-    fading = late_avg - first_avg  # 正ほど終盤減速
-    if late_accel >= 0.7 and not sustained:
-        kind = '瞬発戦寄り'
-    elif sustained:
+    # 最初の200mはスタート加速区間なので序盤基準から除く。
+    n = len(laps)
+    early = laps[1:max(3, n//2)]
+    early_avg = sum(early) / len(early)
+    late = sum(laps[-3:]) / 3
+    before = sum(laps[-6:-3]) / 3
+    accel = before - late
+    fade = late - early_avg
+    # 最後の1000m（5区間）で、序盤基準より速いラップがどれだけ持続したか。
+    tail5 = laps[-5:]
+    threshold = early_avg - 0.20
+    quick = [x <= threshold for x in tail5]
+    longest = run = 0
+    for hit in quick:
+        run = run + 1 if hit else 0
+        longest = max(longest, run)
+    sustained_count = sum(quick)
+    tail_spread = max(tail5) - min(tail5)
+    # 持続性は「ラストだけの加速」と区別するため、残り1000〜600mにも速い区間を要求。
+    long_spurt = (sustained_count >= 4 and longest >= 3 and
+                  sum(quick[:2]) >= 1 and tail_spread <= 1.2 and fade < 0.7)
+    sharp = accel >= 0.70 and not long_spurt
+    exhausting = fade >= 0.70 and accel < 0.35
+    if long_spurt:
         kind = 'ロングスパート戦寄り'
-    elif fading >= 0.7:
+    elif sharp:
+        kind = '瞬発戦寄り'
+    elif exhausting:
         kind = '消耗戦寄り'
     else:
         kind = '混合・判定保留'
-    reason = (f'序盤平均（最初の200m除外）{first_avg:.2f}秒、'
-              f'終盤600m平均{late_avg:.2f}秒、終盤直前600m平均{before_avg:.2f}秒。'
-              '※200m区間平均による試作基準')
-    return {'展開タイプ':kind, '判定根拠':reason,
-            '序盤平均_秒':round(first_avg,2), '終盤600m平均_秒':round(late_avg,2),
-            '終盤加速幅_秒':round(late_accel,2), '終盤減速幅_秒':round(fading,2)}
+    reason = (f'序盤平均{early_avg:.2f}s／終盤600m{late:.2f}s／直前600m{before:.2f}s。'
+              f'終盤加速{accel:+.2f}s、終盤減速{fade:+.2f}s。'
+              f'残り1000m中の高速区間{sustained_count}/5、最長連続{longest}区間、ばらつき{tail_spread:.2f}s。'
+              '※独自の試作基準。距離・馬場・相手関係の影響に注意')
+    return {'展開タイプ': kind, '判定根拠': reason,
+            '序盤平均_秒': round(early_avg,2),
+            '終盤600m平均_秒': round(late,2),
+            '終盤加速幅_秒': round(accel,2),
+            '終盤減速幅_秒': round(fade,2),
+            '高速区間数_残1000m': sustained_count,
+            '最長高速連続区間数': longest,
+            '残1000mラップ幅_秒': round(tail_spread,2),
+            '持続判定': '該当' if long_spurt else '非該当'}
+
+
+def get_lap_race_title(rid, sample):
+    """保存済みの馬成績のレース名を使う。不足時のみ結果ページを参照。"""
+    race_name = ''
+    race_day = ''
+    if 'レースID' in sample.columns:
+        rows = sample[sample['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True).eq(str(rid))]
+        if not rows.empty:
+            for col, var in [('レース名', 'race_name'), ('日付', 'race_day')]:
+                if col in rows:
+                    vals = rows[col].dropna().astype(str).str.strip()
+                    vals = vals[~vals.isin(['', 'nan', 'None'])]
+                    if not vals.empty:
+                        if col == 'レース名': race_name = vals.iloc[0]
+                        else: race_day = vals.iloc[0]
+    if not race_name:
+        try:
+            res = requests.get('https://race.netkeiba.com/race/result.html?race_id=' + str(rid),
+                               headers=HEADERS, timeout=9)
+            res.raise_for_status()
+            res.encoding = res.apparent_encoding
+            soup = BeautifulSoup(res.text, 'html.parser')
+            title = soup.title.get_text(' ', strip=True) if soup.title else ''
+            name = re.split(r'\s+結果|\s*[|｜]\s*', title, maxsplit=1)[0].strip()
+            if name and 'netkeiba' not in name.lower() and 'エラー' not in name:
+                race_name = name
+        except (requests.RequestException, ValueError):
+            pass
+    return race_name or 'レース名未取得', race_day
 
 
 def lap_v16_cache_path(rid):
@@ -1371,7 +1415,7 @@ if st.session_state['analysis_visible_v1581']:
                                file_name='keiba_lap_table_test_v1594.csv', mime='text/csv',
                                use_container_width=True)
 
-    with st.expander('200mラップ展開タイプの試験分析（Ver.16）', expanded=False):
+    with st.expander('200mラップ展開タイプの試験分析（Ver.16.1）', expanded=False):
         st.caption('先ほど成功した200mラップ取得処理を利用。判定基準は試作段階で、S/M/Hとは別軸です。過去成績やペースランキングを変更しません。')
         sample = pace_compare_base.copy()
         if 'レースID' in sample.columns:
@@ -1396,10 +1440,11 @@ if st.session_state['analysis_visible_v1581']:
                         if payload16.get('検証') == 'OK':
                             save_lap_v16(rid16, payload16)
                     extra16 = classify_lap_shape_v16(payload16.get('200mラップ',''), payload16.get('レース距離'), payload16.get('検証'))
-                    rows16.append({'レースID':rid16, 'レース距離':payload16.get('レース距離'),
+                    title16, day16 = get_lap_race_title(rid16, sample)
+                    rows16.append({'レースID':rid16, 'レース名':title16, '開催日':day16, 'レース距離':payload16.get('レース距離'),
                                    '200mラップ':payload16.get('200mラップ'), '検証':payload16.get('検証'), **extra16})
                 except Exception as ex16:
-                    rows16.append({'レースID':rid16, '検証':'取得エラー', '展開タイプ':'判定不可', '判定根拠':str(ex16)[:180]})
+                    rows16.append({'レースID':rid16, 'レース名':'取得エラー', '開催日':'', '検証':'取得エラー', '展開タイプ':'判定不可', '判定根拠':str(ex16)[:180]})
                 progress16.progress(j / len(race_ids_16))
             st.session_state['lap_shapes_v16'] = pd.DataFrame(rows16)
             st.session_state['lap_shapes_v16_race'] = str(st.session_state.get('auto_race_id', ''))
@@ -1408,7 +1453,7 @@ if st.session_state['analysis_visible_v1581']:
             st.write('**レース単位の暫定判定結果**')
             st.dataframe(shapes16, hide_index=True, use_container_width=True)
             st.download_button('展開タイプ試験結果をCSVで保存', shapes16.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_shape_v16.csv', mime='text/csv', use_container_width=True)
+                               file_name='keiba_lap_shape_v161.csv', mime='text/csv', use_container_width=True)
             valid16 = shapes16[shapes16['展開タイプ'].ne('判定不可')][['レースID','展開タイプ']].copy()
             if not valid16.empty and 'レースID' in sample.columns:
                 linked16 = sample.merge(valid16, left_on='_rid16', right_on='レースID', how='inner', suffixes=('', '_分類'))
@@ -1427,7 +1472,7 @@ if st.session_state['analysis_visible_v1581']:
                                  hide_index=True, use_container_width=True)
                     st.download_button('展開タイプ別の馬成績をCSVで保存', overview16.to_csv(index=False).encode('utf-8-sig'),
                                        file_name='keiba_lap_horse_compare_v16.csv', mime='text/csv', use_container_width=True)
-            st.warning('試作ルールの分類です。現段階で得意・不得意を断定しないでください。特に1600mは実データ検証が必要です。')
+            st.warning('試作ルールによるレース全体の分類です。1走だけの結果から各馬の得意・不得意は断定しないでください。')
 
     with st.expander('ペース判定の精度チェック（Ver.15.8）', expanded=False):
         st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
