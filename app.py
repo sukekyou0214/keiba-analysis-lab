@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.5.2')
+st.title('🏇 競馬分析ラボ Ver.19.5.3')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -320,7 +320,7 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 
-# ===== Ver.19.5.2: 過去レース全出走馬を対象とする事前データ検証 =====
+# ===== Ver.19.5.3: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
 # ただし、事前の走歴不足は必ず明示し、欠測を予測的中扱いしない。
 V195_TAG = {'スロー寄り': 'S', 'ミドル寄り': 'M', 'ハイ寄り': 'H'}
@@ -2020,8 +2020,8 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5.2・試験版）',expanded=False):
-        st.caption('まず3レースまで試験。結果表から当時の全出走馬を取得し、開催日より前の各馬の成績のみを使って予測します。')
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5.3・試験版）',expanded=False):
+        st.caption('1・3・5・10・20レースで検証できます。結果表から当時の全出走馬を取得し、開催日より前の各馬の成績のみを使って予測します。最初は5〜10レースがおすすめです。')
         st.caption('出走全頭を取得しても、当時の事前走歴が欠けていれば「参考」扱いです。S/M/Hの照合結果は未検証モデルの試験結果です。')
         candidates195 = analysis_df.copy()
         candidates195['_rid195']=candidates195['レースID'].fillna('').astype(str).str.replace(r'\.0$', '',regex=True)
@@ -2029,9 +2029,11 @@ with tab_quality172:
         candidates195 = candidates195.loc[candidates195['netkeibaペース'].isin(V195_TAG)]
         candidates195 = candidates195.sort_values('日付',ascending=False).drop_duplicates('_rid195')
         cids195 = candidates195['_rid195'].head(35).tolist()
-        test_count195 = st.radio('検証レース数',['1レース','3レース'],horizontal=True,key='v195_count',index=0)
+        test_count195 = st.radio('検証レース数',['1レース','3レース','5レース','10レース','20レース'],horizontal=True,key='v195_count',index=1)
+        if test_count195 in ('10レース', '20レース'):
+            st.caption('多数の出走馬・過去成績ページへアクセスします。取得先への負荷と実行時間に注意してください。通信に失敗したレースも結果に記録されます。')
         if st.button('全出走馬の事前データを使って試験検証',key='v195_run',use_container_width=True):
-            n195 = 1 if test_count195=='1レース' else 3
+            n195 = int(test_count195.replace('レース', ''))
             selected195=cids195[:n195]
             rows195=[]
             bar195=st.progress(0,text='全出走馬を確認中')
