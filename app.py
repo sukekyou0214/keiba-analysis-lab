@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.18.1')
+st.title('🏇 競馬分析ラボ Ver.18.2')
 st.caption('一括取得 → 総合診断 → 想定ペース別の適性をすぐ比較。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -1111,6 +1111,16 @@ if race_id and st.session_state.auto_race_id != race_id:
         restored = load_race_cache(race_id)
         if restored is not None:
             st.session_state.auto_horses, st.session_state.auto_df = restored
+            # 保存済み成績には馬番が含まれないため、出馬表の馬番だけを再照合する。
+            # 出馬表取得が失敗しても保存済み成績と診断はそのまま利用する。
+            try:
+                latest_horses_182, latest_numbers_182 = get_horses(race_id)
+                if latest_horses_182:
+                    st.session_state.auto_horses = latest_horses_182
+                    st.session_state.auto_numbers = latest_numbers_182
+                    st.session_state.auto_df = update_cached_names(st.session_state.auto_df, latest_horses_182)
+            except Exception:
+                pass
     except Exception as e:
         st.warning(f'保存済みデータの復元に失敗しました：{e}')
 if race_id and st.session_state.auto_df is not None:
@@ -1410,7 +1420,7 @@ with tab_main171:
                                     '展開': st.column_config.TextColumn('好走展開', width='medium')})
         # Ver.18: 実際のnetkeiba S/M/H実績から、選択した展開での好走率を比較。
         # レース全体のペースであり、将来の勝率を予測した値ではない。
-        st.markdown('#### 想定ペース × 好走傾向')
+        st.markdown('#### 想定ペース × 相性・実績')
         selected_pace18 = st.radio('今回想定するペース',
                                    ['スロー（S）', 'ミドル（M）', 'ハイ（H）'],
                                    horizontal=True, key='scenario_pace_v18')
@@ -1449,21 +1459,21 @@ with tab_main171:
                 status18 = '比較不足'
                 reason18 = '想定ペースと他ペースの両方が2走以上必要なため、優劣は判定しません。'
             elif diff18 >= 25:
-                status18 = '好走傾向' if min(n18,other_n18) >= 4 else '好走傾向※'
+                status18 = '他より高め' if min(n18,other_n18) >= 4 else '他より高め※'
                 reason18 = '他ペースより3着内率が25ポイント以上高い。統計的な有意差や未来の勝率を意味しません。'
             elif diff18 <= -25:
-                status18 = '実績控えめ' if min(n18,other_n18) >= 4 else '実績控えめ※'
-                reason18 = '他ペースより3着内率が25ポイント以上低い。苦手と断定するものではありません。'
+                status18 = '他より低め' if min(n18,other_n18) >= 4 else '他より低め※'
+                reason18 = '他ペースより3着内率が25ポイント以上低いという相対比較です。このペースの絶対的な成績が悪いとは限りません。'
             else:
-                status18 = '大差なし' if min(n18,other_n18) >= 4 else '大差なし※'
-                reason18 = '他ペースとの3着内率差が25ポイント未満。'
+                status18 = '同程度' if min(n18,other_n18) >= 4 else '同程度※'
+                reason18 = '他ペースとの3着内率差が25ポイント未満です。'
             good_rows18 = selected18.loc[selected18['着順_数値'].le(3)]
             corners18 = pd.to_numeric(good_rows18['4角順位'], errors='coerce').dropna()
             agari18 = pd.to_numeric(good_rows18['上がり順位'], errors='coerce').dropna()
             pos_note18 = f'4角平均{corners18.mean():.1f}番手' if len(corners18) else '4角の有効データなし'
             if len(agari18):
                 pos_note18 += f'／上がり3位内{int(agari18.le(3).sum())}/{len(agari18)}走'
-            results18.append({'馬名':horse18, '評価':status18,
+            results18.append({'馬名':horse18, '相性':status18,
                               '実績': f'{good18}/{n18}走' if n18 else '—',
                               '3着内率':f'{pct18:.1f}%' if pct18 is not None else '—',
                               '想定ペース対象走数':n18, '他ペース対象走数':other_n18,
@@ -1477,12 +1487,12 @@ with tab_main171:
         pace_result18 = pd.DataFrame(results18)
         if not pace_result18.empty:
             pace_display18 = display_horse_column(pace_result18, horses, st.session_state.auto_numbers)
-            st.dataframe(pace_display18[['馬名','評価','実績']], hide_index=True,
+            st.dataframe(pace_display18[['馬名','相性','実績']], hide_index=True,
                          use_container_width=True, height=min(700,48+35*len(pace_display18)),
                          column_config={'馬名':st.column_config.TextColumn('馬番＋馬名',width='medium'),
-                                        '評価':st.column_config.TextColumn('評価',width='small'),
+                                        '相性':st.column_config.TextColumn('他ペース比',width='small'),
                                         '実績':st.column_config.TextColumn('3着内／出走',width='small')})
-            st.caption('実績＝想定ペースでの3着以内回数／出走回数。※は少数走数または未判定あり。'
+            st.caption('相性はその馬自身の他ペースと比較した傾向。実績は選択ペースでの3着以内回数／出走回数。※は少数走数の参考判定。'
                        ' 該当0走と、ペース判定データ不足は区別しています。将来の勝率予測ではありません。')
             with st.expander('各馬の根拠・対象走数・他ペースを確認',expanded=False):
                 chosen_pace18 = tap_choice('確認する馬', pace_display18['馬名'].tolist(), 'scenario_horse_v18')
@@ -1492,7 +1502,7 @@ with tab_main171:
                 st.caption('集計対象：各馬の直近10走に含まれる重賞。netkeibaのS/M/H判定済みデータのみ。')
             st.download_button('想定ペース別比較をCSVで保存',
                                pace_display18.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_scenario_v181.csv',mime='text/csv',
+                               file_name='keiba_scenario_v182.csv',mime='text/csv',
                                use_container_width=True)
         if quick_shapes171.empty:
             st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。詳細分析からラップを取得すると展開診断も加わります。')
