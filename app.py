@@ -11,8 +11,8 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.17.4')
-st.caption('URLを入力して一括取得。完了後は総合診断をすぐ表示。')
+st.title('🏇 競馬分析ラボ Ver.18.0')
+st.caption('一括取得 → 総合診断 → 想定ペース別の適性をすぐ比較。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
@@ -1408,6 +1408,83 @@ with tab_main171:
                      column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
                                     '走りの総合診断': st.column_config.TextColumn('走りの特徴', width='medium'),
                                     '展開': st.column_config.TextColumn('好走展開', width='medium')})
+        # Ver.18: 実際のnetkeiba S/M/H実績から、選択した展開での好走率を比較。
+        # レース全体のペースであり、将来の勝率を予測した値ではない。
+        st.markdown('#### 想定ペース × 好走傾向')
+        selected_pace18 = st.radio('今回想定するペース',
+                                   ['スロー（S）', 'ミドル（M）', 'ハイ（H）'],
+                                   horizontal=True, key='scenario_pace_v18')
+        pace_key18 = {'スロー（S）': 'スロー寄り', 'ミドル（M）': 'ミドル寄り',
+                      'ハイ（H）': 'ハイ寄り'}[selected_pace18]
+        results18 = []
+        details18 = {}
+        for horse18 in quick_names171:
+            work18 = quick171.loc[quick171['馬名'].eq(horse18)].copy()
+            if work18.empty:
+                continue
+            work18['着順_数値'] = pd.to_numeric(work18['着順_数値'], errors='coerce')
+            work18 = work18.loc[work18['着順_数値'].ge(1) &
+                                work18['推定ペース'].isin(['スロー寄り','ミドル寄り','ハイ寄り'])].copy()
+            selected18 = work18.loc[work18['推定ペース'].eq(pace_key18)].copy()
+            others18 = work18.loc[~work18['推定ペース'].eq(pace_key18)].copy()
+            count18 = len(selected18)
+            other_count18 = len(others18)
+            wins18 = int(selected18['着順_数値'].le(3).sum())
+            other_wins18 = int(others18['着順_数値'].le(3).sum())
+            pct18 = 100 * wins18 / count18 if count18 else None
+            other_pct18 = 100 * other_wins18 / other_count18 if other_count18 else None
+            delta18 = pct18 - other_pct18 if pct18 is not None and other_pct18 is not None else None
+            if count18 == 0:
+                status18 = '未経験・不明'
+                explanation18 = 'このペースの着順付きデータがありません。苦手という意味ではありません。'
+            elif count18 < 2 or other_count18 < 2:
+                status18 = '比較材料不足'
+                explanation18 = '想定ペースと別ペースの両方が2走以上ないため、優劣は判定しません。'
+            elif delta18 >= 25:
+                status18 = '好走傾向あり' if min(count18, other_count18) >= 4 else '好走傾向（参考）'
+                explanation18 = '別ペースより3着以内率が25ポイント以上高い。ただし集計上の傾向です。'
+            elif delta18 <= -25:
+                status18 = '実績控えめ' if min(count18, other_count18) >= 4 else '実績控えめ（参考）'
+                explanation18 = '別ペースより3着以内率が25ポイント以上低い。不得意の証明ではありません。'
+            else:
+                status18 = '大差なし（参考）' if min(count18, other_count18) < 4 else '大差なし'
+                explanation18 = '別ペースとの3着以内率の差は25ポイント未満です。'
+            pos18 = pd.to_numeric(selected18.loc[selected18['着順_数値'].le(3), '4角順位'], errors='coerce').dropna()
+            finish18 = pd.to_numeric(selected18.loc[selected18['着順_数値'].le(3), '上がり順位'], errors='coerce').dropna()
+            posture18 = ('4角平均' + f'{pos18.mean():.1f}番手' if len(pos18) else '4角不明')
+            if len(finish18):
+                posture18 += f'／上がり3位内{int(finish18.le(3).sum())}/{len(finish18)}走'
+            records_label18 = f'{wins18}/{count18}走' if count18 else '—'
+            other_label18 = f'{other_wins18}/{other_count18}走' if other_count18 else '—'
+            results18.append({'馬名': horse18, '好走目安': status18,
+                              '今回ペース': records_label18,
+                              '3着内率': f'{pct18:.0f}%' if pct18 is not None else '—',
+                              '他ペース': other_label18,
+                              '対象走数': count18, '他ペース走数': other_count18})
+            details18[horse18] = (f'想定ペース：{pace_key18}。対象{count18}走で3着以内{wins18}走'
+                                  + (f'（{pct18:.1f}%）' if pct18 is not None else '')
+                                  + f'。他ペースは{other_count18}走で3着以内{other_wins18}走'
+                                  + (f'（{other_pct18:.1f}%）' if other_pct18 is not None else '')
+                                  + '。' + explanation18 + ' 好走時の位置・末脚：' + posture18 + '。')
+        pace_result18 = pd.DataFrame(results18)
+        if not pace_result18.empty:
+            # 馬の総合診断と同じ順番に並べ、過度なランキングを避ける。
+            pace_display18 = display_horse_column(pace_result18, horses, st.session_state.auto_numbers)
+            st.dataframe(pace_display18[['馬名', '好走目安', '今回ペース', '3着内率']],
+                         hide_index=True, use_container_width=True,
+                         height=min(700, 48+35*len(pace_display18)),
+                         column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
+                                        '好走目安': st.column_config.TextColumn('展開との相性', width='medium')})
+            st.caption('今回ペース＝3着以内回数／出走回数。直近10走の重賞のみ。netkeibaのS/M/H判定だけを集計。'
+                       '「好走傾向」は過去の実績差であり、予測勝率・能力順位ではありません。')
+            with st.expander('展開適性の根拠・他ペースと比較', expanded=False):
+                chosen_pace18 = tap_choice('確認する馬', pace_display18['馬名'].tolist(), 'scenario_horse_v18')
+                chosen_raw18 = pace_result18.iloc[pace_display18['馬名'].tolist().index(chosen_pace18)]['馬名']
+                st.write(details18[chosen_raw18])
+            st.download_button('想定ペース別比較をCSVで保存',
+                               pace_display18.to_csv(index=False).encode('utf-8-sig'),
+                               file_name='keiba_scenario_v18.csv', mime='text/csv',
+                               use_container_width=True)
         if quick_shapes171.empty:
             st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。詳細分析からラップを取得すると展開診断も加わります。')
         st.caption('「参考」「暫定」は少数データの目印。レース全体のラップを馬自身の個別ラップとして扱いません。')
