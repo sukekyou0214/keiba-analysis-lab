@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.6')
+st.title('🏇 競馬分析ラボ Ver.19.7')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -320,7 +320,7 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 
-# ===== Ver.19.6: 過去レース全出走馬を対象とする事前データ検証 =====
+# ===== Ver.19.7: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
 # ただし、事前の走歴不足は必ず明示し、欠測を予測的中扱いしない。
 V195_TAG = {'スロー寄り': 'S', 'ミドル寄り': 'M', 'ハイ寄り': 'H'}
@@ -471,6 +471,48 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
         predicted,explanation,detail,known_count,lead,front=estimate_field_pace_v19(full,names)
     else:
         known_count=0
+    # Ver.19.7: 結果を一切使用しない事前走歴ベースのH見逃し診断。
+    # 最初に記録された通過地点の順位であって、実際の発走直後の先手ではない。
+    diag197 = {
+        '先頭経験馬数': 0, '複数回先頭馬数': 0, '逃げ候補先頭合計': 0,
+        '逃げ候補先頭率平均(%)': None, '逃げ候補先頭率最大(%)': None,
+        '先行候補以外の前方経験馬数': 0, '非逃げ馬の前方経験馬数': 0,
+        '先行圧力延べ前方走': 0, '先行圧力延べ確認走': 0,
+        '先行圧力率(%)': None,
+        '逃げ候補_先頭S': 0, '逃げ候補_先頭M': 0, '逃げ候補_先頭H': 0,
+        '逃げ候補_先頭判定済': 0, '逃げ候補_先頭判定不足': 0,
+        '前方H率(%)': None, 'H実績なしの逃げ候補数': 0,
+    }
+    if not full.empty and not detail.empty:
+        d197 = detail.copy()
+        has_early197 = d197['初通過取得'].ge(2)
+        d197 = d197.loc[has_early197].copy()
+        d197['_lead_ratio197'] = d197['初通過先頭'] / d197['初通過取得']
+        d197['_front_ratio197'] = d197['初通過前方'] / d197['初通過取得']
+        leaders197 = d197.loc[d197['逃げ候補']]
+        nonleaders197 = d197.loc[~d197['逃げ候補']]
+        front197 = d197.loc[d197['先行候補']]
+        pressure197 = d197.loc[~d197['逃げ候補']]
+        diag197['先頭経験馬数'] = int(d197['初通過先頭'].ge(1).sum())
+        diag197['複数回先頭馬数'] = int(d197['初通過先頭'].ge(2).sum())
+        diag197['逃げ候補先頭合計'] = int(leaders197['初通過先頭'].sum())
+        if not leaders197.empty:
+            diag197['逃げ候補先頭率平均(%)'] = round(float(leaders197['_lead_ratio197'].mean()*100), 1)
+            diag197['逃げ候補先頭率最大(%)'] = round(float(leaders197['_lead_ratio197'].max()*100), 1)
+        diag197['先行候補以外の前方経験馬数'] = int(d197.loc[~d197['先行候補'], '初通過前方'].gt(0).sum())
+        diag197['非逃げ馬の前方経験馬数'] = int(nonleaders197['初通過前方'].gt(0).sum())
+        diag197['先行圧力延べ前方走'] = int(pressure197['初通過前方'].sum())
+        diag197['先行圧力延べ確認走'] = int(pressure197['初通過取得'].sum())
+        if diag197['先行圧力延べ確認走']:
+            diag197['先行圧力率(%)'] = round(100*diag197['先行圧力延べ前方走']/diag197['先行圧力延べ確認走'],1)
+        for tag197 in ('S','M','H'):
+            diag197['逃げ候補_先頭'+tag197] = int(leaders197['先頭'+tag197].sum())
+        diag197['逃げ候補_先頭判定済'] = int(leaders197['先頭ペース確認'].sum())
+        diag197['逃げ候補_先頭判定不足'] = max(0,diag197['逃げ候補先頭合計']-diag197['逃げ候補_先頭判定済'])
+        diag197['H実績なしの逃げ候補数'] = int(leaders197['先頭H'].eq(0).sum())
+        knownfront197 = int(front197['前方ペース確認'].sum())
+        if knownfront197:
+            diag197['前方H率(%)'] = round(100*front197['前方H'].sum()/knownfront197,1)
     # 結果の診断: 実際の逃げ候補でS/M/Hの記録が不足しているか可視化。
     audit_lead_known = audit_lead_missing = 0
     audit_lead_names = ''
@@ -504,7 +546,7 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
             '逃げ先頭時ペース取得':audit_lead_known,
             '逃げ先頭時ペース未取得':audit_lead_missing,
             '取得失敗詳細':' / '.join(failed)[:500],
-            '予測根拠':explanation}
+            '予測根拠':explanation, **diag197}
 
 
 def tap_choice(label, options, key, format_func=None):
@@ -2030,7 +2072,7 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.6・試験版）',expanded=False):
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.7・試験版）',expanded=False):
         st.caption('全出走馬の当該レース以前の成績だけでS/M/Hを再現。レース選定時には正解ラベルを利用しますが、予測器には渡しません。')
         st.caption('Hを指定して検証した結果は、意図的に抽出したサンプルです。全体の的中率とは混ぜて評価しないでください。')
         candidates196 = analysis_df.copy()
@@ -2068,7 +2110,7 @@ with tab_quality172:
             preview196.columns=['開催日','レース名','競馬場','距離(m)','実際のS/M/H']
             with st.expander('検証予定レースを確認',expanded=False):
                 st.dataframe(preview196,hide_index=True,use_container_width=True)
-        st.caption('多くのレースを選ぶとネット接続先への通信が増えます。最初は3レース程度で確認してください。')
+        st.caption('多くのレースを選ぶとネット接続先への通信が増えます。最初は3レース程度で確認してください。Ver.19.7は予測式を変更せず、H見逃し要因だけを追加集計します。')
         if st.button('全出走馬の事前データで検証を実行',key='v196_run',use_container_width=True,disabled=not bool(id_list196)):
             results196=[]
             progress196=st.progress(0,text='検証を開始します')
@@ -2090,7 +2132,18 @@ with tab_quality172:
             out196=st.session_state.get('full_replay_v196')
             if isinstance(out196,pd.DataFrame) and not out196.empty:
                 st.dataframe(out196,hide_index=True,use_container_width=True)
-                st.download_button('Ver.19.6 全頭再現テストCSVを保存',
+                with st.expander('H見逃しの要因を比較（Ver.19.7）', expanded=False):
+                    needed197 = ['レース名','実際','予測','逃げ候補','先頭経験馬数',
+                                 '複数回先頭馬数','逃げ候補先頭率平均(%)',
+                                 '先行圧力率(%)','逃げ候補_先頭S','逃げ候補_先頭M',
+                                 '逃げ候補_先頭H','逃げ候補_先頭判定不足','前方H率(%)']
+                    available197 = [c for c in needed197 if c in out196.columns]
+                    if len(available197) > 3:
+                        st.dataframe(out196[available197],hide_index=True,use_container_width=True)
+                        st.caption('先頭・前方は過去5走の最初に記録された通過地点。先行圧力率は逃げ候補以外の前方走数÷確認走数。結果は診断指標に使わず、比較のためだけに表示。')
+                    else:
+                        st.info('Ver.19.7で再検証すると診断指標を表示できます。')
+                st.download_button('Ver.19.7 全頭再現テストCSVを保存',
                                    out196.to_csv(index=False).encode('utf-8-sig'),
                                    file_name='keiba_full_field_replay_v196.csv',mime='text/csv',use_container_width=True)
                 if {'予測','実際','一致'}.issubset(out196.columns):
