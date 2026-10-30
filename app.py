@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.9')
+st.title('🏇 競馬分析ラボ Ver.17.0')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -75,6 +75,72 @@ def interpret_running_pattern(row):
         reason += ' ※片側1走のため特に不確実です。'
     return title, confidence, reason
 
+
+
+def diagnose_horse_v17(horse_df, lap_label=''):
+    """位置・末脚は馬別、展開はレース全体。欠測をゼロ評価にしない。"""
+    d = horse_df.copy()
+    if d.empty:
+        return {'走りの総合診断': '判定材料なし', '位置取り': '不明', '末脚': '不明',
+                '展開': '不明', 'S/M/H': '不明', '信頼度': '判定不可', '対象走数': 0,
+                '好走走数': 0, '位置取得': 0, '上がり取得': 0, '根拠': '該当レースなし'}
+    d['着順_数値'] = pd.to_numeric(d['着順_数値'], errors='coerce')
+    d = d.loc[d['着順_数値'].ge(1)].copy()
+    good = d.loc[d['着順_数値'].le(3)].copy()
+    def numeric(k):
+        return pd.to_numeric(good[k], errors='coerce') if k in good.columns else pd.Series(dtype=float)
+    n_good = len(good)
+    pos = numeric('4角順位')
+    field = numeric('頭数')
+    valid_pos = (pos.ge(1) & field.ge(2) & pos.le(field))
+    fractions = (pos[valid_pos] / field[valid_pos]).dropna()
+    n_pos = len(fractions)
+    pos_label = '不明'
+    if n_pos:
+        med = fractions.median()
+        pos_label = '前方' if med <= .35 else ('中団' if med <= .70 else '後方')
+    pace_values = good['推定ペース'].dropna().astype(str) if '推定ペース' in good.columns else pd.Series(dtype=str)
+    pace_values = pace_values[pace_values.isin(['スロー寄り', 'ミドル寄り', 'ハイ寄り'])]
+    pace_summary = '・'.join(f'{k.replace("寄り", "")}{v}走' for k, v in pace_values.value_counts().items()) if len(pace_values) else '不明'
+    agari = numeric('上がり順位')
+    agari = agari.loc[agari.ge(1)].dropna()
+    n_agari = len(agari)
+    agari_label = '不明'
+    if n_agari:
+        rate = agari.le(3).mean()
+        agari_label = '末脚上位' if rate >= .6 else ('末脚まちまち' if rate >= .3 else '末脚上位少')
+    if n_good == 0:
+        title = '好走データなし'
+    elif not n_pos and not n_agari:
+        title = '走り方は不明'
+    elif n_pos and n_agari:
+        suffix = '×末脚' if agari_label == '末脚上位' else ''
+        title = {'前方':'前方型','中団':'中団型','後方':'後方型'}[pos_label] + suffix
+    elif n_pos:
+        title = pos_label + '型'
+    else:
+        title = '末脚型' if agari_label == '末脚上位' else '脚質不明'
+    # ラップ判定の根拠は各馬のラップではなく出走したレース全体のもの。
+    short_lap = str(lap_label).split('＋')[0]
+    if short_lap in ('特徴差が小さい', '好走データなし', '凡走データなし'):
+        short_lap = '判定保留'
+    if len(short_lap) > 12:
+        short_lap = short_lap[:12]
+    if n_good == 0:
+        conf = '判定不可'
+    elif n_good < 3 or (n_pos and n_pos < 2) or (n_agari and n_agari < 2):
+        conf = '参考'
+    elif n_good < 5 or n_pos == 0 or n_agari == 0:
+        conf = '暫定'
+    else:
+        conf = '傾向あり'
+    reason = (f'3着以内 {n_good}/{len(d)}走。好走時の4角位置データ {n_pos}走'
+              f'（中央値の頭数比から{pos_label}判定）、上がり順位 {n_agari}走'
+              f'（{agari_label}）。好走時のnetkeibaペース内訳：{pace_summary}。'
+              f'ラップ特徴は「{short_lap}」〔馬自身ではなくレース全体〕。')
+    return {'走りの総合診断': title, '位置取り': pos_label, '末脚': agari_label,
+            '展開': short_lap, 'S/M/H': pace_summary, '信頼度': conf, '対象走数': len(d),
+            '好走走数': n_good, '位置取得': n_pos, '上がり取得': n_agari, '根拠': reason}
 
 def tap_choice(label, options, key, format_func=None):
     """iPhone向け：検索欄のないポップオーバー内ラジオ選択。"""
@@ -1864,7 +1930,7 @@ if st.session_state['analysis_visible_v1581']:
                                 st.dataframe(comparison168[extra168], hide_index=True,
                                              use_container_width=True)
                                 st.caption('残1000mラップ幅は小さいほど一定。ただし差の正負だけで良し悪しは判断できません。')
-                            st.subheader('どんな展開で好走しやすい？（Ver.16.9・自動解説）')
+                            st.subheader('どんな展開で好走しやすい？（Ver.17.0・自動解説）')
                             st.caption('好走・凡走の**レース全体のラップ差**から特徴を自動要約。馬自身のラップや能力値ではありません。分類基準は試験用で、統計的な有意差を示すものではありません。')
                             interpretations169 = []
                             for _, row169 in comparison168.iterrows():
@@ -1889,6 +1955,37 @@ if st.session_state['analysis_visible_v1581']:
                                                interpretation_df169.to_csv(index=False).encode('utf-8-sig'),
                                                file_name='keiba_running_pattern_v169.csv',
                                                mime='text/csv', use_container_width=True)
+                            # Ver.17: 馬自身の位置取り・上がり順位と、レース全体のラップを統合表示。
+                            st.subheader('脚質 × 末脚 × 展開：総合診断（Ver.17）')
+                            st.caption('位置・上がりは**馬自身の成績**、展開は**レース全体のラップ**。診断は暫定的な説明で、能力点や未来の勝率ではありません。')
+                            explanation_map17 = dict(zip(
+                                interpretation_df169['馬名'].astype(str),
+                                interpretation_df169['好走する展開の特徴'].astype(str)))
+                            diagnoses17 = []
+                            for h17 in ordered_horses166:
+                                hdata17 = numeric_source167.loc[numeric_source167['馬名'].eq(h17)].copy()
+                                diag17 = diagnose_horse_v17(hdata17, explanation_map17.get(h17, '不明'))
+                                diag17['馬名'] = h17
+                                diagnoses17.append(diag17)
+                            diagnosis_df17 = pd.DataFrame(diagnoses17)
+                            if not diagnosis_df17.empty:
+                                diagnosis_df17 = display_horse_column(diagnosis_df17, horses, st.session_state.auto_numbers)
+                                st.dataframe(diagnosis_df17[['馬名', '走りの総合診断', '展開', '信頼度', '好走走数']],
+                                             hide_index=True, use_container_width=True,
+                                             height=min(690, 45 + 36 * len(diagnosis_df17)),
+                                             column_config={'馬名': st.column_config.TextColumn('馬番＋馬名', width='medium'),
+                                                            '走りの総合診断': st.column_config.TextColumn('走りの特徴', width='medium'),
+                                                            '展開': st.column_config.TextColumn('好走展開', width='medium')})
+                                with st.expander('総合診断の根拠（馬ごとに確認）', expanded=False):
+                                    chosen17 = tap_choice('診断を見る馬', diagnosis_df17['馬名'].tolist(), 'diagnosis_horse_v17')
+                                    rec17 = diagnosis_df17.loc[diagnosis_df17['馬名'].eq(chosen17)].iloc[0]
+                                    st.markdown(f"**{rec17['走りの総合診断']}**　／　{rec17['信頼度']}")
+                                    st.write(rec17['根拠'])
+                                    st.caption(f"対象{rec17['対象走数']}走・好走{rec17['好走走数']}走・4角取得{rec17['位置取得']}走・上がり順位取得{rec17['上がり取得']}走")
+                                st.download_button('総合診断をCSVで保存',
+                                                   diagnosis_df17.to_csv(index=False).encode('utf-8-sig'),
+                                                   file_name='keiba_horse_total_diagnosis_v17.csv',
+                                                   mime='text/csv', use_container_width=True)
                             st.download_button('好走・凡走ラップ比較をCSVで保存',
                                                comparison168.to_csv(index=False).encode('utf-8-sig'),
                                                file_name='keiba_good_bad_lap_v168.csv',
