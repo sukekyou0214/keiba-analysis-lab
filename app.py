@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.2')
+st.title('🏇 競馬分析ラボ Ver.15.3')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -19,6 +19,41 @@ VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', 
 METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
 ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード'], 'レース名': ['レース名'], '格付け根拠': ['格付け根拠']}
+
+
+
+def tap_choice(label, options, key, format_func=None):
+    """iPhone向け：検索欄のないポップオーバー内ラジオ選択。"""
+    choices = list(options)
+    if not choices:
+        return None
+    if key not in st.session_state or st.session_state[key] not in choices:
+        st.session_state[key] = choices[0]
+    current = st.session_state[key]
+    shown = str(format_func(current) if format_func else current)
+    with st.popover(f'{label}：{shown}', use_container_width=True):
+        # 選択はラジオボタン。iPhoneの文字入力キーボードは開かない。
+        st.radio(label, choices, key=key, format_func=format_func, label_visibility='collapsed')
+    return st.session_state[key]
+
+
+def tap_horses(label, options, key, limit=3):
+    """比較馬も検索入力を使わずチェックボックスで選択する。"""
+    choices = list(options)
+    if key not in st.session_state:
+        st.session_state[key] = choices[:2]
+    prior = [x for x in st.session_state[key] if x in choices][:limit]
+    with st.expander(f'{label}：' + ('、'.join(prior) if prior else '未選択')):
+        selected = []
+        for i, horse in enumerate(choices):
+            checked = st.checkbox(horse, value=horse in prior, key=f'{key}_check_{i}')
+            if checked:
+                selected.append(horse)
+        if len(selected) > limit:
+            st.warning(f'{limit}頭まで選べます。先頭の{limit}頭を使用します。')
+        selected = selected[:limit]
+        st.session_state[key] = selected
+    return st.session_state[key]
 
 
 # サーバー上の簡易キャッシュ。Streamlit Cloudの再起動・再デプロイで消える場合があります。
@@ -462,11 +497,7 @@ if 'race_input_v141' not in st.session_state:
     st.session_state.race_input_v141 = remembered if parse_race_id(remembered) else ''
 if known_ids:
     cached_labels = {rid: get_saved_race_label(rid) for rid in known_ids}
-    cached_choice = st.selectbox(
-        '保存済みデータを再開（このサーバーに残っている分）',
-        ['選択しない'] + known_ids,
-        format_func=lambda rid: cached_labels.get(rid, rid) if rid != '選択しない' else rid
-    )
+    cached_choice = tap_choice('保存済みデータを再開', ['選択しない'] + known_ids, 'saved_race_choice_v153', format_func=lambda rid: cached_labels.get(rid, rid) if rid != '選択しない' else rid)
     if st.button('保存済みレースを開く', disabled=cached_choice == '選択しない', use_container_width=True):
         st.session_state.race_input_v141 = cached_choice
         st.rerun()
@@ -612,8 +643,8 @@ if '日付' in audit.columns:
     audit = audit.sort_values(['馬名', '日付'], ascending=[True, False], kind='stable')
 audit_horses = ['全馬'] + sorted(audit['馬名'].unique().tolist())
 with st.expander('過去レースの格付け一覧を確認', expanded=False):
-    audit_horse = st.selectbox('確認する馬', audit_horses, key='audit_horse_v144')
-    audit_grade = st.selectbox('表示する格付け', ['すべて', 'G1', 'G2', 'G3', 'その他', '不明'], key='audit_grade_v144')
+    audit_horse = tap_choice('確認する馬', audit_horses, 'audit_horse_v153')
+    audit_grade = tap_choice('表示する格付け', ['すべて', 'G1', 'G2', 'G3', 'その他', '不明'], 'audit_grade_v153')
     if audit_horse != '全馬':
         audit = audit[audit['馬名'] == audit_horse]
     if audit_grade != 'すべて':
@@ -641,15 +672,15 @@ with st.expander('過去レースの格付け一覧を確認', expanded=False):
 
 st.header('⑥ 分析条件')
 mode = st.radio('分析モード', ['ランキング', '馬を比較'], horizontal=True)
-venue = st.selectbox('競馬場', ['すべて'] + sorted(analysis_df['競馬場'].unique().tolist()))
-track = st.selectbox('馬場状態', ['すべて'] + sorted(analysis_df['馬場状態'].unique().tolist()))
+venue = tap_choice('競馬場', ['すべて'] + sorted(analysis_df['競馬場'].unique().tolist()), 'tap_競馬場_v153')
+track = tap_choice('馬場状態', ['すべて'] + sorted(analysis_df['馬場状態'].unique().tolist()), 'tap_馬場状態_v153')
 course_options = ['すべて'] + sorted(analysis_df['コース'].dropna().astype(str).unique().tolist()) if 'コース' in analysis_df.columns else ['すべて']
-course = st.selectbox('コース', course_options)
-distance = st.selectbox('距離', ['すべて', '1200m以下', '1201〜1600m', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'])
-recent = st.selectbox('対象レース', ['直近5走', '直近10走', '直近15走', '全走'])
-grade_filter = st.selectbox('レース格', ['全レース', '重賞のみ（G1・G2・G3）', 'G1のみ', 'その他（L・OP・条件戦など）'])
+course = tap_choice('コース', course_options, 'tap_コース_v153')
+distance = tap_choice('距離', ['すべて', '1200m以下', '1201〜1600m', '1601〜1800m', '1801〜2200m', '2201〜2400m', '2401m以上'], 'tap_距離_v153')
+recent = tap_choice('対象レース', ['直近5走', '直近10走', '直近15走', '全走'], 'tap_対象レース_v153')
+grade_filter = tap_choice('レース格', ['全レース', '重賞のみ（G1・G2・G3）', 'G1のみ', 'その他（L・OP・条件戦など）'], 'tap_レース格_v153')
 st.caption('格付けが確認できない走は「不明」として保持。重賞・G1・その他の絞り込みから除外します。')
-pace_filter = st.selectbox('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'])
+pace_filter = tap_choice('推定ペース', ['すべて', 'スロー寄り', 'ミドル寄り', 'ハイ寄り', '不明'], 'tap_推定ペース_v153')
 st.caption('判定は前半600mと後半600mの差のみ（前半−後半）：−1秒未満＝前傾（ハイ寄り）、±1秒以内＝均衡（ミドル寄り）、＋1秒超＝後傾（スロー寄り）。道中のラップ、コース差、距離差は反映しない暫定分類です。')
 st.caption('脚質は4角位置と頭数から便宜的に推定。先頭（4角）＝逃げ確定ではなく、差し追込率は後方位置の割合です。')
 st.caption('集計順序：各馬の全成績から直近○走を確定 → 競馬場・馬場・距離・レース格・ペースで絞り込み。例：直近5走＋G1のみ＝直近5走の中にあるG1だけ。')
@@ -658,10 +689,10 @@ st.caption('判定済み：' + ' / '.join(f'{g} {int(counts.get(g, 0))}走' for 
 if int(counts.get('不明', 0)):
     st.info('レース格が不明な成績があります。以前のバージョンで取得したデータは格付け未保存の場合があります。必要に応じて新しく過去成績を取得し直してください。')
 if mode == 'ランキング':
-    metric = st.selectbox('ランキング指標', METRICS)
+    metric = tap_choice('ランキング指標', METRICS, 'tap_ランキング指標_v153')
 else:
     options = sorted(analysis_df['馬名'].unique().tolist())
-    selected = st.multiselect('比較する馬（2〜3頭）', options, default=options[:2], max_selections=3)
+    selected = tap_horses('比較する馬（2〜3頭）', options, 'compare_horses_v153')
 view = st.radio('表示方法', ['スマホ用カード', '横並び表'], horizontal=True)
 
 st.header('⑦ 分析する')
@@ -775,7 +806,7 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.dataframe(used, hide_index=True, use_container_width=True)
         st.download_button('集計対象レース一覧をCSVで保存', data=used.to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
-    st.subheader('ペース別の成績比較（Ver.15.2）')
+    st.subheader('ペース別の成績比較（Ver.15.3）')
     st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
     st.warning('これは前半・後半600mの差による暫定区分です。中間ラップを含む実際のレース全体のペースではありません。違う距離・競馬場のデータを混ぜた場合、適性判断は慎重に。')
     detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
@@ -813,7 +844,7 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.download_button('ペース判定根拠をCSVで保存', pace_audit.to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
 
-    with st.expander('ペース判定の精度チェック（Ver.15.2）', expanded=False):
+    with st.expander('ペース判定の精度チェック（Ver.15.3）', expanded=False):
         st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
         audit = pace_compare_base.copy()
         # レースIDが取得できた場合は最優先で使用。ない場合はレース日、競馬場、レース名、距離を組み合わせる。
@@ -885,6 +916,24 @@ if st.button('分析する', type='primary', use_container_width=True):
                 counts_pace['判定不能'] = missing_by_dist.reindex(counts_pace.index, fill_value=0).astype(int)
             st.dataframe(counts_pace.reset_index(), hide_index=True, use_container_width=True)
             st.caption('ハイ寄りの割合が少なくても「ハイに弱い」ことは意味しません。距離ごとのサンプル数と判定不能数を見てください。')
+            st.markdown('**判定基準を変えた場合の分布（感度チェック）**')
+            st.caption('現在の±1.0秒を変える前に、閾値による分類の変化を確認するだけの比較です。実際のペースの正解を示すものではありません。レース単位・重複除去済み。')
+            sensitivity = []
+            eligible = race_audit[(race_audit['判定チェック'] == '一致') &
+                                  pd.to_numeric(race_audit['前後半3F差'], errors='coerce').notna()].copy()
+            diff_values = pd.to_numeric(eligible['前後半3F差'], errors='coerce')
+            for threshold in [0.5, 1.0, 1.5]:
+                high = int((diff_values < -threshold).sum())
+                slow = int((diff_values > threshold).sum())
+                middle = int(len(diff_values) - high - slow)
+                sensitivity.append({'閾値': f'±{threshold:.1f}秒' + ('（現行）' if threshold == 1.0 else ''),
+                                    'ハイ寄り': high, 'ミドル寄り': middle, 'スロー寄り': slow,
+                                    '判定可能レース': len(diff_values)})
+            sensitivity_df = pd.DataFrame(sensitivity)
+            st.dataframe(sensitivity_df, hide_index=True, use_container_width=True)
+            st.download_button('閾値感度チェックをCSVで保存', sensitivity_df.to_csv(index=False).encode('utf-8-sig'),
+                               file_name='keiba_pace_threshold_v153.csv', mime='text/csv', use_container_width=True)
+            st.info('今の取得データにはレース中盤の区間ラップがありません。中盤まで考慮したペース判定は、別途ラップ取得の実装・検証が必要です。今回は本番のペース判定基準は変更していません。')
             st.markdown('**各馬のペース経験数**')
             horse_pace = pd.crosstab(audit['馬名'], audit['推定ペース']).reindex(columns=pace_order, fill_value=0)
             horse_pace = horse_pace.reindex(sorted(audit['馬名'].dropna().unique()), fill_value=0)
