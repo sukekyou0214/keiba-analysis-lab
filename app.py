@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.16.4')
+st.title('🏇 競馬分析ラボ Ver.16.5')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -756,6 +756,32 @@ def save_lap_v16(rid, payload):
     temp.replace(path)
 
 
+def lap_full_progress_path(rid):
+    """レース単位の一時保存。デプロイやサーバー停止で消える場合があります。"""
+    if not re.fullmatch(r'\d{12}', str(rid)):
+        return None
+    return CACHE_DIR / f'lap_full_v165_{rid}.csv.gz'
+
+
+def load_lap_full_progress(rid):
+    path = lap_full_progress_path(rid)
+    if path is None or not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, compression='gzip', dtype={'レースID':str}).fillna('')
+    except (OSError, ValueError, pd.errors.ParserError):
+        return pd.DataFrame()
+
+
+def save_lap_full_progress(rid, frame):
+    path = lap_full_progress_path(rid)
+    if path is None or frame is None or frame.empty:
+        return
+    tmp = path.with_suffix('.tmp')
+    frame.to_csv(tmp, index=False, compression='gzip')
+    tmp.replace(path)
+
+
 def apply_netkeiba_pace(data, pace_by_race):
     result = data.copy()
     ids = result['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
@@ -1441,28 +1467,46 @@ if st.session_state['analysis_visible_v1581']:
                                file_name='keiba_lap_table_test_v1594.csv', mime='text/csv',
                                use_container_width=True)
 
-    with st.expander('200mラップ展開タイプの拡大検証（Ver.16.4）', expanded=False):
-        st.caption('20〜30レースの試験分類。結果は下の馬別・横並び表で比較。既存ランキングには反映しません。')
+    with st.expander('200mラップ展開タイプ分析（Ver.16.5・全レース対応）', expanded=False):
+        st.caption('20・30レースの試験、または保存済みの全過去成績を対象にできます。全件は重複レースを1回だけ取得し、5件ごとに途中保存。結果表は現在の分析条件で絞った馬を比較します。')
         sample = pace_compare_base.copy()
-        if 'レースID' in sample.columns:
-            sample['_rid16'] = sample['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
-            candidates = sample[sample['_rid16'].str.fullmatch(r'\d{12}')].drop_duplicates('_rid16').copy()
+        full_sample16 = analysis_df.copy()
+        test_size = tap_choice('取得するレース数', [20, 30, '全レース'], 'lap_shape_v163_n')
+        all_mode16 = test_size == '全レース'
+        acquisition_sample16 = full_sample16 if all_mode16 else sample
+        if 'レースID' in acquisition_sample16.columns:
+            acquisition_sample16['_rid16'] = acquisition_sample16['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
+            candidates = acquisition_sample16[acquisition_sample16['_rid16'].str.fullmatch(r'\d{12}')].drop_duplicates('_rid16').copy()
         else:
             candidates = pd.DataFrame()
-        test_size = tap_choice('試験するレース数', [20, 30], 'lap_shape_v163_n')
-        race_ids_16 = candidates['_rid16'].head(test_size).tolist() if not candidates.empty else []
-        # 1600mが初期対象にない場合、可能なら最後の1件と入れ替えて距離の幅を確保。
-        if '距離_m' in candidates.columns and race_ids_16:
+        race_ids_16 = candidates['_rid16'].tolist() if all_mode16 and not candidates.empty else (candidates['_rid16'].head(test_size).tolist() if not candidates.empty else [])
+        # 試験モードのみ、1600mを追加確認する（全件モードは全レースそのまま）。
+        if not all_mode16 and '距離_m' in candidates.columns and race_ids_16:
             d1600 = candidates.loc[pd.to_numeric(candidates['距離_m'], errors='coerce').eq(1600), '_rid16'].tolist()
             if d1600 and not any(r in d1600 for r in race_ids_16):
                 race_ids_16[-1] = d1600[0]
-        st.caption(f'候補{len(candidates)}レース ／ 今回の対象{len(race_ids_16)}レース（1600mがあれば優先して1件含む）')
         race_key16 = str(st.session_state.get('auto_race_id', ''))
-        if st.button('展開タイプを20〜30レース試験判定する', key='classify_lap_v163_button',
-                     disabled=not race_ids_16, use_container_width=True):
-            rows16 = []
+        stored16 = load_lap_full_progress(race_key16) if all_mode16 else pd.DataFrame()
+        if all_mode16 and not stored16.empty:
+            stored16['レースID'] = stored16['レースID'].astype(str).str.replace(r'\.0$', '', regex=True)
+            stored16 = stored16.drop_duplicates('レースID', keep='last')
+            stored16 = stored16[stored16['レースID'].isin(race_ids_16)].copy()
+        successful16 = set(stored16.loc[stored16.get('検証', pd.Series('', index=stored16.index)).eq('OK'), 'レースID']) if not stored16.empty else set()
+        if all_mode16:
+            pending_ids16 = [rid for rid in race_ids_16 if rid not in successful16]
+            st.write(f'**対象：{len(race_ids_16)}レース ／ 検証OK：{len(successful16)} ／ 未取得・要再試行：{len(pending_ids16)}**')
+            st.caption('「未取得・要再試行」には特殊距離・海外レースなどの取得不可も含みます。再試行を繰り返しても取得できないレースは、下のCSVで原因を確認してください。')
+        else:
+            pending_ids16 = race_ids_16
+            st.caption(f'候補{len(candidates)}レース ／ 今回の試験対象{len(race_ids_16)}レース')
+        start16 = st.button('全レースの未取得分をまとめて取得・再開' if all_mode16 else '展開タイプを20〜30レース試験判定する',
+                            key='classify_lap_v165_button', disabled=not pending_ids16, use_container_width=True)
+        if start16:
+            # 過去の成功分は残す。失敗分は今回の試行で上書きする。
+            rows16 = stored16.to_dict('records') if all_mode16 else []
+            merged16 = {str(r['レースID']):r for r in rows16} if all_mode16 else {}
             progress16 = st.progress(0)
-            for j, rid16 in enumerate(race_ids_16, 1):
+            for j, rid16 in enumerate(pending_ids16, 1):
                 try:
                     payload16 = load_lap_v16(rid16)
                     cache_hit = bool(payload16 is not None and payload16.get('検証') == 'OK')
@@ -1472,29 +1516,41 @@ if st.session_state['analysis_visible_v1581']:
                             save_lap_v16(rid16, payload16)
                     extra16 = classify_lap_shape_v16(payload16.get('200mラップ', ''),
                                                       payload16.get('レース距離'), payload16.get('検証'))
-                    title16, day16 = get_lap_race_title(rid16, sample)
-                    rows16.append({'レースID': rid16, 'レース名': title16, '開催日': day16,
-                                   'レース距離': payload16.get('レース距離'),
-                                   '200mラップ': payload16.get('200mラップ'),
-                                   '検証': payload16.get('検証'), '取得方法': '保存済み' if cache_hit else '新規取得',
-                                   **extra16})
+                    title16, day16 = get_lap_race_title(rid16, acquisition_sample16)
+                    row16 = {'レースID': rid16, 'レース名': title16, '開催日': day16,
+                             'レース距離': payload16.get('レース距離'),
+                             '200mラップ': payload16.get('200mラップ'),
+                             '検証': payload16.get('検証'),
+                             '取得方法': '保存済み' if cache_hit else '新規取得', **extra16}
                 except Exception as ex16:
-                    rows16.append({'レースID': rid16, 'レース名': '取得エラー', '開催日': '',
-                                   '検証': '取得エラー', '取得方法': '失敗',
-                                   '展開タイプ': '判定不可', '判定根拠': str(ex16)[:180]})
-                progress16.progress(j / len(race_ids_16))
-                # Streamlitで別操作が行われても途中までの結果を残す。
-                if j % 5 == 0 or j == len(race_ids_16):
-                    st.session_state['lap_shapes_v163'] = pd.DataFrame(rows16)
+                    row16 = {'レースID':rid16, 'レース名':'取得エラー', '開催日':'',
+                             '検証':'取得エラー', '取得方法':'失敗',
+                             '展開タイプ':'判定不可', '判定根拠':str(ex16)[:180]}
+                merged16[str(rid16)] = row16
+                progress16.progress(j / len(pending_ids16))
+                if j % 5 == 0 or j == len(pending_ids16):
+                    current16 = pd.DataFrame(list(merged16.values()))
+                    st.session_state['lap_shapes_v163'] = current16
                     st.session_state['lap_shapes_v163_race'] = race_key16
                     st.session_state['lap_shapes_v163_n'] = test_size
-            st.success(f'{len(rows16)}レースの試験を終了しました。')
+                    if all_mode16:
+                        save_lap_full_progress(race_key16, current16)
+            st.success(f'{len(pending_ids16)}レースを処理しました。取得不可は未確認として保持します。')
+        if all_mode16:
+            # 別操作による再実行後も、ディスクに保存済みの全件結果を表示。
+            shapes_current16 = load_lap_full_progress(race_key16)
+            if not shapes_current16.empty:
+                shapes_current16['レースID'] = shapes_current16['レースID'].astype(str).str.replace(r'\.0$', '', regex=True)
+                shapes_current16 = shapes_current16[shapes_current16['レースID'].isin(race_ids_16)].copy()
+                st.session_state['lap_shapes_v163'] = shapes_current16
+                st.session_state['lap_shapes_v163_race'] = race_key16
+                st.session_state['lap_shapes_v163_n'] = test_size
         shapes16 = st.session_state.get('lap_shapes_v163')
         if isinstance(shapes16, pd.DataFrame) and not shapes16.empty and st.session_state.get('lap_shapes_v163_race') == race_key16:
             st.write('**レース単位の検証結果**')
             st.dataframe(shapes16, hide_index=True, use_container_width=True)
             st.download_button('展開タイプ検証結果をCSVで保存', shapes16.to_csv(index=False).encode('utf-8-sig'),
-                               file_name='keiba_lap_shape_v163.csv', mime='text/csv', use_container_width=True)
+                               file_name='keiba_lap_shape_v165.csv', mime='text/csv', use_container_width=True)
             count16 = (shapes16['展開タイプ'].fillna('判定不可').value_counts()
                        .rename_axis('展開タイプ').reset_index(name='レース数'))
             count16['割合(%)'] = (100 * count16['レース数'] / len(shapes16)).round(1)
@@ -1582,8 +1638,8 @@ if st.session_state['analysis_visible_v1581']:
                         wide164['_並び'] = wide164['馬名'].map(lambda n: horse_order164.get(n, 9999))
                         wide164 = wide164.sort_values(['_並び', '馬名'], kind='stable').drop(columns=['_並び'])
                         wide164 = display_horse_column(wide164, horses, st.session_state.auto_numbers)
-                        st.subheader('🏇 展開別・各馬の比較（Ver.16.4）')
-                        st.caption('1頭1行・横並び表示。各セルは「複勝率（該当走数）」。— は経験なし／今回の30レースでは未検証。横にスクロールできます。')
+                        st.subheader('🏇 展開別・各馬の比較（Ver.16.5）')
+                        st.caption('1頭1行・横並び表示。各セルは「複勝率（該当走数）」。— は該当する分類済みレースなし。横にスクロールできます。')
                         core164 = ['馬名', '瞬発戦', 'ロンスパ', '消耗戦', '保留', '分類済み', '対象候補', '確認率']
                         st.dataframe(wide164[core164], hide_index=True, use_container_width=True,
                                      height=min(650, 55 + 36 * len(wide164)),
@@ -1591,10 +1647,10 @@ if st.session_state['analysis_visible_v1581']:
                                                     '瞬発戦': st.column_config.TextColumn('瞬発戦', width='medium'),
                                                     'ロンスパ': st.column_config.TextColumn('ロンスパ', width='medium'),
                                                     '消耗戦': st.column_config.TextColumn('消耗戦', width='medium')})
-                        st.caption('分類済み＝今回選んだ30レース等で展開タイプと照合できた走数。対象候補＝今の分析条件に該当するレースID付きの走数。確認率はデータの網羅率で、予想の信頼度ではありません。')
+                        st.caption('分類済み＝取得・検証できたレースに該当する走数。対象候補＝現在の分析条件でのレースID付き走数。確認率は取得状況であり予想の信頼度ではありません。')
                         st.download_button('見やすい展開別比較表をCSVで保存',
                                            wide164[core164].to_csv(index=False).encode('utf-8-sig'),
-                                           file_name='keiba_lap_horse_wide_v164.csv', mime='text/csv',
+                                           file_name='keiba_lap_horse_wide_v165.csv', mime='text/csv',
                                            use_container_width=True)
                         with st.expander('詳細データ（着順・4角・上がり順位）', expanded=False):
                             detailed164 = display_horse_column(overview16, horses, st.session_state.auto_numbers)
@@ -1603,7 +1659,7 @@ if st.session_state['analysis_visible_v1581']:
                                                detailed164.to_csv(index=False).encode('utf-8-sig'),
                                                file_name='keiba_lap_horse_detail_v164.csv', mime='text/csv',
                                                use_container_width=True)
-            st.warning('展開タイプは独自の暫定分類です。少数レースの好走率から得意・不得意は断定できません。')
+            st.warning('展開タイプは独自の暫定分類です。200mで割り切れない距離や地方・海外レースは取得不可の場合があります。少数走数では適性を断定できません。')
 
     with st.expander('ペース判定の精度チェック（Ver.15.8）', expanded=False):
         st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
