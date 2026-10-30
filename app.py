@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.11.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.12.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -332,17 +332,32 @@ def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
     heads = ''.join('<th>' + _html.escape(str(labels.get(c, c))) + '</th>' for c in cols)
     body = []
     for values in frame[cols].itertuples(index=False, name=None):
-        cells = ''.join('<td>' + _html.escape('—' if pd.isna(v) else str(v)) + '</td>' for v in values)
+        cells_list = []
+        for idx, v in enumerate(values):
+            raw = '—' if pd.isna(v) else str(v)
+            if idx == 0 and cols[0] == '馬名':
+                match = __import__('re').match(r'^([0-9０-９]+)\\s*(.+)$', raw)
+                if match:
+                    short = match.group(1) + ' ' + match.group(2)[:2]
+                else:
+                    short = raw[:2]
+                cells_list.append('<td class="keiba-pinned-name" title="' + _html.escape(raw, quote=True)
+                                  + '">' + _html.escape(short) + '</td>')
+            else:
+                cells_list.append('<td>' + _html.escape(raw) + '</td>')
+        cells = ''.join(cells_list)
         body.append('<tr>' + cells + '</tr>')
     st.markdown(
-        '<div style="overflow:auto;max-height:' + str(max_height) + 'px;'
-        'border:1px solid #8885;border-radius:8px;overscroll-behavior:contain;">'
-        '<table style="border-collapse:collapse;min-width:570px;width:100%;font-size:13px;">'
+        '<div style="overflow:auto;max-height:' + str(max_height) + 'px;border:1px solid #8885;border-radius:8px;">'
+        '<table class="keiba-fixed-table" style="border-collapse:separate;border-spacing:0;min-width:570px;width:100%;font-size:13px;">'
         '<thead><tr>' + heads + '</tr></thead><tbody>' + ''.join(body) + '</tbody></table></div>'
-        '<style>table th,table td{padding:9px 10px;text-align:left;border-bottom:1px solid #8883;'
-        'white-space:normal;vertical-align:top;}table th{position:sticky;top:0;background:#263040;'
-        'color:#fff;z-index:1;}table td:first-child,table th:first-child{min-width:115px;'
-        'font-weight:600;}</style>',
+        '<style>.keiba-fixed-table th,.keiba-fixed-table td{padding:9px 10px;text-align:left;'
+        'border-bottom:1px solid #8883;white-space:normal;vertical-align:top;background:#111827;}'
+        '.keiba-fixed-table th{position:sticky;top:0;background:#263040;color:#fff;z-index:1;}'
+        '.keiba-fixed-table td:first-child,.keiba-fixed-table th:first-child{position:sticky;left:0;'
+        'width:76px;min-width:76px;max-width:76px;background:#1c2534;z-index:2;'
+        'box-shadow:2px 0 4px #0005;font-weight:700;white-space:nowrap;}'
+        '.keiba-fixed-table th:first-child{z-index:3;background:#263040;}</style>',
         unsafe_allow_html=True)
 
 # ===== Ver.20: 過去レース全出走馬を対象とする事前データ検証 =====
@@ -2163,7 +2178,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.11.0')
+    st.caption('競馬分析ラボ Ver.20.12.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2382,6 +2397,41 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                 else:
                     st.write('**暫定の想定ペース：判定保留**')
                     st.caption(reason_v19)
+                # Ver.20.12: 観測された過去の初通過位置から作る模式図。予測着順ではない。
+                with st.expander('スタート後の隊列イメージ（過去走からの推定）', expanded=True):
+                    import html as _pace_html
+                    view212 = display_horse_column(
+                        pressure_v19[['馬名','初通過取得','逃げ候補','先行候補']],
+                        horses, st.session_state.auto_numbers)
+                    lane212 = {'逃げ候補': [], '先行候補': [], 'その他': []}
+                    for _, rr212 in view212.iterrows():
+                        name212 = str(rr212['馬名'])
+                        mm212 = __import__('re').match(r'^([0-9０-９]+)\\s*(.+)$', name212)
+                        brief212 = (mm212.group(1) + ' ' + mm212.group(2)[:2]) if mm212 else name212[:4]
+                        tag212 = ('逃げ候補' if bool(rr212['逃げ候補']) else
+                                  '先行候補' if bool(rr212['先行候補']) else 'その他')
+                        lane212[tag212].append(
+                            '<span title="' + _pace_html.escape(name212, quote=True)
+                            + '" style="display:inline-block;margin:3px;padding:6px 8px;'
+                              'background:#fff;color:#172236;border-radius:20px;font-weight:700;'
+                              'font-size:13px;">' + _pace_html.escape(brief212) + '</span>')
+                    lane_html212 = ''.join(
+                        '<div style="padding:10px 7px;border-bottom:2px dashed #ffffff60;">'
+                        '<strong style="display:block;margin-bottom:6px;">' + title212 + '</strong>'
+                        + (''.join(lane212[key212]) or '—') + '</div>'
+                        for key212,title212 in [('逃げ候補','先頭付近（逃げ候補）'),
+                                                ('先行候補','前方（先行候補）'),
+                                                ('その他','中団・後方・位置不明')])
+                    st.markdown(
+                        '<div style="background:#b5db69;color:#182b1b;padding:12px;'
+                        'border-radius:12px;text-align:center;">'
+                        '<div style="font-weight:700;padding:7px;background:#c3edf4;'
+                        'border-radius:8px;">スタート → 第1通過地点（模式図）</div>'
+                        + lane_html212 + '</div>', unsafe_allow_html=True)
+                    st.caption('各馬の表示は馬番＋馬名先頭2文字。長押し等のタイトルに正式馬名。'
+                               '過去5走の初通過位置による大まかなグループ分けで、'
+                               '実際の隊列・着順・スタート直後の位置を予測したものではありません。'
+                               '「その他」にはデータ不足の馬も含まれます。')
                 st.caption('レース全体のS/M/Hと馬が作ったペースは同一ではありません。先頭で走った過去レースのS/M/Hは補助材料です。騎手の作戦・馬場・今回の前半ラップは未反映。予測ロジックは未検証です。')
                 with st.expander('ペース予測の根拠（各馬の位置取り）', expanded=False):
                     pressure_show_v19 = display_horse_column(pressure_v19[['馬名','初通過取得','初通過先頭','初通過前方','逃げ候補','先行候補','先頭S','先頭M','先頭H','前方S','前方M','前方H']], horses, st.session_state.auto_numbers)
