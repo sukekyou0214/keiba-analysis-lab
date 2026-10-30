@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.19.5.3')
+st.title('🏇 競馬分析ラボ Ver.19.6')
 st.caption('一括取得 → 総合診断 → 逃げ候補が過去に逃げたペースも加味して想定ペースを暫定予測。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -320,7 +320,7 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 
-# ===== Ver.19.5.3: 過去レース全出走馬を対象とする事前データ検証 =====
+# ===== Ver.19.6: 過去レース全出走馬を対象とする事前データ検証 =====
 # 現在のレースの出走馬17頭ではなく、検証対象レースの実際の出走馬から集める。
 # ただし、事前の走歴不足は必ず明示し、欠測を予測的中扱いしない。
 V195_TAG = {'スロー寄り': 'S', 'ミドル寄り': 'M', 'ハイ寄り': 'H'}
@@ -371,6 +371,15 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
     if actual_raw.empty or len(actual_raw.unique()) != 1:
         raise ValueError('実際のS/M/Hを一意に確認できません')
     actual = V195_TAG[actual_raw.iloc[0]]
+    # レース属性は対象レースの過去成績行から取得（予測特徴量には渡さない）。
+    venue_values = target_rows['競馬場'].dropna().astype(str) if '競馬場' in target_rows else pd.Series(dtype=str)
+    venue_value = venue_values.iloc[0] if not venue_values.empty else '不明'
+    distance_values = pd.to_numeric(target_rows['距離_m'], errors='coerce').dropna() if '距離_m' in target_rows else pd.Series(dtype=float)
+    distance_value = int(distance_values.iloc[0]) if not distance_values.empty else None
+    distance_group = ('不明' if distance_value is None else
+                      '〜1600m' if distance_value <= 1600 else
+                      '1601〜2000m' if distance_value <= 2000 else
+                      '2001〜2400m' if distance_value <= 2400 else '2401m〜')
     entrants = historical_field_ids_v195(rid)
     frames=[]; failed=[]; pace_calls=0; local_paces={}
     # 再起動後の全件再取得は避け、当日の成績の混入も避ける。
@@ -483,6 +492,7 @@ def full_field_replay_v195(rid, known_source, progress_callback=None, limit_pace
               '一部欠測（参考）')
     return {'レースID':rid,'開催日':date.strftime('%Y-%m-%d'),
             'レース名':str(target_rows['レース名'].dropna().iloc[0]) if 'レース名' in target_rows and target_rows['レース名'].notna().any() else '',
+            '競馬場':venue_value,'距離(m)':distance_value,'距離区分':distance_group,
             '全出走頭数':len(entrants),'事前走歴取得頭数':len(frames),
             '序盤位置2走以上':int(known_count),'実際':actual,
             '予測':pred_tag or '保留','一致':('一致' if pred_tag==actual else '不一致') if pred_tag else '対象外',
@@ -2020,41 +2030,91 @@ with tab_quality172:
         st.caption('このテストは現出走馬の保存済み履歴だけを使う暫定検証。全出走馬での事前予測検証は別途必要です。')
 
 
-    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.5.3・試験版）',expanded=False):
-        st.caption('1・3・5・10・20レースで検証できます。結果表から当時の全出走馬を取得し、開催日より前の各馬の成績のみを使って予測します。最初は5〜10レースがおすすめです。')
-        st.caption('出走全頭を取得しても、当時の事前走歴が欠けていれば「参考」扱いです。S/M/Hの照合結果は未検証モデルの試験結果です。')
-        candidates195 = analysis_df.copy()
-        candidates195['_rid195']=candidates195['レースID'].fillna('').astype(str).str.replace(r'\.0$', '',regex=True)
-        candidates195 = candidates195.loc[candidates195['_rid195'].str.fullmatch(r'\d{12}')]
-        candidates195 = candidates195.loc[candidates195['netkeibaペース'].isin(V195_TAG)]
-        candidates195 = candidates195.sort_values('日付',ascending=False).drop_duplicates('_rid195')
-        cids195 = candidates195['_rid195'].head(35).tolist()
-        test_count195 = st.radio('検証レース数',['1レース','3レース','5レース','10レース','20レース'],horizontal=True,key='v195_count',index=1)
-        if test_count195 in ('10レース', '20レース'):
-            st.caption('多数の出走馬・過去成績ページへアクセスします。取得先への負荷と実行時間に注意してください。通信に失敗したレースも結果に記録されます。')
-        if st.button('全出走馬の事前データを使って試験検証',key='v195_run',use_container_width=True):
-            n195 = int(test_count195.replace('レース', ''))
-            selected195=cids195[:n195]
-            rows195=[]
-            bar195=st.progress(0,text='全出走馬を確認中')
-            for ri,rid195 in enumerate(selected195):
+    with st.expander('過去レースの全出走馬で再現テスト（Ver.19.6・試験版）',expanded=False):
+        st.caption('全出走馬の当該レース以前の成績だけでS/M/Hを再現。レース選定時には正解ラベルを利用しますが、予測器には渡しません。')
+        st.caption('Hを指定して検証した結果は、意図的に抽出したサンプルです。全体の的中率とは混ぜて評価しないでください。')
+        candidates196 = analysis_df.copy()
+        candidates196['_rid196'] = candidates196['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
+        candidates196 = candidates196.loc[candidates196['_rid196'].str.fullmatch(r'\d{12}')].copy()
+        candidates196 = candidates196.loc[candidates196['netkeibaペース'].isin(V195_TAG)].copy()
+        candidates196['_date196'] = pd.to_datetime(candidates196['日付'],errors='coerce')
+        candidates196 = candidates196.sort_values('_date196',ascending=False).drop_duplicates('_rid196')
+        c196 = st.radio('検証するレースの選び方', ['直近から選ぶ','H（ハイ）だけ選ぶ','S・M・Hを均等に選ぶ'],
+                         horizontal=False, key='v196_selection')
+        n196_label = st.radio('検証レース数',['1レース','3レース','5レース','10レース','20レース'],
+                              horizontal=True,key='v196_count',index=1)
+        n196 = int(n196_label.replace('レース',''))
+        # 検証に使えるHレースが手元にない場合は、件数を水増ししない。
+        h196 = candidates196.loc[candidates196['netkeibaペース'].eq('ハイ寄り')]
+        st.caption(f'保存済みの検証候補：{len(candidates196)}レース／うちH：{len(h196)}レース')
+        if c196 == 'H（ハイ）だけ選ぶ':
+            chosen196 = h196.head(n196)
+        elif c196 == 'S・M・Hを均等に選ぶ':
+            base196 = n196 // 3
+            extra196 = n196 % 3
+            selected196=[]
+            for i196,label196 in enumerate(['スロー寄り','ミドル寄り','ハイ寄り']):
+                count196 = base196 + (1 if i196 < extra196 else 0)
+                selected196.extend(candidates196.loc[candidates196['netkeibaペース'].eq(label196)].head(count196)['_rid196'].tolist())
+            chosen196 = candidates196.loc[candidates196['_rid196'].isin(selected196)].sort_values('_date196',ascending=False)
+        else:
+            chosen196 = candidates196.head(n196)
+        id_list196 = chosen196['_rid196'].tolist()
+        if len(id_list196) < n196:
+            st.info(f'指定条件に一致した対象は{len(id_list196)}レースです。存在しないレースは補いません。')
+        if not chosen196.empty:
+            preview196 = chosen196[['_date196','レース名','競馬場','距離_m','netkeibaペース']].copy()
+            preview196['_date196']=preview196['_date196'].dt.strftime('%Y-%m-%d')
+            preview196.columns=['開催日','レース名','競馬場','距離(m)','実際のS/M/H']
+            with st.expander('検証予定レースを確認',expanded=False):
+                st.dataframe(preview196,hide_index=True,use_container_width=True)
+        st.caption('多くのレースを選ぶとネット接続先への通信が増えます。最初は3レース程度で確認してください。')
+        if st.button('全出走馬の事前データで検証を実行',key='v196_run',use_container_width=True,disabled=not bool(id_list196)):
+            results196=[]
+            progress196=st.progress(0,text='検証を開始します')
+            for ri196,rid196 in enumerate(id_list196):
                 try:
-                    def cb195(done,total,name):
-                        bar195.progress((ri+done/total)/max(1,len(selected195)),text=f'{ri+1}/{len(selected195)}レース・{done}/{total}頭: {name}')
-                    rows195.append(full_field_replay_v195(rid195,analysis_df,progress_callback=cb195))
+                    def cb196(done,total,name):
+                        progress196.progress((ri196+done/max(1,total))/len(id_list196),
+                                             text=f'{ri196+1}/{len(id_list196)}レース・{done}/{total}頭：{name}')
+                    result196=full_field_replay_v195(rid196,analysis_df,progress_callback=cb196)
+                    results196.append(result196)
                 except Exception as exc:
-                    rows195.append({'レースID':rid195,'取得状況':'検証エラー','取得失敗詳細':str(exc)[:250]})
-                bar195.progress((ri+1)/max(1,len(selected195)))
-            bar195.empty()
-            st.session_state['full_replay_v195']=pd.DataFrame(rows195)
-            st.session_state['full_replay_race_v195']=race_id
-        if st.session_state.get('full_replay_race_v195') == race_id:
-            out195=st.session_state.get('full_replay_v195')
-            if isinstance(out195,pd.DataFrame) and not out195.empty:
-                st.dataframe(out195,hide_index=True,use_container_width=True)
-                st.download_button('全出走馬の再現テスト結果をCSVで保存',out195.to_csv(index=False).encode('utf-8-sig'),
-                                   file_name='keiba_full_field_replay_v195.csv',mime='text/csv',use_container_width=True)
-                st.caption('全出走頭数・事前走歴取得頭数・序盤位置2走以上を確認してください。取得率が低いレースの一致／不一致を過信しないでください。')
+                    results196.append({'レースID':rid196,'取得状況':'検証エラー','取得失敗詳細':str(exc)[:250]})
+                progress196.progress((ri196+1)/len(id_list196))
+            progress196.empty()
+            st.session_state['full_replay_v196']=pd.DataFrame(results196)
+            st.session_state['full_replay_race_v196']=race_id
+            st.session_state['full_replay_selection_v196']=c196
+        if st.session_state.get('full_replay_race_v196') == race_id:
+            out196=st.session_state.get('full_replay_v196')
+            if isinstance(out196,pd.DataFrame) and not out196.empty:
+                st.dataframe(out196,hide_index=True,use_container_width=True)
+                st.download_button('Ver.19.6 全頭再現テストCSVを保存',
+                                   out196.to_csv(index=False).encode('utf-8-sig'),
+                                   file_name='keiba_full_field_replay_v196.csv',mime='text/csv',use_container_width=True)
+                if {'予測','実際','一致'}.issubset(out196.columns):
+                    verified196=out196.loc[out196['予測'].isin(['S','M','H']) & out196['実際'].isin(['S','M','H'])].copy()
+                    if not verified196.empty:
+                        correct196=int(verified196['一致'].eq('一致').sum())
+                        st.write(f'比較可能 **{len(verified196)}レース**／一致 **{correct196}件**（{correct196/len(verified196):.1%}）')
+                        if st.session_state.get('full_replay_selection_v196') != '直近から選ぶ':
+                            st.warning('S/M/Hの正解を使って検証対象を選んだため、この一致率は通常のレース全体の予測的中率ではありません。')
+                        st.markdown('**実際のペース別**')
+                        by_actual196=(verified196.groupby('実際',sort=False).agg(
+                            検証数=('一致','size'),一致数=('一致',lambda s:int(s.eq('一致').sum()))).reset_index())
+                        by_actual196['一致率(%)']=(by_actual196['一致数']/by_actual196['検証数']*100).round(1)
+                        st.dataframe(by_actual196,hide_index=True,use_container_width=True)
+                        for grouping196 in ['距離区分','競馬場']:
+                            if grouping196 in verified196.columns:
+                                st.markdown(f'**{grouping196}別**')
+                                by_group196=(verified196.groupby(grouping196,dropna=False).agg(
+                                    検証数=('一致','size'),一致数=('一致',lambda s:int(s.eq('一致').sum()))).reset_index())
+                                by_group196['一致率(%)']=(by_group196['一致数']/by_group196['検証数']*100).round(1)
+                                st.dataframe(by_group196,hide_index=True,use_container_width=True)
+                        st.caption('各グループの試行数が少ない場合、割合の差を予測能力の差と断定できません。')
+                    else:
+                        st.info('比較可能な予測がありません。取得失敗詳細・判定保留を確認してください。')
 
     st.subheader('レース格の判定チェック')
     st.caption('元のレース名と格付け根拠を見ながら、誤判定・判定不明を確認できます。ここで表示するのはフィルター適用前のデータです。')
