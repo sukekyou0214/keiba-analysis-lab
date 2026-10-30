@@ -11,7 +11,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.title('🏇 競馬分析ラボ Ver.15.7')
+st.title('🏇 競馬分析ラボ Ver.15.7.1')
 st.caption('自動取得・上がり順位・ペース別適性・脚質分析')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -769,7 +769,7 @@ st.write(f'読み込んだファイル：{len(uploads or [])}個 / 削除した�
 st.caption('列構成の違う同一レースは重複して残る場合があります。')
 st.download_button('📥 統合データをExcelで保存', data=make_excel(df), file_name='競馬分析_統合データ.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
 
-st.subheader('netkeibaのS/M/Hを全レース取得（Ver.15.7）')
+st.subheader('netkeibaのS/M/Hを全レース取得（Ver.15.7.1）')
 st.caption('保存済みの全過去成績から重複を除いたレースIDを対象にします。取得済みは再取得せず、10件ごとに結果を一時保存します。')
 if st.session_state.auto_df is not None and 'レースID' in st.session_state.auto_df.columns:
     source_df = st.session_state.auto_df.copy()
@@ -1010,7 +1010,7 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.dataframe(display_horse_column(used, horses, st.session_state.auto_numbers), hide_index=True, use_container_width=True)
         st.download_button('集計対象レース一覧をCSVで保存', data=display_horse_column(used, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_used_races_v146.csv', mime='text/csv', use_container_width=True)
-    st.subheader('ペース別の成績比較（Ver.15.7）')
+    st.subheader('ペース別の成績比較（Ver.15.7.1）')
     st.caption('レース格・直近走数・距離などの条件はランキングと同じ。ここだけは「推定ペース」の絞り込みを外し、3種類を並べて比較します。')
     st.info('netkeibaのS/M/Hが取得できたレースのみで集計します。未取得レースは「不明」として除外し、独自推定は混ぜません。')
     detail = pace_compare_base[pace_compare_base['推定ペース'].ne('不明')].copy()
@@ -1038,8 +1038,8 @@ if st.button('分析する', type='primary', use_container_width=True):
                            file_name='keiba_pace_compare_v15.csv', mime='text/csv', use_container_width=True)
     with st.expander('ペース判定の根拠（レースごとの前後半3F）', expanded=False):
         st.caption('差＝前半3F−後半3F。負なら前半が速く、正なら後半が速い。各レースの元データと分類を照合できます。')
-        cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '前半3F', '後半3F', '前後半3F差', '暫定ペース', '暫定ペース', '推定ペース', 'ペース判定元', '着順_数値']
-        pace_audit = pace_compare_base[[c for c in cols if c in pace_compare_base.columns]].copy()
+        cols = ['馬名', '日付', 'レース名', 'レース格', '競馬場', '距離_m', '前半3F', '後半3F', '前後半3F差', '暫定ペース', '推定ペース', 'ペース判定元', '着順_数値']
+        pace_audit = pace_compare_base[[c for c in dict.fromkeys(cols) if c in pace_compare_base.columns]].copy()
         if '日付' in pace_audit.columns:
             pace_audit['日付'] = pd.to_datetime(pace_audit['日付'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         st.write(f'判定可能：{int(pace_audit["推定ペース"].ne("不明").sum())}走 ／ 全{len(pace_audit)}走')
@@ -1048,7 +1048,7 @@ if st.button('分析する', type='primary', use_container_width=True):
         st.download_button('ペース判定根拠をCSVで保存', display_horse_column(pace_audit, horses, st.session_state.auto_numbers).to_csv(index=False).encode('utf-8-sig'),
                            file_name='keiba_pace_audit_v15.csv', mime='text/csv', use_container_width=True)
 
-    with st.expander('ペース判定の精度チェック（Ver.15.7）', expanded=False):
+    with st.expander('ペース判定の精度チェック（Ver.15.7.1）', expanded=False):
         st.caption('レース単位で重複を除き、判定の食い違い・距離別分布・判定できないレースを確認します。対象は現在選択中の直近走数・競馬場・馬場・コース・距離・レース格に従い、推定ペースの選択だけは無視します。')
         audit = pace_compare_base.copy()
         # レースIDが取得できた場合は最優先で使用。ない場合はレース日、競馬場、レース名、距離を組み合わせる。
