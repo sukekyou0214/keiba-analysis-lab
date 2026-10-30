@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.17.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.20.18.0')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2318,7 +2318,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.17.0')
+    st.caption('競馬分析ラボ Ver.20.18.0')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
@@ -2710,17 +2710,34 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                         {'馬名':'馬番＋馬名','3角→4角':'コーナーでの動き',
                          '角の有効走数':'対象走','4角→ゴール':'直線の追い上げ',
                          '直線の有効走数':'対象走'}, max_height=540)
-                    st.markdown('**全頭の位置変化回数（直近最大5走）**')
-                    counts217 = movement_counts_v2017(analysis_df, quick_names171)
+                    st.markdown('**全頭の位置変化回数（条件別・直近最大5走）**')
+                    st.caption('ここでの絞り込みは位置変化回数の表とCSVだけに適用。総合診断の予測計算は変更しません。')
+                    filter_mode218 = st.selectbox('比較する過去走',
+                        ['全条件（従来どおり）', '芝・1800〜2200m', '芝・2000m前後（±200m）',
+                         '東京・芝・1800〜2200m', '芝・良馬場・1800〜2200m'],
+                        key='movement_filter_v2018')
+                    move_data218 = analysis_df.copy()
+                    if filter_mode218 != '全条件（従来どおり）':
+                        course218 = move_data218['コース'].astype(str).str.strip()
+                        dist218 = pd.to_numeric(move_data218['距離_m'], errors='coerce')
+                        move_data218 = move_data218.loc[course218.eq('芝') & dist218.between(1800,2200)].copy()
+                        if filter_mode218.startswith('東京'):
+                            move_data218 = move_data218.loc[move_data218['競馬場'].astype(str).str.contains('東京', na=False)].copy()
+                        if '良馬場' in filter_mode218:
+                            move_data218 = move_data218.loc[move_data218['馬場状態'].astype(str).str.strip().eq('良')].copy()
+                    st.caption('各馬について、条件に合うレースのうち日付が新しい最大5走を集計。'
+                               '対象0走は「データなし」で、0回の位置維持とは異なります。')
+
+                    counts217 = movement_counts_v2017(move_data218, quick_names171)
                     count_rows217 = []
                     for name217 in quick_names171:
                         (cc217, cn217, cm217), (fc217, fn217, fm217), total217 = counts217[name217]
                         count_rows217.append({
                             '馬名': name217,
-                            '3角→4角': cc217,
+                            '3角→4角': cc217.replace('上昇','↑').replace('維持','→').replace('後退','↓').replace('／','  '),
                             '角の有効': f'{cn217}/{total217}',
                             '角の欠損': cm217,
-                            '4角→ゴール': fc217,
+                            '4角→ゴール': fc217.replace('上昇','↑').replace('維持','→').replace('後退','↓').replace('／','  '),
                             'ゴールの有効': f'{fn217}/{total217}',
                             'ゴールの欠損': fm217})
                     count_df217 = display_horse_column(
@@ -2739,6 +2756,13 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                         pd.DataFrame(count_rows217).to_csv(index=False).encode('utf-8-sig'),
                         file_name='keiba_movement_counts_v2017.csv',
                         mime='text/csv', width='stretch')
+                    audit_all218 = movement_audit_v2016(move_data218, quick_names171)
+                    st.download_button('全頭の過去走・検算明細をCSV保存（こちらを送ってね）',
+                        audit_all218.to_csv(index=False).encode('utf-8-sig'),
+                        file_name='keiba_movement_all_runs_v2018.csv',
+                        mime='text/csv', width='stretch', key='download_movement_all_v2018')
+                    st.caption('この明細CSVには全頭のレース別通過順・3角/4角・着順・順位変化・欠損理由が入っています。'
+                               'ChatGPTへの検証依頼はスクショではなく、このCSVを添付してください。')
                     with st.expander('クロワ・レガレイラ・マスカレードの過去5走を検算', expanded=False):
                         audit_names216 = [n for n in quick_names171 if any(
                             key in n for key in ('クロワデュノール','レガレイラ','マスカレードボール'))]
