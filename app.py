@@ -2320,9 +2320,23 @@ with st.sidebar:
     st.divider()
     st.caption('競馬分析ラボ Ver.20.18.0')
 
-# 過去10年分析は独立したStreamlitページへ移動する。
+# 過去10年分析: 独自メニュー内に直接表示する（switch_page は使用しない）。
 if selected_page208 == '📚 過去10年分析':
-    st.switch_page('pages/1_過去10年分析.py')
+    import importlib.util
+    history_file = Path(__file__).resolve().parent / 'pages' / '1_過去10年分析.py'
+    if not history_file.is_file():
+        st.error('過去10年分析ファイルが見つかりません。GitHubの pages/1_過去10年分析.py を確認してください。')
+    else:
+        try:
+            history_spec = importlib.util.spec_from_file_location('keiba_history_analysis', str(history_file))
+            if history_spec is None or history_spec.loader is None:
+                raise RuntimeError('分析ページを読み込めません。')
+            history_module = importlib.util.module_from_spec(history_spec)
+            history_spec.loader.exec_module(history_module)
+            history_module.render_history_page()
+        except Exception as history_error:
+            st.error(f'過去10年分析の表示エラー: {history_error}')
+    st.stop()
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
