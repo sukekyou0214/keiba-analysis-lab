@@ -2313,12 +2313,16 @@ with st.sidebar:
     st.caption('予想に使う画面を上にまとめています。')
     selected_page208 = st.radio(
         'メインメニュー',
-        ['🏇 総合診断', '🌊 ペース分析', '🐎 各馬の特徴', '⚙️ 分析条件', '🧰 管理・検証'],
+        ['🏇 総合診断', '🌊 ペース分析', '🐎 各馬の特徴', '📚 過去10年分析', '⚙️ 分析条件', '🧰 管理・検証'],
         key='nav_page_v208', label_visibility='collapsed',
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
     st.caption('競馬分析ラボ Ver.20.18.0')
+
+# 過去10年分析は独立したStreamlitページへ移動する。
+if selected_page208 == '📚 過去10年分析':
+    st.switch_page('pages/1_過去10年分析.py')
 
 # サイドバーにより、iPhoneは標準の☰ボタンで開閉する。
 # 詳細分析が総合診断の計算結果を参照するため、計算自体は維持。
