@@ -244,6 +244,116 @@ def show_popularity_analysis(joined: pd.DataFrame):
                        file_name="autumn_derby_longshots.csv", mime="text/csv", key="history_longshots_csv")
     st.warning("『ダービー出走歴なし/未収録』には取得漏れの可能性があります。複勝払戻がない場合、複勝回収率は算出しません。少数標本の高複勝率を過信しないでください。")
 
+
+
+def analyze_popularity_gap(joined: pd.DataFrame, threshold: int = 3, autumn_min: int = 4,
+                           autumn_max: int = 9):
+    """同一馬のダービー人気から秋天人気への変化を分析する。
+
+    人気落差 = 秋天人気 - ダービー人気（正なら人気低下）。
+    ダービー人気が不明な馬は除外し、着順不明も除外する。
+    """
+    candidates = joined.loc[
+        joined["人気"].notna() & joined["着順"].ge(1)
+        & joined["D_人気"].notna() & joined["D_着順"].ge(1)
+    ].copy()
+    candidates["人気落差"] = candidates["人気"] - candidates["D_人気"]
+    candidates["落差区分"] = candidates["人気落差"].apply(
+        lambda v: f"{threshold}段階以上人気低下" if v >= threshold
+        else (f"{threshold}段階以上人気上昇" if v <= -threshold else "ほぼ同程度"))
+    candidates["秋天3着以内"] = candidates["着順"].le(3)
+    candidates["ダービー3着以内"] = candidates["D_着順"].le(3)
+    candidates["秋天人気帯"] = pd.cut(candidates["人気"],
+                                bins=[0, 3, 6, 9, float("inf")],
+                                labels=["1～3番人気", "4～6番人気", "7～9番人気", "10番人気以下"])
+
+    def aggregate(df, fields):
+        result = []
+        for key, block in df.groupby(fields, observed=True, dropna=False):
+            if not isinstance(key, tuple):
+                key = (key,)
+            n = len(block)
+            hits = int(block["秋天3着以内"].sum())
+            wins = int(block["着順"].eq(1).sum())
+            vals = {field: str(v) for field, v in zip(fields, key)}
+            vals.update({"出走": n, "1着": wins, "3着以内": hits,
+                         "複勝率(%)": round(100 * hits / n, 1)})
+            win_odds = block.loc[block["着順"].eq(1), "単勝オッズ"]
+            vals["単勝回収率(%)"] = round(100 * win_odds.sum() / n, 1) if win_odds.notna().all() else None
+            result.append(vals)
+        return pd.DataFrame(result)
+
+    whole = aggregate(candidates, ["落差区分"])
+    focus = candidates[candidates["人気"].between(autumn_min, autumn_max)].copy()
+    focus_summary = aggregate(focus, ["落差区分", "ダービー3着以内"])
+    band_summary = aggregate(candidates, ["秋天人気帯", "落差区分"])
+    return candidates, whole, focus, focus_summary, band_summary
+
+
+def show_popularity_gap_analysis(joined: pd.DataFrame):
+    st.markdown("#### ダービー人気 → 秋天人気の落差分析")
+    st.caption("人気落差＝秋天人気順位－ダービー人気順位。プラスならダービー時より評価が低下した馬。人気順位の差は確率差ではありません。")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        threshold = st.number_input("人気落差の判定幅", min_value=1, max_value=15, value=3, step=1,
+                                    key="derby_gap_threshold")
+    with c2:
+        autumn_min = st.number_input("穴馬・人気下限", min_value=1, max_value=18, value=4, step=1,
+                                     key="derby_gap_min")
+    with c3:
+        autumn_max = st.number_input("穴馬・人気上限", min_value=1, max_value=18, value=9, step=1,
+                                     key="derby_gap_max")
+    if autumn_min > autumn_max:
+        st.warning("人気の下限は上限以下にしてください。")
+        return
+    matched, whole, focus, focus_summary, by_band = analyze_popularity_gap(
+        joined, int(threshold), int(autumn_min), int(autumn_max))
+    if matched.empty:
+        st.warning("ダービーと秋天の両方の人気・着順が揃う馬がいません。")
+        return
+    excluded = len(joined) - len(matched)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("比較可能", f"{len(matched)}頭")
+    m2.metric("除外・未照合", f"{excluded}頭")
+    m3.metric("対象の秋天人気帯", f"{int(autumn_min)}～{int(autumn_max)}番人気")
+    st.caption("除外にはダービー未出走・未収録・人気や着順の欠損を含みます。母集団は照合できた馬のみです。")
+
+    st.markdown("**人気の上昇・低下別成績（全人気）**")
+    st.dataframe(whole, hide_index=True, use_container_width=True)
+    with st.expander("秋天人気帯を揃えて比較", expanded=False):
+        st.dataframe(by_band, hide_index=True, use_container_width=True)
+
+    st.markdown(f"**秋天{int(autumn_min)}～{int(autumn_max)}番人気 × ダービー好走歴**")
+    if focus.empty:
+        st.info("指定した秋天人気帯でダービー実績を照合できた馬はいません。")
+        return
+    baseline = focus["秋天3着以内"].mean() * 100
+    focus_summary["同人気帯との差(pt)"] = (focus_summary["複勝率(%)"] - baseline).round(1)
+    st.caption(f"この表の比較基準は『同じ秋天人気帯かつダービー照合済み』の{len(focus)}頭（複勝率{baseline:.1f}%）。")
+    st.dataframe(focus_summary, hide_index=True, use_container_width=True)
+    st.caption("ダービー3着以内は人気とは独立した分類。『True』は3着以内、『False』は4着以下。")
+    if (focus_summary["出走"] < 10).any():
+        st.warning("10頭未満のグループがあります。少数例の複勝率は偶然で大きく変動します。")
+
+    st.markdown("**人気を落として秋天で3着以内に入った馬**")
+    hits = focus[focus["人気落差"].ge(threshold) & focus["秋天3着以内"]].copy()
+    columns = ["年", "馬名", "人気", "着順", "D_年", "D_人気", "D_着順", "人気落差", "単勝オッズ"]
+    names = {"人気": "秋天人気", "着順": "秋天着順", "D_年": "ダービー年",
+             "D_人気": "ダービー人気", "D_着順": "ダービー着順"}
+    if hits.empty:
+        st.info("指定条件に該当する好走馬はありません。")
+    else:
+        st.dataframe(hits[columns].rename(columns=names), hide_index=True, use_container_width=True)
+    with st.expander("比較可能な全頭の人気落差", expanded=False):
+        st.dataframe(matched[columns + ["落差区分", "秋天人気帯"]].rename(columns=names),
+                     hide_index=True, use_container_width=True)
+    st.download_button("人気落差・全頭データCSV", _csv_bytes(matched),
+                       file_name="autumn_derby_popularity_gap.csv", mime="text/csv", key="history_gap_csv")
+    st.download_button("人気落差・穴馬条件集計CSV", _csv_bytes(focus_summary),
+                       file_name="autumn_derby_gap_longshot_summary.csv", mime="text/csv", key="history_gap_summary_csv")
+    st.info("これは記述統計であり、過去の人気変動が将来の好走を引き起こすとは限りません。ダービー未出走・未収録は区別できず、年齢や秋天人気などの交絡要因にも注意してください。")
+
+
 def _csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8-sig")
 
@@ -482,6 +592,7 @@ def render_history_page():
     st.dataframe(summary, hide_index=True, use_container_width=True)
     st.caption("単勝回収率は単勝オッズ×100円、複勝回収率は100円払戻を使用。欠損時は算出不可。条件別の標本数を必ず確認してください。")
     show_popularity_analysis(joined)
+    show_popularity_gap_analysis(joined)
     with st.expander("年別データ品質", expanded=False):
         st.dataframe(year_counts.reset_index(), hide_index=True, use_container_width=True)
     with st.expander("全頭の照合結果", expanded=False):
