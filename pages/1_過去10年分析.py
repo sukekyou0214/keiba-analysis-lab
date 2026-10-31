@@ -1,10 +1,10 @@
 """競馬分析ラボ追加機能：ダービー成績 × 天皇賞（秋）過去10年検証。
 
-導入：GitHubで pages/1_過去10年分析.py という名前で新規ファイルを作成し、
-この内容をそのままコピーする。Streamlitのページとして自動認識される。
-既存の app.py への変更は不要。
+導入：既存GitHubの pages/1_過去10年分析.py を全文置換。
+現行のapp.py（分析メニュー対応版）は変更しない。
 
-入力は2つのCSV/Excel（天皇賞秋・ダービー）。1行=1頭の出走実績。
+自動取得はnetkeibaの公開結果を参照。通信できない場合は手動CSV/Excelも使用可能。
+CSV/Excelの入力は1行=1頭の出走実績。
 カラム：年, 馬名, 人気, 着順（任意：馬ID, 単勝オッズ, 複勝払戻）。
 実データの不明欄は埋めず、欠損として処理する。
 """
@@ -13,6 +13,10 @@ from __future__ import annotations
 import io
 import re
 import unicodedata
+import time
+
+import requests
+from bs4 import BeautifulSoup
 from typing import Optional
 
 import pandas as pd
@@ -160,6 +164,149 @@ def _csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
+
+
+# netkeibaの重賞特集ページにある過去レース一覧から実際のレースIDを取得する。
+# HTML変更、アクセス制限、取得漏れは「失敗」として表示し、推測のIDや成績は補わない。
+SPECIAL_URLS = {
+    "秋天": "https://race.netkeiba.com/special/index.html?id=0109",
+    "ダービー": "https://race.netkeiba.com/special/index.html?id=0059",
+}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+    "Accept-Language": "ja-JP,ja;q=0.9,en;q=0.7",
+}
+
+
+def _request_soup(session, url):
+    response = session.get(url, headers=HEADERS, timeout=18)
+    response.raise_for_status()
+    response.encoding = response.apparent_encoding or response.encoding
+    return BeautifulSoup(response.text, "html.parser")
+
+
+def _discover_ids(session, label, start, end):
+    soup = _request_soup(session, SPECIAL_URLS[label])
+    found = {}
+    # 特集ページの「過去のレース結果」テーブルを抽出。
+    title = next((h for h in soup.find_all(["h2", "h3", "h4"])
+                  if "過去のレース結果" in h.get_text(" ", strip=True)), None)
+    table = title.find_next("table") if title else None
+    if table is None:
+        raise ValueError("重賞特集から過去レース一覧を検出できません（サイト構成変更の可能性）")
+    for tr in table.select("tr"):
+        for a in tr.select('a[href*="/race/"]'):
+            match = re.search(r"/race/(\d{12})(?:/|[?#]|$)", a.get("href", ""))
+            if not match:
+                continue
+            race_id = match.group(1)
+            year = int(race_id[:4])
+            if start <= year <= end:
+                found[year] = race_id
+                break
+    return found
+
+
+def _number_or_none(value):
+    m = re.search(r"\d+(?:\.\d+)?", str(value).replace(",", ""))
+    return float(m.group()) if m else None
+
+
+def _parse_result(soup, race_id, label):
+    # 別レースへの誤接続を回避。タイトルとIDの両方を検証。
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    heading = soup.select_one("h1.RaceName") or soup.find("h1")
+    name = (heading.get_text(" ", strip=True) if heading else "") + " " + title
+    if label == "秋天" and not ("天皇賞" in name and "秋" in name):
+        raise ValueError("指定IDのページが天皇賞・秋ではありません")
+    if label == "ダービー" and not ("日本ダービー" in name or "東京優駿" in name):
+        raise ValueError("指定IDのページが日本ダービーではありません")
+    rows = []
+    table = soup.select_one("table.RaceTable01")
+    if table is None:
+        raise ValueError("レース結果テーブルが見つかりません")
+    for tr in table.select("tr.HorseList"):
+        cols = tr.find_all("td", recursive=False)
+        if len(cols) < 11:
+            continue
+        # netkeiba PC結果表：着順/枠/馬番/馬名/性齢/斤量/騎手/タイム/着差/人気/単勝オッズ
+        finish = _number_or_none(cols[0].get_text(" ", strip=True))
+        horse = cols[3].select_one('a[href*="/horse/"]')
+        if horse is None:
+            continue
+        name = _normalize_name(horse.get_text(" ", strip=True))
+        pop = _number_or_none(cols[9].get_text(" ", strip=True))
+        odds = _number_or_none(cols[10].get_text(" ", strip=True))
+        number = _number_or_none(cols[2].get_text(" ", strip=True))
+        horse_href = horse.get("href", "")
+        horse_id = re.search(r"/horse/(\d{10})(?:/|[?#]|$)", horse_href)
+        rows.append({"年": int(race_id[:4]), "馬名": name,
+                     "馬ID": horse_id.group(1) if horse_id else "",
+                     "人気": pop, "着順": finish, "単勝オッズ": odds,
+                     "複勝払戻": None, "馬番": int(number) if number is not None else None})
+    if len(rows) < 8:
+        raise ValueError(f"出走馬が{len(rows)}頭しか取得できませんでした")
+    # 人気・着順の欠損が多い場合は取得成功扱いしない。
+    if sum(x["人気"] is not None for x in rows) < len(rows) - 1:
+        raise ValueError("人気データが欠損しています")
+    if sum(x["着順"] is not None for x in rows) < 8:
+        raise ValueError("着順データが不足しています")
+    # 払戻表はHTML構造に差があるため、完全に対応づけられた場合のみ採用。
+    for paytable in soup.select("table.PayTable01"):
+        for tr in paytable.select("tr"):
+            first = tr.find(["th", "td"])
+            if first is None or first.get_text(" ", strip=True) != "複勝":
+                continue
+            cells = tr.find_all(["th", "td"], recursive=False)
+            if len(cells) < 3:
+                continue
+            numbers = [int(z) for z in re.findall(r"\d+", cells[1].get_text(" ", strip=True))]
+            payouts = [int(z.replace(",", "")) for z in re.findall(r"[\d,]+", cells[2].get_text(" ", strip=True))]
+            if len(numbers) == len(payouts) and 1 <= len(numbers) <= 3:
+                mapping = dict(zip(numbers, payouts))
+                for row in rows:
+                    if row["馬番"] in mapping and row["着順"] is not None and row["着順"] <= 3:
+                        row["複勝払戻"] = mapping[row["馬番"]]
+    return rows
+
+
+def fetch_history_auto(start_year, end_year, status_callback=None):
+    """ネット取得結果と取得ログを返す。未取得年の推測補完は禁止。"""
+    if not 2000 <= start_year <= end_year <= 2025:
+        raise ValueError("自動取得は2000〜2025年の確定済み結果に対応します")
+    session = requests.Session()
+    # 対象期間の秋天出走馬のダービー経験を見たいので、2007年以降まで遡る。
+    derby_start = max(2000, start_year - 9)
+    race_maps = {}
+    logs = []
+    for label, begin in (("秋天", start_year), ("ダービー", derby_start)):
+        try:
+            race_maps[label] = _discover_ids(session, label, begin, end_year)
+        except Exception as exc:
+            race_maps[label] = {}
+            logs.append({"対象": label, "年": "一覧", "状況": "失敗", "詳細": str(exc)})
+    output = {"秋天": [], "ダービー": []}
+    targets = [(label, year) for label, begin in (("秋天", start_year), ("ダービー", derby_start))
+               for year in range(begin, end_year + 1)]
+    for idx, (label, year) in enumerate(targets, 1):
+        race_id = race_maps[label].get(year)
+        if race_id is None:
+            logs.append({"対象": label, "年": year, "状況": "失敗", "詳細": "特集ページにレースIDなし"})
+        else:
+            try:
+                url = f"https://race.netkeiba.com/race/result.html?race_id={race_id}"
+                records = _parse_result(_request_soup(session, url), race_id, label)
+                output[label].extend(records)
+                logs.append({"対象": label, "年": year, "状況": "成功", "詳細": f"{len(records)}頭 / {race_id}"})
+            except Exception as exc:
+                logs.append({"対象": label, "年": year, "状況": "失敗", "詳細": str(exc)[:180]})
+            time.sleep(0.35)
+        if status_callback is not None:
+            status_callback(idx, len(targets), label, year)
+    return pd.DataFrame(output["秋天"], columns=DATA_COLS + ["馬番"]), pd.DataFrame(
+        output["ダービー"], columns=DATA_COLS + ["馬番"]), pd.DataFrame(logs)
+
+
 def render_history_page():
     """既存のStreamlitページから選択時だけ呼び出す。通信・既存処理に非依存。"""
     st.subheader("過去10年・ダービー実績 × 天皇賞・秋")
@@ -169,11 +316,14 @@ def render_history_page():
         st.write("任意列は「馬ID・単勝オッズ・複勝払戻」。複勝払戻は的中馬について100円あたりの円額を入力。")
         st.write("天皇賞・秋は対象の10年分の全出走馬、日本ダービーはその馬たちが出た年まで遡って収録してください。")
         st.warning("未収録とダービー未出走はCSVだけでは区別できません。集計で両者をまとめ、網羅性を確認してください。")
-    left, right = st.columns(2)
-    with left:
-        autumn_file = st.file_uploader("天皇賞・秋 全出走馬（CSV / Excel）", type=["csv", "xlsx"], key="autumn_history_upload")
-    with right:
-        derby_file = st.file_uploader("日本ダービー 全出走馬（CSV / Excel）", type=["csv", "xlsx"], key="derby_history_upload")
+    mode = st.radio("データの準備方法", ["自動取得（netkeiba）", "CSV・Excelをアップロード"], horizontal=True, key="history_input_mode")
+    autumn_file = derby_file = None
+    if mode == "CSV・Excelをアップロード":
+        left, right = st.columns(2)
+        with left:
+            autumn_file = st.file_uploader("天皇賞・秋 全出走馬（CSV / Excel）", type=["csv", "xlsx"], key="autumn_history_upload")
+        with right:
+            derby_file = st.file_uploader("日本ダービー 全出走馬（CSV / Excel）", type=["csv", "xlsx"], key="derby_history_upload")
     c1, c2 = st.columns(2)
     with c1:
         last_year = st.number_input("集計最終年", min_value=2000, max_value=2100, value=2025, step=1, key="autumn_last_year")
@@ -181,12 +331,48 @@ def render_history_page():
     with c2:
         year_count = st.number_input("対象年数", min_value=1, max_value=30, value=10, step=1)
         good = st.number_input("ダービー好走の着順", min_value=1, max_value=18, value=3, step=1)
-    if not (autumn_file and derby_file):
-        st.info("2つの結果ファイルを読み込むと、分類と複勝率・回収率を表示します。")
-        return
+    if mode == "自動取得（netkeiba）":
+        st.caption("netkeibaの重賞特集・結果ページから取得。初回は複数ページへのアクセスが必要です。取得失敗年は補完せず明示します。")
+        if st.button("過去データを自動取得して分析", type="primary", key="history_fetch_button"):
+            progress = st.progress(0, text="レース結果の取得を開始します")
+            def on_progress(index, total, label, year):
+                progress.progress(index / total, text=f"{label} {year}年を確認 ({index}/{total})")
+            with st.spinner("レース結果を取得中"):
+                try:
+                    fetched = fetch_history_auto(int(last_year - year_count + 1), int(last_year), on_progress)
+                    st.session_state["history_auto_cache"] = (int(last_year), int(year_count), fetched)
+                except Exception as exc:
+                    st.error(f"自動取得エラー：{exc}")
+            progress.empty()
+        cache = st.session_state.get("history_auto_cache")
+        if not cache or cache[:2] != (int(last_year), int(year_count)):
+            st.info("上のボタンを押すとデータ取得を開始します。")
+            return
+        a, d, logs = cache[2]
+        with st.expander("取得状況・失敗年を確認", expanded=bool((logs["状況"] == "失敗").any())):
+            st.dataframe(logs, hide_index=True, use_container_width=True)
+        succeeded = logs[(logs["対象"] == "秋天") & (logs["状況"] == "成功")]
+        if len(succeeded) != int(year_count):
+            st.error("天皇賞・秋の全対象年が揃っていません。誤解を防ぐため、集計を停止します。")
+            return
+        if d.empty:
+            st.error("日本ダービーの結果を取得できませんでした。集計を停止します。")
+            return
+        if ((logs["対象"] == "ダービー") & (logs["状況"] == "失敗")).any():
+            st.warning("ダービーの取得に欠損年があります。未照合は『未出走』とは区別できず、推定される分類に注意してください。")
+        st.download_button("取得した秋天データを保存", _csv_bytes(a), "autumn_auto.csv", "text/csv")
+        st.download_button("取得したダービーデータを保存", _csv_bytes(d), "derby_auto.csv", "text/csv")
+    else:
+        if not (autumn_file and derby_file):
+            st.info("2つの結果ファイルを読み込むと、分類と複勝率・回収率を表示します。")
+            return
+        try:
+            a = _load_table(autumn_file)
+            d = _load_table(derby_file)
+        except Exception as exc:
+            st.error(f"ファイル読み込みエラー：{exc}")
+            return
     try:
-        a = _load_table(autumn_file)
-        d = _load_table(derby_file)
         joined = build_join(a, d, int(last_year - year_count + 1), int(last_year), int(popular), int(good))
         if joined.empty:
             st.warning("対象期間に天皇賞・秋のデータがありません。")
