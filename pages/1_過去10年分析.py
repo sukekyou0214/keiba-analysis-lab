@@ -160,6 +160,90 @@ def summarize(joined: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+
+def analyze_popularity(joined: pd.DataFrame):
+    """秋天人気帯ごとの実績を、全出走馬を母数として集計。"""
+    valid = joined.loc[joined["人気"].notna() & joined["着順"].ge(1)].copy()
+    valid["秋天人気帯"] = pd.cut(
+        valid["人気"], bins=[0, 3, 6, 9, float("inf")],
+        labels=["1～3番人気", "4～6番人気", "7～9番人気", "10番人気以下"],
+        include_lowest=True,
+    )
+    rows = []
+    for (band, category), block in valid.groupby(["秋天人気帯", "ダービー分類"], observed=True):
+        n = len(block)
+        placed = int(block["着順"].le(3).sum())
+        wins = int(block["着順"].eq(1).sum())
+        winning_odds = block.loc[block["着順"].eq(1), "単勝オッズ"]
+        roi = round(winning_odds.sum() * 100 / n, 1) if winning_odds.notna().all() else None
+        rows.append({"秋天人気帯": str(band), "ダービー分類": category, "出走": n,
+                     "1着": wins, "3着以内": placed,
+                     "勝率(%)": round(wins * 100 / n, 1),
+                     "複勝率(%)": round(placed * 100 / n, 1),
+                     "単勝回収率(%)": roi})
+    band_summary = []
+    for band, block in valid.groupby("秋天人気帯", observed=True):
+        n = len(block)
+        band_summary.append({"秋天人気帯": str(band), "全頭数": n,
+                             "3着以内": int(block["着順"].le(3).sum()),
+                             "基準複勝率(%)": round(block["着順"].le(3).mean() * 100, 1)})
+    return valid, pd.DataFrame(rows), pd.DataFrame(band_summary)
+
+
+def show_popularity_analysis(joined: pd.DataFrame):
+    st.markdown("#### 秋天人気別 × ダービー実績")
+    st.caption("秋天で何番人気だったかを揃えて比較。好走馬だけを抽出せず、各条件の全出走馬を分母にします。")
+    valid, cross, baselines = analyze_popularity(joined)
+    invalid_count = len(joined) - len(valid)
+    if invalid_count:
+        st.warning(f"秋天人気または着順が欠損した{invalid_count}頭は、この分析から除外しています。")
+    if valid.empty:
+        st.warning("秋天人気と着順の両方が揃うデータがありません。")
+        return
+    st.markdown("**秋天人気帯ごとの全体基準**")
+    st.dataframe(baselines, hide_index=True, use_container_width=True)
+    st.markdown("**ダービー分類を加えた比較**")
+    if cross.empty:
+        st.warning("比較に使える分類がありません。")
+        return
+    st.dataframe(cross, hide_index=True, use_container_width=True)
+
+    st.markdown("#### 穴馬傾向（秋天4～9番人気）")
+    holes = valid[valid["人気"].between(4, 9)].copy()
+    if holes.empty:
+        st.info("秋天4～9番人気の記録がありません。")
+        return
+    base_n, base_p = len(holes), int(holes["着順"].le(3).sum())
+    baseline = base_p / base_n * 100
+    c1, c2, c3 = st.columns(3)
+    c1.metric("4～9番人気の出走", f"{base_n}頭")
+    c2.metric("3着以内", f"{base_p}頭")
+    c3.metric("全体複勝率", f"{baseline:.1f}%")
+    rows = []
+    for category, group in holes.groupby("ダービー分類", dropna=False):
+        n = len(group)
+        count = int(group["着順"].le(3).sum())
+        rate = 100 * count / n
+        rows.append({"ダービー分類": category, "出走": n, "3着以内": count,
+                     "複勝率(%)": round(rate, 1),
+                     "全体との差(pt)": round(rate - baseline, 1),
+                     "信頼性": "少数（10頭未満）" if n < 10 else "要継続検証"})
+    comparison = pd.DataFrame(rows).sort_values(["複勝率(%)", "出走"], ascending=[False, False])
+    st.dataframe(comparison, hide_index=True, use_container_width=True)
+    st.caption("『全体との差』は同じ秋天4～9番人気全体との単純比較です。統計的な有意差や因果効果を意味しません。")
+
+    st.markdown("**実際に4～9番人気で3着以内に入った馬**")
+    hits = holes[holes["着順"].le(3)].sort_values(["年", "着順"], ascending=[False, True])
+    show_cols = ["年", "馬名", "人気", "着順", "D_年", "D_人気", "D_着順", "ダービー分類", "単勝オッズ"]
+    names = {"人気": "秋天人気", "着順": "秋天着順", "D_年": "ダービー年",
+             "D_人気": "ダービー人気", "D_着順": "ダービー着順"}
+    st.dataframe(hits[show_cols].rename(columns=names), hide_index=True, use_container_width=True)
+    st.download_button("人気別×ダービー分類の集計CSV", _csv_bytes(cross),
+                       file_name="autumn_derby_popularity.csv", mime="text/csv", key="history_popularity_csv")
+    st.download_button("穴馬条件の集計CSV", _csv_bytes(comparison),
+                       file_name="autumn_derby_longshots.csv", mime="text/csv", key="history_longshots_csv")
+    st.warning("『ダービー出走歴なし/未収録』には取得漏れの可能性があります。複勝払戻がない場合、複勝回収率は算出しません。少数標本の高複勝率を過信しないでください。")
+
 def _csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8-sig")
 
@@ -397,6 +481,7 @@ def render_history_page():
     st.markdown("#### 分類別成績")
     st.dataframe(summary, hide_index=True, use_container_width=True)
     st.caption("単勝回収率は単勝オッズ×100円、複勝回収率は100円払戻を使用。欠損時は算出不可。条件別の標本数を必ず確認してください。")
+    show_popularity_analysis(joined)
     with st.expander("年別データ品質", expanded=False):
         st.dataframe(year_counts.reset_index(), hide_index=True, use_container_width=True)
     with st.expander("全頭の照合結果", expanded=False):
