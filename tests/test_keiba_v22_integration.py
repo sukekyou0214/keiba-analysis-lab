@@ -55,3 +55,17 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(len(saved),1)
         self.assertEqual(result['netkeibaペース'].eq('ハイ寄り').sum(),2)
         self.assertEqual(len(recent_pace_ids(result)),1)
+
+    def test_missing_section_skips_without_inventing_pace(self):
+        from keiba_main_integration import enrich_pace,recent_pace_ids
+        d=pd.DataFrame([{'馬ID':str(h),'馬名':str(h),'着順_数値':2,'日付':'2026-10-01','レースID':rid} for h,rid in [(1,'202608010101'),(2,'202608010102')]])
+        saved=[]
+        def loader(rid):
+            if rid.endswith('1'):raise ValueError('ラップタイム欄が見つかりません')
+            return 'ミドル寄り'
+        result,error=enrich_pace(d,loader,lambda f:saved.append(f.copy()),sleeper=lambda _:None)
+        self.assertIsNone(error)
+        self.assertEqual(len(saved),2)
+        self.assertEqual(result.iloc[0]['ペース取得状態'],'取得不可')
+        self.assertNotIn(result.iloc[0].get('netkeibaペース'),['スロー寄り','ミドル寄り','ハイ寄り'])
+        self.assertEqual(recent_pace_ids(result),[])

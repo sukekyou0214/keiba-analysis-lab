@@ -73,11 +73,13 @@ def recent_pace_ids(data,per_horse=5):
     ids=recent['レースID'].fillna('').astype(str)
     known=data.get('netkeibaペース',pd.Series('',index=data.index)).isin(['スロー寄り','ミドル寄り','ハイ寄り'])
     done=set(data.loc[known,'レースID'].astype(str))
+    if 'ペース取得状態' in data:
+        done.update(data.loc[data['ペース取得状態'].eq('取得不可'),'レースID'].astype(str))
     return [x for x in ids[ids.str.fullmatch(r'\d{12}')].drop_duplicates() if x not in done]
 
 
 def enrich_pace(data,loader,save,progress=lambda *args:None,sleeper=None):
-    """Serial, saved per result, no retry; stops on first unavailable source."""
+    """Persist semantic missing labels; stop on transport or unknown failures."""
     import time
     from keiba_core import apply_netkeiba_pace
     sleeper=sleeper or time.sleep
@@ -91,7 +93,17 @@ def enrich_pace(data,loader,save,progress=lambda *args:None,sleeper=None):
             save(out)
             progress(n,len(pending))
         except Exception as exc:
-            error=str(exc)[:180];break
+            reason=str(exc)[:180]
+            missing_messages=('ラップタイム欄が見つかりません','ラップ欄にS/M/Hの明示表記が見つかりません','S/M/Hの明示判定を確認できません')
+            if isinstance(exc,ValueError) and reason in missing_messages:
+                mask=out['レースID'].astype(str).eq(rid)
+                out.loc[mask,'ペース取得状態']='取得不可'
+                out.loc[mask,'ペース取得理由']=reason
+                # Never fabricate a pace for a semantic missing value.
+                save(out)
+                progress(n,len(pending))
+                continue
+            error=reason;break
     return out,error
 
 
@@ -100,6 +112,8 @@ def render_pace_enrichment():
     data=st.session_state.get('auto_df')
     if not isinstance(data,pd.DataFrame) or data.empty:return
     pending=recent_pace_ids(data)
+    unavailable=(int(data.loc[data['ペース取得状態'].eq('取得不可'),'レースID'].nunique()) if 'ペース取得状態' in data else 0)
+    if unavailable:st.caption(f'ペース判定の取得不可：{unavailable}レース（欠損として保持・自動再取得しません）')
     st.caption(f'本体の直近5走：S/M/H未取得 {len(pending)}レース（同一レースは1回だけ取得）')
     if st.button('本体の不足データを補完：直近5走のS/M/H',disabled=not pending,key='main_enrich_pace'):
         from keiba_core import get_netkeiba_pace,save_race_cache
