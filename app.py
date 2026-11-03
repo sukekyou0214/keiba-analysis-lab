@@ -327,7 +327,7 @@ def historical_replay_v194(all_data, minimum_known=3, max_races=100):
 
 
 def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
-    """横スクロール中も馬番＋馬名3文字を固定。元の馬名は欠落させない。"""
+    """横スクロール中も馬番＋正式馬名を固定し、折り返して表示。"""
     import html as _html
     labels = labels or {}
     cols = [c for c in columns if c in frame.columns]
@@ -340,11 +340,8 @@ def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
         for idx, v in enumerate(vals):
             raw = '—' if pd.isna(v) else str(v)
             if idx == 0 and cols[0] == '馬名':
-                # 既存の馬番表示が「1 クロワデュノール」でも、元の正式馬名だけでも対応。
-                m = re.match(r'^([0-9０-９]+)\s*(.+)$', raw)
-                short = m.group(1) + ' ' + m.group(2)[:3] if m else raw[:5]
                 cells.append('<td class="k-name" title="' + _html.escape(raw, quote=True)
-                             + '">' + _html.escape(short) + '</td>')
+                             + '">' + _html.escape(raw) + '</td>')
             else:
                 cells.append('<td>' + _html.escape(raw) + '</td>')
         rows.append('<tr>' + ''.join(cells) + '</tr>')
@@ -358,7 +355,7 @@ def fixed_order_table_v209(frame, columns, labels=None, max_height=620):
         'vertical-align:top;white-space:normal;background:#111827;color:#f4f5f8;}'
         '.k-table th{position:sticky;top:0;background:#263040;z-index:1;}'
         '.k-table td:first-child,.k-table th:first-child{position:sticky;left:0;'
-        'width:118px;min-width:118px;max-width:118px;white-space:nowrap;'
+        'width:118px;min-width:118px;max-width:118px;white-space:normal;overflow-wrap:anywhere;'
         'background:#1c2534;z-index:2;box-shadow:2px 0 5px #0007;font-weight:700;}'
         '.k-table th:first-child{background:#263040;z-index:3;'
         'font-size:0;} .k-table th:first-child:after{content:"馬番＋馬名";font-size:13px;}</style>',
@@ -2503,6 +2500,8 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                     comp171[lab171+'_差'] = va171.mean()-vb171.mean() if len(va171) and len(vb171) else float('nan')
                 label171, _, _ = interpret_running_pattern(comp171)
             diag171 = diagnose_horse_v17(hdiagnose171, label171)
+            from keiba_diagnosis_evidence import summarize_source_pace
+            diag171['ペース別3着内'] = summarize_source_pace(allhorse171)
             diag171['馬名'] = name171
             diag171['ラップ確認走数'] = len(lapgroup171)
             records171.append(diag171)
@@ -2513,10 +2512,11 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                 st.markdown('#### 全馬の特徴を比較')
                 st.caption('過去走から分かる走り方・好走展開の比較。能力順位や今回の勝率ではありません。')
                 fixed_order_table_v209(
-                    quick_display171, ['馬名','走りの総合診断','展開','信頼度','好走走数'],
+                    quick_display171, ['馬名','走りの総合診断','ペース別3着内','信頼度','好走走数'],
                     {'馬名':'馬番＋正式馬名','走りの総合診断':'強み・走り方',
-                     '展開':'好走展開','信頼度':'根拠の信頼度','好走走数':'好走走数'})
-                st.caption('信頼度はデータの充実度の目安で、予測的中率ではありません。')
+                     'ペース別3着内':'ペース別3着内','信頼度':'根拠の信頼度','好走走数':'好走走数'})
+                st.caption('S＝スロー、M＝ミドル、H＝ハイ。数字は3着内走数／着順とペース確認済み走数。未取得は集計から除外。少数例のため適性や勝率を断定しません。')
+                st.caption('信頼度は走り方のデータ充実度の目安で、ペース適性や予測的中率ではありません。')
                 # Ver.20.10: 計算結果を変えず、根拠となる有効データと欠測を監査する。
                 with st.expander('分析の信頼性チェック（全馬）', expanded=False):
                     audit210 = quick_result171[['馬名','対象走数','好走走数','ラップ確認走数',
@@ -2830,7 +2830,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                                '少数走数は参考扱い。S/M/H・競馬場・距離を区別した将来予測ではありません。')
             if selected_page208 == '🏇 総合診断':
                 if quick_shapes171.empty:
-                    st.info('保存済みのラップ分析結果がないため、現時点では位置取り・末脚を中心に表示しています。分析条件からラップを取得すると展開診断も加わります。')
+                    st.info('S/M/Hの実績は上の比較表に反映しています。200mラップが未取得のため、瞬発戦・持続戦・消耗戦の判定は保留です。')
                 st.caption('「参考」「暫定」は少数データの目印。レース全体のラップを馬自身の個別ラップとして扱いません。')
                 with st.expander('気になる馬の診断根拠を見る', expanded=False):
                     chosen171 = tap_choice('馬を選ぶ', quick_display171['馬名'].tolist(), 'quick_diagnosis_horse_v171')
