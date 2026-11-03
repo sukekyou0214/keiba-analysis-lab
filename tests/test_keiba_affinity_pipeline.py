@@ -56,6 +56,21 @@ class HistoryBatchTests(unittest.TestCase):
         failed.loc[0, "status"] = "失敗"
         self.assertFalse(complete_horse_manifest(self.horses, failed))
 
+    def test_raw_history_ids_must_match_manifest(self):
+        log = pd.DataFrame([
+            {"horse_id": horse_id, "status": "成功"}
+            for horse_id in self.horses["馬ID"]
+        ])
+        good = pd.DataFrame([{"馬ID": hid, "レースID": f"20240000000{i}"}
+                             for i, hid in enumerate(self.horses["馬ID"])])
+        self.assertTrue(complete_horse_manifest(self.horses, log, good))
+        self.assertFalse(complete_horse_manifest(self.horses, log, good.iloc[:2]))
+        broken = good.copy()
+        broken.loc[0, "馬ID"] = "9999999999"
+        self.assertFalse(complete_horse_manifest(self.horses, log, broken))
+        dup = pd.concat([good, good.iloc[[0]]], ignore_index=True)
+        self.assertFalse(complete_horse_manifest(self.horses, log, dup))
+
     def test_rejects_unbounded(self):
         with self.assertRaises(ValueError):
             collect_batch(self.horses, lambda h, n: None, limit=150)
