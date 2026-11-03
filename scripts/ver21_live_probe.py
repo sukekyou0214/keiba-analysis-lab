@@ -43,6 +43,9 @@ def main():
         if len(log) != 14 or not log["status"].eq("成功").all():
             raise ValueError("Horse history collection incomplete")
         converted = convert_auto(raw)
+        dup = converted.loc[converted.duplicated(["馬ID", "レースID"], keep=False)]
+        print("RAW RACE IDs blank:", int(converted["レースID"].fillna("").astype(str).eq("").sum()), flush=True)
+        print("DUPLICATE KEYS:", dup[["馬名", "馬ID", "レースID", "日付", "レース名"]].head(25).to_dict(orient="records"), flush=True)
         output, quality = analyze_verified_bundle(
             target, target_log, converted, log
         )
