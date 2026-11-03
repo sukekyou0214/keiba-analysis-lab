@@ -1679,6 +1679,7 @@ def convert_auto(raw):
     # Keep missing values as NaN; never infer popularity from odds or finish.
     pop_col = next((c for c in ('人 気', '人気') if c in data.columns), None)
     data['人気'] = pd.to_numeric(data[pop_col], errors='coerce') if pop_col else float('nan')
+    data['着差'] = pd.to_numeric(data.get('着差', pd.Series(index=data.index,dtype=float)), errors='coerce')
     data['上がり3F_秒'] = pd.to_numeric(data['上り'], errors='coerce')
     data['通過順'] = data['通過'].fillna('').astype(str)
     data['4角順位'] = pd.to_numeric(data['通過'].astype(str).str.extract(r'(\d+)\s*$')[0], errors='coerce')
@@ -1690,7 +1691,7 @@ def convert_auto(raw):
     data['前半3F'] = pd.to_numeric(pace_pair[0], errors='coerce')
     data['後半3F'] = pd.to_numeric(pace_pair[1], errors='coerce')
     data['前後半3F差'] = data['前半3F'] - data['後半3F']
-    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '人気', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース名', '格付け根拠', 'レース格', '通過順']].copy()
+    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '人気', '着差', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース名', '格付け根拠', 'レース格', '通過順']].copy()
 
 
 def prepare(data):
