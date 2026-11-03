@@ -24,6 +24,7 @@ def checked_context(rid, values):
 
 def main_context(rid, state):
     saved = state.get('main_target_context', {})
+    if not isinstance(saved,dict):saved={}
     if saved.get('race_id') == rid:
         result = checked_context(rid, saved)
         if result:
