@@ -19,7 +19,7 @@ class PageSmokeTest(unittest.TestCase):
         action.click()
         app.run()
         self.assertEqual(len(app.exception), 0)
-        self.assertTrue(any("CSVファイルを選択" in x.message
+        self.assertTrue(any("CSVファイルを選択" in x.value
                             for x in app.error))
 
 
