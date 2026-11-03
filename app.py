@@ -16,7 +16,7 @@ if _pending_bridge:
     st.session_state.update(_pending_bridge)
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('### 🏇 競馬分析ラボ Ver.20.18.0')
+st.markdown('### 🏇 競馬分析ラボ Ver.22.1')
 st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2322,7 +2322,7 @@ with st.sidebar:
     )
     st.caption('管理・検証は通常の予想では使わないオプションです。')
     st.divider()
-    st.caption('競馬分析ラボ Ver.20.18.0')
+    st.caption('競馬分析ラボ Ver.22.1')
 
 # 過去10年分析: 独自メニュー内に直接表示する（switch_page は使用しない）。
 if selected_page208 == '📚 過去10年分析':
