@@ -60,6 +60,26 @@ class PageSmokeTest(unittest.TestCase):
         self.assertTrue("v21_affinity_result" in app.session_state)
         self.assertFalse(app.session_state["v21_affinity_result"].empty)
 
+    def test_mobile_guided_progress_and_defaults(self):
+        page = Path(__file__).resolve().parents[1] / "pages/2_過去レース相性_Ver21.py"
+        app = AppTest.from_file(str(page), default_timeout=25).run()
+        self.assertEqual(len(app.exception), 0)
+        self.assertTrue(any("過去レース相性分析" in t.value for t in app.title))
+        self.assertTrue(any("① 対象レースを取得" in x.label for x in app.expander))
+        self.assertTrue(any("② 馬別戦績を取得・相性計算" in x.label for x in app.expander))
+        self.assertTrue(any("③ 途中保存・ZIP復元" in x.label for x in app.expander))
+        self.assertTrue(any("id=0109" in x.value for x in app.text_input))
+        app.session_state["v21_target_results"] = pd.DataFrame([
+            {"レースID": "202505041111", "馬ID": "2020000001"},
+            {"レースID": "202505041111", "馬ID": "2020000002"},
+        ])
+        app.session_state["v21_horse_log"] = pd.DataFrame([
+            {"horse_id": "2020000001", "status": "成功"},
+        ])
+        app.run()
+        self.assertEqual(len(app.exception), 0)
+        self.assertTrue(any("1/2頭" in m.value for m in app.metric))
+
     def test_existing_main_screen_starts_without_regression(self):
         path = Path(__file__).resolve().parents[1] / "app.py"
         app = AppTest.from_file(str(path), default_timeout=30).run()
