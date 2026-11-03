@@ -89,8 +89,12 @@ def audit_checkpoint(tables: dict[str, pd.DataFrame]) -> list[str]:
     if log is not None:
         if not {"race_id", "status", "entrants"}.issubset(log):
             issues.append("対象レースの取得ログに必須列がありません")
-        elif log.empty or log["race_id"].astype("string").duplicated().any():
-            issues.append("対象レースの取得ログが空か重複しています")
+        elif log.empty:
+            issues.append("対象レースの取得ログが空です")
+        elif ("year" in log and log["year"].duplicated().any()):
+            issues.append("対象レースの年度ログが重複しています")
+        elif log.loc[log["status"].eq("成功"), "race_id"].astype("string").duplicated().any():
+            issues.append("取得成功レースのIDが重複しています")
         elif target is not None and {"レースID", "馬ID"}.issubset(target):
             counts = target.groupby("レースID").size().to_dict()
             for _, entry in log.loc[log["status"].eq("成功")].iterrows():
