@@ -38,6 +38,14 @@ def analyze_verified_bundle(targets: pd.DataFrame, target_log: pd.DataFrame,
         raise ValueError("Not all horse histories were collected and checked")
     t = normalize_legacy_results(targets)
     h = normalize_legacy_results(histories)
+    # Some overseas races have no 12-digit JRA/netkeiba race ID.
+    # Never invent identifiers or accidentally collapse multiple blank IDs.
+    # Only verified-ID runs can be used for race-name affinity comparisons.
+    verifiable = h["race_id"].str.fullmatch(r"\d{12}", na=False)
+    unverified_rows = int((~verifiable).sum())
+    h = h.loc[verifiable].copy()
+    if h.empty:
+        raise ValueError("No horse history rows with verifiable race IDs")
     if t["race_date"].isna().any() or h["race_date"].isna().any():
         raise ValueError("Cannot guarantee time isolation with undated rows")
     if t["finish"].isna().any() or t["finish"].lt(1).any():
@@ -67,6 +75,8 @@ def analyze_verified_bundle(targets: pd.DataFrame, target_log: pd.DataFrame,
         "target_entrants": int(len(t)),
         "horse_histories_collected": int(h["horse_id"].nunique()),
         "historical_rows": int(len(h)),
+        "excluded_unverifiable_history_rows": unverified_rows,
+        "history_id_coverage": "partial" if unverified_rows else "no missing race IDs",
         "future_and_same_day_policy": "excluded by date in engine",
         "target_manifest": "verified",
         "horse_manifest": "verified",
