@@ -26,6 +26,8 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
         grades=data.get('レース格',pd.Series('',index=data.index))
         selected=data.loc[grades.isin(['G1','G2','G3'])].copy()
     result=rank_entries(pd.DataFrame(rows),selected,config=SimpleNamespace(**context),pace=pace)
+    if graded_only and not result.empty:
+        result.loc[result['判定'].eq('戦績未取得'),'判定']='対象の重賞戦績なし・保留'
     result['比較対象']='G1〜G3' if graded_only else '全クラス'
     return result
 
