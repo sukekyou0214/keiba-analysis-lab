@@ -18,7 +18,7 @@ from keiba_affinity_adapter import analyze_legacy_csv
 st.set_page_config(page_title="Ver.21 過去レース相性", page_icon="📊", layout="centered")
 st.title("過去レース相性分析｜Ver.21 試験版")
 st.caption("既存の総合診断は変更しません。過去の対象レース全出走馬の成績CSVを使って検証します。")
-st.warning("試験版：対象レースの全出走馬の網羅性はまだ自動検証できません。相性は仮説候補であり予測的中を保証しません。")
+st.warning("試験版：対象レースの出走頭数・開催日を取得元と照合します。未取得年度やID不明の海外戦績は分析の制限事項です。相性候補は予測的中を保証しません。")
 from keiba_affinity_collect import fetch_target_history
 
 with st.expander("過去10年の対象レース結果を自動取得（試験版）"):
