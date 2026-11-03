@@ -170,3 +170,21 @@ def rank_entries(entries, raw, cutoff='2026-11-15', pace='M'):
         mask=pop.between(4,9)&d['参考順位'].le(5)&d['評価項目充足率'].ge(80) if '評価項目充足率' in d else pd.Series(False,index=d.index)
         d.loc[mask,'妙味']='中穴候補（参考順位差・期待値未検証）'
     return d
+
+
+def venue_bundle(tables, venue):
+    """Scope all four verified inputs together; never reuse combined affinity."""
+    if venue not in {'京都','阪神'}:
+        raise ValueError('開催場は京都または阪神です')
+    target=tables['targets']
+    validate_scope(target,ELIZABETH,2016,2025)
+    code='08' if venue=='京都' else '09'
+    target=target.loc[target['レースID'].astype(str).str[4:6].eq(code)].copy()
+    if target.empty:raise ValueError('選択した開催場のデータがありません')
+    races=set(target['レースID'].astype(str));horses=set(target['馬ID'].astype(str))
+    return {
+        'targets':target,
+        'target_log':tables['target_log'].loc[tables['target_log']['race_id'].astype(str).isin(races)].copy(),
+        'horse_raw':tables['horse_raw'].loc[tables['horse_raw']['馬ID'].astype(str).isin(horses)].copy(),
+        'horse_log':tables['horse_log'].loc[tables['horse_log']['horse_id'].astype(str).isin(horses)].copy(),
+    }

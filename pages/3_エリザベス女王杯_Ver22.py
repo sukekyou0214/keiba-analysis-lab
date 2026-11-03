@@ -83,7 +83,7 @@ elif mode=='詳細分析':
             venue=st.selectbox('対象の開催場',['京都','阪神'])
             minimum=st.slider('最低サンプル数',1,30,10)
             view=patterns.loc[patterns['開催'].eq(venue)&patterns['出走数'].ge(minimum)]
-            st.dataframe(view,hide_index=True,use_container_width=True)
+            st.dataframe(view,hide_index=True,use_container_width=True,column_config={c:st.column_config.NumberColumn(c,format='%.1f%%') for c in ['3着内率','単勝回収率','複勝回収率']})
             st.caption('回収率は過去実績。将来の期待値ではありません。複勝払戻未取得は欠損です。脚質は前走4角位置の頭数比による分類です。')
             with st.expander('前走・距離・京都・S/M/Hの全項目'):
                 st.dataframe(features,hide_index=True,use_container_width=True)
@@ -92,10 +92,14 @@ elif mode=='詳細分析':
                 if st.button('相性候補を計算'):
                     from keiba_affinity_workflow import analyze_verified_bundle
                     from keiba_v22 import history_frame
-                    with st.spinner('相性を計算中'):
-                        tables['affinity'],_=analyze_verified_bundle(target,tables['target_log'],history_frame(raw),tables['horse_log'])
-                    save_historical()
-                a=tables.get('affinity',pd.DataFrame())
+                    from keiba_v22 import venue_bundle
+                    scoped=venue_bundle(tables,venue)
+                    with st.spinner(f'{venue}開催の相性を計算中'):
+                        scoped['affinity'],_=analyze_verified_bundle(scoped['targets'],scoped['target_log'],history_frame(scoped['horse_raw']),scoped['horse_log'])
+                    store.save(scope+'-affinity-'+venue,scoped)
+                scoped_result,_=store.load(scope+'-affinity-'+venue)
+                a=scoped_result.get('affinity',pd.DataFrame())
+                st.caption(f'研究対象も{venue}開催のみ。別の開催場の計算結果は使用しません。')
                 if not a.empty:
                     reliable=st.checkbox('暫定判定のみ',value=True)
                     a=a.loc[a['n'].ge(minimum)]

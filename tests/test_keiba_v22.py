@@ -12,6 +12,18 @@ class V22Test(unittest.TestCase):
             for year,date,name,finish in [(2024,'2024-10-01','前哨戦',2),(2025,'2025-11-16','当日',1),(2026,'2026-01-01','未来戦',1)]])
     def target(self):
         return pd.DataFrame([{'馬ID':'2020000001','馬名':'試験馬','レースID':'202508050611','日付':'2025-11-16','レース名':'エリザベス女王杯','着順_数値':1,'人気':6,'単勝オッズ':12.5}])
+    def test_venue_bundle_scopes_all_inputs(self):
+        t=self.target()
+        t=pd.concat([t,t.assign(レースID='202109050411',日付='2021-11-14',馬ID='2020000002')],ignore_index=True)
+        b={'targets':t,'target_log':pd.DataFrame({'race_id':t['レースID']}),'horse_raw':pd.DataFrame({'馬ID':t['馬ID']}),'horse_log':pd.DataFrame({'horse_id':t['馬ID']}),'affinity':pd.DataFrame({'stale':[1]})}
+        for venue,code in [('京都','08'),('阪神','09')]:
+            scoped=venue_bundle(b,venue)
+            self.assertNotIn('affinity',scoped)
+            self.assertTrue(scoped['targets']['レースID'].str[4:6].eq(code).all())
+            self.assertEqual(len(scoped['horse_raw']),1)
+            self.assertEqual(len(scoped['horse_log']),1)
+            self.assertEqual(len(scoped['target_log']),1)
+
     def test_scope_and_hanshin(self):
         t=self.target();validate_scope(t,ELIZABETH,2016,2025)
         t['レース名']='天皇賞（秋）'
