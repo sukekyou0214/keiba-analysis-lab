@@ -42,11 +42,32 @@ The 2025 target race had 14 starters. All 14 horse-result pages were acquired an
 Verified Actions run: 41590654712 (51 offline tests + live E2E).
 Latest UI click regression run: 41590896375 (52 offline tests + one-race/one-horse live smoke).
 
+## 2016–2025 full-field horse-history acceptance — PASSED
+
+GitHub Actions run **41591901921**, attached artifact
+**ver21-ten-year-evidence** (artifact ID 13210034454).
+
+- All 10 target race pages passed independent ID, date and starter-count checks
+- All 144 historical target starting entries were identified (110 distinct horses)
+- 110/110 horse-result pages were fetched successfully, in six bounded batches
+- 2,601 source horse-history rows were collected
+- 126 source rows had no independently verifiable 12-digit race ID;
+  these are **excluded** from matched prior-race exposure calculations
+- 409 exploratory race-name associations were generated (not validated predictive factors)
+- Re-import of the archived CSV checkpoint reproduced the exact same
+  association table in the 10-year real-data run
+- Artifact files include target rows, acquisition manifests, horse histories,
+  exploratory candidates, summary and checkpoint; stored in the repo's
+  GitHub Actions evidence retention, not committed to source control
+- The existing production Streamlit entrypoint and the Ver.21 button path both
+  passed offline AppTest regression
+
+The ingestion and orchestration are validated, but associations remain
+**exploratory** and international-race exposure coverage is incomplete.
+A device-specific iPhone visual review remains required after deployment.
+
 ## Remaining production gates
 
-1. Ten-year **horse-by-horse** acquisition for all historical target starters (completed for 2025 only), with comprehensive manifest and error log.
-2. Evaluation of missing-ID historical rows, international-race coverage and sample-size bias.
-3. More complete regression of existing main UI, and mobile Safari/iPhone review.
-4. Only then consider merging the Ver.21 pilot branch to main.
-
-**Do not report 10-year horse-history/affinity E2E as complete.**
+1. Evaluate the missing-ID historical rows, international-race coverage and sample-size bias before claiming predictive improvement.
+2. Perform an iPhone-specific visual/interaction review after the staged Ver.21 deployment.
+3. Keep the standalone Ver.21 page marked exploratory; do not conflate verified ingestion with predictive accuracy.
