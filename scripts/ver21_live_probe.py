@@ -25,6 +25,43 @@ def read(url):
 
 
 def main():
+    if os.environ.get("KEIBA_LIVE_E2E") == "1":
+        from keiba_affinity_collect import fetch_target_history
+        from keiba_affinity_pipeline import collect_batch
+        from keiba_affinity_store import pack_checkpoint, load_checkpoint
+        from keiba_affinity_workflow import analyze_verified_bundle
+        from keiba_core import get_results, convert_auto
+        target, target_log = fetch_target_history(
+            SPECIAL, 2025, 2025, delay_seconds=1.0
+        )
+        if len(target) != 14 or not target_log["status"].eq("成功").all():
+            raise ValueError("2025 target field unavailable")
+        raw, log = collect_batch(
+            target, get_results, limit=20, delay=1.0
+        )
+        print("HORSE MANIFEST:", log.to_dict(orient="records"), flush=True)
+        if len(log) != 14 or not log["status"].eq("成功").all():
+            raise ValueError("Horse history collection incomplete")
+        converted = convert_auto(raw)
+        output, quality = analyze_verified_bundle(
+            target, target_log, converted, log
+        )
+        checkpoint = pack_checkpoint({
+            "targets": target, "target_log": target_log,
+            "horse_raw": converted, "horse_log": log, "affinity": output,
+        })
+        restored = load_checkpoint(checkpoint)
+        retested, restored_quality = analyze_verified_bundle(
+            restored["targets"], restored["target_log"],
+            restored["horse_raw"], restored["horse_log"]
+        )
+        if not output.equals(retested):
+            raise ValueError("Restored output differs from original affinity")
+        print("PASS: 2025 all 14 horses, history rows:", len(converted),
+              "affinity candidates:", len(output),
+              "saved bytes:", len(checkpoint), flush=True)
+        print("QUALITY:", quality.to_dict(orient="records"), flush=True)
+        return
     if os.environ.get("KEIBA_LIVE_FULL") == "1":
         from keiba_affinity_collect import fetch_target_history
         results, log = fetch_target_history(
