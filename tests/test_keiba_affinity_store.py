@@ -41,6 +41,23 @@ class ArchiveTests(unittest.TestCase):
         manifest = pd.DataFrame([{"race_id": "202505041111", "status": "成功", "entrants": 2}])
         self.assertTrue(audit_checkpoint({"targets": target, "target_log": manifest}))
 
+    def test_partial_checkpoint_with_multiple_unfetched_years(self):
+        acquired = pd.DataFrame([{
+            "レースID": "202505041111", "馬ID": "2020000001",
+            "日付": "2025-11-02", "レース名": "テスト",
+            "着順_数値": 1, "人気": 2,
+        }])
+        years = pd.DataFrame([
+            {"year": 2023, "race_id": "", "status": "失敗", "entrants": 0},
+            {"year": 2024, "race_id": "", "status": "失敗", "entrants": 0},
+            {"year": 2025, "race_id": "202505041111", "status": "成功", "entrants": 1},
+        ])
+        restored = load_checkpoint(pack_checkpoint({
+            "targets": acquired, "target_log": years,
+        }))
+        self.assertEqual(audit_checkpoint(restored), [])
+        self.assertEqual(len(restored["target_log"]), 3)
+
     def test_unknown_table_rejected(self):
         with self.assertRaises(ValueError):
             pack_checkpoint({"danger":pd.DataFrame([{"x":1}])})
