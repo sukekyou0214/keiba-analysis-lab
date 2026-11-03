@@ -48,6 +48,17 @@ class PageSmokeTest(unittest.TestCase):
         self.assertEqual(len(app.exception), 0)
         self.assertTrue("v21_affinity_result" in app.session_state)
         self.assertFalse(app.session_state["v21_affinity_result"].empty)
+        # A ZIP produced by the offline E2E contains converted rows, not the
+        # raw netkeiba layout. A second click must not run convert_auto twice.
+        from keiba_core import convert_auto
+        app.session_state["v21_horse_raw"] = convert_auto(history)
+        app.session_state.pop("v21_affinity_result")
+        app.run()
+        next(b for b in app.button if b.label == "全頭取得完了を検査して相性計算").click()
+        app.run()
+        self.assertEqual(len(app.exception), 0)
+        self.assertTrue("v21_affinity_result" in app.session_state)
+        self.assertFalse(app.session_state["v21_affinity_result"].empty)
 
     def test_csv_analysis_without_upload_shows_validation(self):
         page = Path(__file__).resolve().parents[1] / "pages/2_過去レース相性_Ver21.py"
