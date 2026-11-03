@@ -107,6 +107,7 @@ def parse_historical_result(html: str, race_id: str) -> pd.DataFrame:
     if table is None:
         raise ValueError(f"{race_id}: result table not found")
     rows = []
+    nonstarters = []
     for tr in table.select("tr.HorseList"):
         cells = tr.find_all("td", recursive=False)
         if len(cells) < 11:
@@ -115,7 +116,15 @@ def parse_historical_result(html: str, race_id: str) -> pd.DataFrame:
         match = HORSE_ID.search(anchor.get("href", "")) if anchor else None
         if not match:
             raise ValueError(f"{race_id}: horse ID unavailable")
-        finish = _number(cells[0].get_text(" ", strip=True))
+        finish_text = cells[0].get_text(" ", strip=True)
+        if any(label in finish_text for label in ("除外", "取消")):
+            nonstarters.append({
+                "馬ID": match.group(1),
+                "馬名": anchor.get_text(" ", strip=True),
+                "status": finish_text,
+            })
+            continue
+        finish = _number(finish_text)
         popularity = _number(cells[9].get_text(" ", strip=True))
         rows.append({
             "レースID": race_id, "馬ID": match.group(1),
@@ -147,6 +156,7 @@ def parse_historical_result(html: str, race_id: str) -> pd.DataFrame:
     if not title or not title.get_text(strip=True):
         raise ValueError(f"{race_id}: race title not found")
     frame["レース名"] = title.get_text(" ", strip=True)
+    frame.attrs["nonstarters"] = nonstarters
     return frame
 
 
@@ -197,9 +207,12 @@ def fetch_target_history(special_url: str, first_year: int, last_year: int,
                 raise ValueError(f"{rid}: historical race date unavailable in special table")
             if frame["日付"].nunique() != 1 or frame["日付"].iloc[0] != expected_date:
                 raise ValueError(f"{rid}: race date disagrees with special table")
+            excluded = frame.attrs.get("nonstarters", [])
             results.append(frame)
             manifest.append({"year": year, "race_id": rid, "status": "成功",
-                             "entrants": len(frame), "reason": ""})
+                             "entrants": len(frame), "nonstarters": len(excluded),
+                             "nonstarter_names": "、".join(x["馬名"] for x in excluded),
+                             "reason": ""})
         except (ValueError, requests.RequestException) as exc:
             manifest.append({"year": year, "race_id": rid, "status": "失敗",
                              "entrants": 0, "reason": str(exc)[:180]})
