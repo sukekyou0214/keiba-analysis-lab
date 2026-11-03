@@ -12,5 +12,17 @@ class PageSmokeTest(unittest.TestCase):
         self.assertIn("過去レース相性分析", app.title[0].value)
 
 
+    def test_csv_analysis_without_upload_shows_validation(self):
+        page = Path(__file__).resolve().parents[1] / "pages/2_過去レース相性_Ver21.py"
+        app = AppTest.from_file(str(page), default_timeout=25).run()
+        action = next(x for x in app.button if x.label == "過去レース相性を計算")
+        action.click()
+        app.run()
+        self.assertEqual(len(app.exception), 0)
+        self.assertTrue(any("CSVファイルを選択" in x.message
+                            for x in app.error))
+
+
+
 if __name__ == "__main__":
     unittest.main()
