@@ -4,7 +4,7 @@ from io import BytesIO
 import zipfile
 import pandas as pd
 
-from keiba_affinity_store import pack_checkpoint, load_checkpoint
+from keiba_affinity_store import pack_checkpoint, load_checkpoint, audit_checkpoint
 
 
 class ArchiveTests(unittest.TestCase):
@@ -20,6 +20,26 @@ class ArchiveTests(unittest.TestCase):
         archive = pack_checkpoint({"target_log":pd.DataFrame([{"status":"成功"}]),
                                    "horse_log":pd.DataFrame([{"horse_id":"0000000001"}])})
         self.assertEqual(set(load_checkpoint(archive)), {"target_log","horse_log"})
+
+    def test_audit_detects_missing_horse_results(self):
+        target = pd.DataFrame([{"レースID": "202505041111", "馬ID": "2020000001",
+                                "日付": "2025-11-02", "レース名": "テスト",
+                                "着順_数値": 1, "人気": 2}])
+        manifest = pd.DataFrame([{"race_id": "202505041111", "status": "成功", "entrants": 1}])
+        horse_log = pd.DataFrame([{"horse_id": "2020000001", "status": "成功"}])
+        valid = {"targets": target, "target_log": manifest,
+                 "horse_log": horse_log, "horse_raw": pd.DataFrame([{"馬ID": "2020000001"}])}
+        self.assertEqual(audit_checkpoint(valid), [])
+        missing = dict(valid)
+        missing["horse_raw"] = pd.DataFrame([{"馬ID": "9999999999"}])
+        self.assertTrue(audit_checkpoint(missing))
+
+    def test_audit_detects_wrong_target_count(self):
+        target = pd.DataFrame([{"レースID": "202505041111", "馬ID": "2020000001",
+                                "日付": "2025-11-02", "レース名": "テスト",
+                                "着順_数値": 1, "人気": 2}])
+        manifest = pd.DataFrame([{"race_id": "202505041111", "status": "成功", "entrants": 2}])
+        self.assertTrue(audit_checkpoint({"targets": target, "target_log": manifest}))
 
     def test_unknown_table_rejected(self):
         with self.assertRaises(ValueError):
