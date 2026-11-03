@@ -66,7 +66,7 @@ class AffinityTests(unittest.TestCase):
 
     def test_csv_encoding(self):
         data = analyze_race_affinity(self.targets, self.history)
-        self.assertTrue(to_csv_bytes(data).startswith(b"\\xef\\xbb\\xbf"))
+        self.assertTrue(to_csv_bytes(data).startswith(bytes([0xEF, 0xBB, 0xBF])))
 
 
 if __name__ == "__main__":
