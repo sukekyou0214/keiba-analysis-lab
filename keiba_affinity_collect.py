@@ -54,6 +54,33 @@ def discover_historical_ids(html: str, first_year: int, last_year: int) -> dict[
     return ids
 
 
+def discover_historical_entries(html: str, first_year: int, last_year: int):
+    """Race IDs plus expected starter counts from the historical summary table."""
+    ids = discover_historical_ids(html, first_year, last_year)
+    soup = BeautifulSoup(html, "html.parser")
+    heading = next((h for h in soup.find_all(["h2", "h3", "h4"])
+                    if "過去のレース結果" in h.get_text(" ", strip=True)), None)
+    table = heading.find_next("table") if heading else None
+    counts = {}
+    for row in table.select("tr"):
+        cells = row.find_all(["th", "td"], recursive=False)
+        # Typical special page columns: date, race, venue, distance, runners.
+        if len(cells) < 5:
+            continue
+        for a in row.select('a[href*="/race/"]'):
+            hit = RACE_ID.search(a.get("href", ""))
+            if not hit:
+                continue
+            rid = hit.group(1)
+            if rid != ids.get(int(rid[:4])):
+                continue
+            number = re.fullmatch(r"\\s*(\\d{1,2})\\s*", cells[4].get_text(" ", strip=True))
+            if number:
+                counts[int(rid[:4])] = int(number.group(1))
+    return {year: {"race_id": rid, "expected_entrants": counts.get(year)}
+            for year, rid in ids.items()}
+
+
 def _number(text):
     # Non-finishes and nonnumeric strings remain missing, not position 0.
     txt = str(text).replace(",", "").strip()
@@ -134,10 +161,11 @@ def fetch_target_history(special_url: str, first_year: int, last_year: int,
         response.encoding = response.apparent_encoding or response.encoding
         return response.text
 
-    ids = discover_historical_ids(fetch(special_url), first_year, last_year)
+    entries = discover_historical_entries(fetch(special_url), first_year, last_year)
     results, manifest = [], []
     for index, year in enumerate(range(first_year, last_year + 1)):
-        rid = ids.get(year)
+        entry = entries.get(year)
+        rid = entry[\"race_id\"] if entry else None
         if rid is None:
             manifest.append({"year": year, "race_id": "", "status": "失敗",
                              "entrants": 0, "reason": "レースID未発見"})
@@ -147,6 +175,11 @@ def fetch_target_history(special_url: str, first_year: int, last_year: int,
             frame = parse_historical_result(
                 fetch(f"https://race.netkeiba.com/race/result.html?race_id={rid}"), rid
             )
+            expected = entry["expected_entrants"]
+            if expected is None:
+                raise ValueError(f"{rid}: listed entrant count unavailable; cannot verify completeness")
+            if expected != len(frame):
+                raise ValueError(f"{rid}: entrant count mismatch, listed={expected} extracted={len(frame)}")
             results.append(frame)
             manifest.append({"year": year, "race_id": rid, "status": "成功",
                              "entrants": len(frame), "reason": ""})
