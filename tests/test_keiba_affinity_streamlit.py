@@ -52,7 +52,7 @@ class PageSmokeTest(unittest.TestCase):
         # raw netkeiba layout. A second click must not run convert_auto twice.
         from keiba_core import convert_auto
         app.session_state["v21_horse_raw"] = convert_auto(history)
-        app.session_state.pop("v21_affinity_result")
+        app.session_state["v21_affinity_result"] = None
         app.run()
         next(b for b in app.button if b.label == "全頭取得完了を検査して相性計算").click()
         app.run()
