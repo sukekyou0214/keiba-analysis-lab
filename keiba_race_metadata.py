@@ -39,6 +39,11 @@ def parse_metadata(html,url):
         if m:
             try:dates.add(date(*map(int,m.groups())).isoformat())
             except ValueError:pass
+    for link in soup.select('.RaceList_Date .Active a[href], .RaceList_Date .active a[href]'):
+        declared=parse_qs(urlparse(urljoin(url,link['href'])).query).get('kaisai_date',[''])[0]
+        if re.fullmatch(r'20\d{6}',declared):
+            try:dates.add(date(int(declared[:4]),int(declared[4:6]),int(declared[6:])).isoformat())
+            except ValueError:pass
     if len(dates)==1:
         day=dates.pop()
         if day[:4]!=rid[:4]:raise ValueError('ページの開催年とレースIDが一致しません')
@@ -61,3 +66,11 @@ def fetch_metadata(url):
     if 300<=r.status_code<400:raise ValueError('転送先へ自動アクセスせず停止しました。URLを確認してください')
     r.raise_for_status();r.encoding=r.apparent_encoding or r.encoding
     return parse_metadata(r.text,url)
+
+
+FIELD_LABELS={'name':'レース名','special_url':'重賞特集URL','race_date':'開催日','venue':'競馬場','surface':'コース','distance':'距離'}
+
+def metadata_fields(detected):
+    """Return explicit source coverage, not defaults from a prior form."""
+    return ([label for key,label in FIELD_LABELS.items() if key in detected],
+            [label for key,label in FIELD_LABELS.items() if key not in detected])
