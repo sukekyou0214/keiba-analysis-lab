@@ -58,6 +58,19 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(audit_checkpoint(restored), [])
         self.assertEqual(len(restored["target_log"]), 3)
 
+    def test_reject_saved_affinity_with_failed_acquisition(self):
+        target = pd.DataFrame([{"レースID": "202505041111", "馬ID": "2020000001",
+                                "日付": "2025-11-02", "レース名": "テスト",
+                                "着順_数値": 1, "人気": 2}])
+        manifest = pd.DataFrame([{"year": 2025, "race_id": "202505041111",
+                                  "status": "失敗", "entrants": 0}])
+        horse_log = pd.DataFrame([{"horse_id": "2020000001", "status": "成功"}])
+        tables = {"targets": target, "target_log": manifest,
+                  "horse_log": horse_log, "horse_raw": pd.DataFrame([{"馬ID": "2020000001"}]),
+                  "affinity": pd.DataFrame([{"race_name": "誤った候補"}])}
+        restored = load_checkpoint(pack_checkpoint(tables))
+        self.assertTrue(audit_checkpoint(restored))
+
     def test_unknown_table_rejected(self):
         with self.assertRaises(ValueError):
             pack_checkpoint({"danger":pd.DataFrame([{"x":1}])})
