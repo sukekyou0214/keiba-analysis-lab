@@ -57,6 +57,18 @@ def main():
         raise ValueError("Count mismatch")
     if entry["expected_date"] != results["日付"].iloc[0]:
         raise ValueError("Date mismatch")
+    # Verify one horse-history fetch, not a bulk scrape.
+    from keiba_core import get_results, convert_auto
+    horse_id = str(results.iloc[0]["馬ID"])
+    horse_name = str(results.iloc[0]["馬名"])
+    history_raw = get_results(horse_id, horse_name)
+    history = convert_auto(history_raw)
+    if history.empty or not history["馬ID"].astype(str).eq(horse_id).all():
+        raise ValueError("Horse history identity check failed")
+    if not history["レースID"].astype(str).eq(rid).any():
+        raise ValueError("Target-race history row missing")
+    print("PASS: one horse history fetched, rows:", len(history),
+          "target race recorded:", rid, flush=True)
     print("PASS: verified one historical race, not full backfill")
 
 
