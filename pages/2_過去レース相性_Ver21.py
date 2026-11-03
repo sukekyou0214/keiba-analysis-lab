@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import re
+import zipfile
 import pandas as pd
 import streamlit as st
 
@@ -144,7 +145,7 @@ with st.expander("データをまとめて保存・復元"):
             for key, table in tables.items():
                 st.session_state[checkpoint_keys[key]] = table
             st.success("復元しました。取得状況と対象レースを確認してください。")
-        except (ValueError, KeyError, OSError, UnicodeError, RuntimeError) as error:
+        except (ValueError, KeyError, OSError, UnicodeError, RuntimeError, zipfile.BadZipFile) as error:
             st.error(f"ZIPを復元できません：{error}")
     st.caption("ZIPはiPhoneに保存してください。Streamlitのセッションだけでは永続保存されません。")
 
