@@ -27,7 +27,8 @@ div[data-testid="stMetricValue"] {font-size: 1.35rem;}
 </style>
 """, unsafe_allow_html=True)
 st.title("過去レース相性分析")
-st.caption("Ver.21 試験版 · 過去の出走歴と好走傾向を検証")
+st.caption("Ver.21 試験版 · 次の目標：11月15日 エリザベス女王杯（京都芝2200m）")
+st.caption("過去10年のうち2020〜2022年は阪神開催。京都開催と区別して傾向を確認してください。")
 st.info("使い方：①対象レースを取得 → ②馬別戦績を20頭ずつ取得 → ③相性を計算。取得途中はZIPで保存できます。")
 st.caption("注意：結果は探索的な相性候補です。IDを確認できない海外戦績は除外し、予測精度は保証しません。")
 
@@ -53,11 +54,22 @@ from keiba_affinity_collect import fetch_target_history
 
 with st.expander("① 対象レースを取得", expanded=True):
     st.caption("netkeibaの重賞特集ページを指定します。まずは10レースまで。取得先の利用条件・アクセス制限を守って利用してください。")
+    race_choice = st.selectbox(
+        "分析対象",
+        ["エリザベス女王杯（2026年向け）", "天皇賞・秋（過去検証用）", "その他（URL指定）"],
+    )
+    defaults = {
+        "エリザベス女王杯（2026年向け）": "https://race.netkeiba.com/special/index.html?id=0117",
+        "天皇賞・秋（過去検証用）": "https://race.netkeiba.com/special/index.html?id=0109",
+    }
     special_url = st.text_input(
         "netkeiba重賞特集ページ",
-        value="https://race.netkeiba.com/special/index.html?id=0109",
-        key="v21_special_url",
+        value=defaults.get(race_choice, ""),
+        key=f"v21_special_url_{race_choice}",
     )
+    last_url = st.session_state.get("v21_last_special_url")
+    if last_url and last_url != special_url:
+        st.warning("取得済みデータは以前のレースのものです。新しいレースの『対象レース結果を取得』を実行してください。")
     current_start = st.number_input("取得開始年", min_value=2000, max_value=2025, value=2016, step=1)
     current_end = st.number_input("取得終了年", min_value=2000, max_value=2025, value=2025, step=1)
     if st.button("対象レース結果を取得", use_container_width=True):
@@ -68,6 +80,7 @@ with st.expander("① 対象レースを取得", expanded=True):
                 )
             for cache_key in ("v21_horse_log", "v21_horse_raw", "v21_affinity_result", "v21_data_quality"):
                 st.session_state.pop(cache_key, None)
+            st.session_state["v21_last_special_url"] = special_url
             st.session_state["v21_target_results"] = historical_df
             st.session_state["v21_acquisition_log"] = acquisition_log
         except Exception as error:
