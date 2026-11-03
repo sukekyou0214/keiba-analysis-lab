@@ -273,4 +273,4 @@ def render_workspace(selected_section=None,embedded=False):
         with st.expander('取得状況・欠損・研究ページ'):
             for key in ['target_log','horse_log']:
                 if key in tables:st.dataframe(tables[key],hide_index=True,use_container_width=True)
-            st.caption('研究機能は左上メニューの「過去レース相性 Ver21」から利用できます。')
+            st.caption('研究機能は「管理・検証」の「研究用ページ」から利用できます。')

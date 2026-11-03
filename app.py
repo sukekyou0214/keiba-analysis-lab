@@ -17,7 +17,7 @@ if _pending_bridge:
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
 st.markdown('### 🏇 競馬分析ラボ Ver.22.1')
-st.caption('総合診断・各馬の特徴・分析条件は左上の ☰ メニューから選べます。')
+st.caption('総合診断・詳細分析・詳細設定は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
@@ -2289,19 +2289,9 @@ if st.session_state.get('nav_page_v208') == '🧰 管理・検証':
                 except Exception as exc_v192:
                     st.error(f'再取得を完了できませんでした。以前の保存データは維持しています：{exc_v192}')
 
-# Ver.20.8: iPhoneでは左上☰から縦型メニューを選択。
-# ペース予測式、データ取得、各馬の分析内容はVer.20.7から変更しない。
-with st.sidebar:
-    st.markdown('## 🏇 メニュー')
-    st.caption('予想に使う画面を上にまとめています。')
-    selected_page208 = st.radio(
-        'メインメニュー',
-        ['🏇 総合診断', '🌊 ペース分析', '🐎 各馬の特徴', '📚 過去10年分析', '⚙️ 分析条件', '🧰 管理・検証'],
-        key='nav_page_v208', label_visibility='collapsed',
-    )
-    st.caption('管理・検証は通常の予想では使わないオプションです。')
-    st.divider()
-    st.caption('競馬分析ラボ Ver.22.1')
+# 3部門のメニューから既存の分析画面へ振り分ける。
+from keiba_navigation import render_navigation
+selected_page208 = render_navigation()
 
 # 過去10年分析: 独自メニュー内に直接表示する（switch_page は使用しない）。
 if selected_page208 == '📚 過去10年分析':
@@ -2346,6 +2336,9 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked)
 
 if selected_page208 == '🧰 管理・検証':
     st.caption('管理・検証（オプション）：本番用の品質確認と開発中の実験を分離しています。')
+    with st.expander('研究用ページ（オプション）',expanded=False):
+        st.page_link('pages/2_過去レース相性_Ver21.py',label='過去レース相性・取得検証')
+        st.page_link('pages/1_過去10年分析.py',label='過去10年の研究ページ')
 else:
     st.caption('左上の ☰ から画面を切り替えられます。')
 
