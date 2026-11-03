@@ -27,6 +27,13 @@ def prepare_main_bridge(config,current):
 
 def render_main_integration(menu):
     import streamlit as st
+    try:
+        count=sync_main_enrichment(st.session_state)
+        if count:st.caption('保存済みの補完情報を読み込みました。')
+        st.session_state.pop('main_enrichment_sync_error',None)
+    except (OSError,ValueError,TypeError) as exc:
+        st.session_state['main_enrichment_sync_error']=str(exc)[:180]
+        if menu=='🧰 管理・検証':st.info('保存済み補完の読み込みを保留：'+str(exc)[:180])
     sections={'🏇 総合診断':'総合診断','🐎 各馬の特徴':'詳細分析','⚙️ 分析条件':'詳細設定'}
     if menu not in sections:return
     main_data=st.session_state.get('auto_df')
@@ -119,7 +126,7 @@ def render_pace_enrichment():
     data=st.session_state.get('auto_df')
     if not isinstance(data,pd.DataFrame) or data.empty:return
     pending=recent_pace_ids(data)
-    unavailable=(int(data.loc[data['ペース取得状態'].eq('取得不可'),'レースID'].nunique()) if 'ペース取得状態' in data else 0)
+    unavailable=(int(data.loc[data['ペース取得状態'].eq('取得不可')&~data.get('netkeibaペース',pd.Series('',index=data.index)).isin(['スロー寄り','ミドル寄り','ハイ寄り']),'レースID'].nunique()) if 'ペース取得状態' in data else 0)
     if unavailable:st.caption(f'ペース判定の取得不可：{unavailable}レース（欠損として保持・自動再取得しません）')
     st.caption(f'本体の直近5走：S/M/H未取得 {len(pending)}レース（同一レースは1回だけ取得）')
     if st.button('本体の不足データを補完：直近5走のS/M/H',disabled=not pending,key='main_enrich_pace'):
@@ -131,3 +138,88 @@ def render_pace_enrichment():
         _,error=enrich_pace(data,get_netkeiba_pace,save,lambda n,total:bar.progress(n/total))
         if error:st.warning('取得を停止しました。取得済み分は保存済みです：'+error)
         else:st.success('本体のS/M/Hを補完しました。総合診断・ペース分析へ反映されます。')
+
+
+PACE={'スロー寄り','ミドル寄り','ハイ寄り'}
+
+
+def merge_saved_enrichment(current,cached):
+    required={'馬ID','レースID','日付'}
+    if current.empty or cached.empty or not required.issubset(current) or not required.issubset(cached):
+        return current,0
+    out=current.copy()
+    def keyed(frame):
+        keys=pd.DataFrame(index=range(len(frame)))
+        for name,width in [('馬ID',10),('レースID',12)]:
+            values=frame[name].reset_index(drop=True).fillna('').astype(str).str.replace(r'\.0$','',regex=True)
+            keys[name]=values.where(values.str.fullmatch(r'\d{'+str(width)+'}'))
+        keys['日付']=pd.to_datetime(frame['日付'].reset_index(drop=True),errors='coerce').dt.strftime('%Y-%m-%d')
+        return keys
+    left=keyed(current);right=keyed(cached)
+    valid=right.notna().all(axis=1)&~right.duplicated(keep=False)
+    lookup=cached.reset_index(drop=True).loc[valid].copy()
+    if lookup.empty:return current,0
+    lookup.index=pd.MultiIndex.from_frame(right.loc[valid])
+    requested=pd.MultiIndex.from_frame(left)
+    aligned=lookup.reindex(requested).reset_index(drop=True)
+    # Work by row position even when the source DataFrame index has duplicates.
+    out=out.reset_index(drop=True);changed=0
+    if 'netkeibaペース' in aligned:
+        old=out.get('netkeibaペース',pd.Series('',index=out.index))
+        mask=~old.isin(PACE)&aligned['netkeibaペース'].isin(PACE)
+        if mask.any():
+            if 'netkeibaペース' in out:out['netkeibaペース']=out['netkeibaペース'].astype(object)
+            out.loc[mask,'netkeibaペース']=aligned.loc[mask,'netkeibaペース']
+            if 'ペース取得状態' in out:
+                resolved=mask&out['ペース取得状態'].eq('取得不可')
+                if resolved.any():
+                    out['ペース取得状態']=out['ペース取得状態'].astype(object)
+                    out.loc[resolved,'ペース取得状態']='成功'
+                    if 'ペース取得理由' in out:
+                        out['ペース取得理由']=out['ペース取得理由'].astype(object)
+                        out.loc[resolved,'ペース取得理由']=''
+            changed+=int(mask.sum())
+    for column in ['上がり順位','着差']:
+        if column not in aligned:continue
+        old=pd.to_numeric(out.get(column,pd.Series(index=out.index,dtype=float)),errors='coerce')
+        fresh=pd.to_numeric(aligned[column],errors='coerce')
+        mask=old.isna()&fresh.notna()&fresh.abs().lt(float('inf'))
+        if column=='上がり順位':
+            mask &= fresh.ge(1)&fresh.mod(1).eq(0)
+            field=pd.to_numeric(out.get('頭数',pd.Series(index=out.index,dtype=float)),errors='coerce')
+            mask &= field.isna()|fresh.le(field)
+        if mask.any():
+            if column in out:out[column]=out[column].astype(object)
+            out.loc[mask,column]=fresh.loc[mask]
+            changed+=int(mask.sum())
+    if 'ペース取得状態' in aligned:
+        known=out.get('netkeibaペース',pd.Series('',index=out.index)).isin(PACE)
+        status=out.get('ペース取得状態',pd.Series('',index=out.index)).fillna('')
+        mask=~known&status.isin(['','未取得','不明','nan','None'])&aligned['ペース取得状態'].eq('取得不可')
+        if mask.any():
+            if 'ペース取得状態' in out:out['ペース取得状態']=out['ペース取得状態'].astype(object)
+            out.loc[mask,'ペース取得状態']='取得不可'
+            if 'ペース取得理由' in aligned:
+                if 'ペース取得理由' in out:out['ペース取得理由']=out['ペース取得理由'].astype(object)
+                out.loc[mask,'ペース取得理由']=aligned.loc[mask,'ペース取得理由']
+            changed+=int(mask.sum())
+    if not changed:return current,0
+    out.index=current.index
+    return out,changed
+
+
+def sync_main_enrichment(state):
+    from keiba_core import cache_paths,load_race_cache,prepare
+    rid=state.get('auto_race_id','');data=state.get('auto_df')
+    if not isinstance(data,pd.DataFrame) or data.empty or not rid:return 0
+    path,_=cache_paths(rid)
+    if not path.exists():return 0
+    token=(rid,path.stat().st_mtime_ns,id(data),len(data))
+    if state.get('main_enrichment_cache_token')==token:return 0
+    saved=load_race_cache(rid)
+    if saved is None:return 0
+    _,cached=saved
+    merged,count=merge_saved_enrichment(data,cached)
+    if count:state['auto_df']=prepare(merged)
+    state['main_enrichment_cache_token']=(rid,token[1],id(state['auto_df']),len(state['auto_df']))
+    return count
