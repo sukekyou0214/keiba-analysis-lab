@@ -74,7 +74,7 @@ def discover_historical_entries(html: str, first_year: int, last_year: int):
             rid = hit.group(1)
             if rid != ids.get(int(rid[:4])):
                 continue
-            number = re.fullmatch(r"\\s*(\\d{1,2})\\s*", cells[4].get_text(" ", strip=True))
+            number = re.fullmatch(r"\s*(\d{1,2})\s*", cells[4].get_text(" ", strip=True))
             if number:
                 counts[int(rid[:4])] = int(number.group(1))
     return {year: {"race_id": rid, "expected_entrants": counts.get(year)}
