@@ -112,6 +112,43 @@ with st.expander("過去10年の対象レース結果を自動取得（試験版
 
 
 
+
+with st.expander("データをまとめて保存・復元"):
+    from keiba_affinity_store import pack_checkpoint, load_checkpoint
+    checkpoint_keys = {
+        "targets": "v21_target_results",
+        "target_log": "v21_acquisition_log",
+        "horse_raw": "v21_horse_raw",
+        "horse_log": "v21_horse_log",
+        "affinity": "v21_affinity_result",
+    }
+    snapshot = {key: st.session_state[value] for key, value in checkpoint_keys.items()
+                if value in st.session_state and isinstance(st.session_state[value], pd.DataFrame)}
+    if snapshot:
+        try:
+            st.download_button(
+                "取得途中のデータもZIPで一括保存",
+                data=pack_checkpoint(snapshot),
+                file_name="keiba_ver21_checkpoint.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+        except ValueError as error:
+            st.error(f"保存できません：{error}")
+    uploaded_checkpoint = st.file_uploader("以前の保存ZIPを復元", type=["zip"], key="v21_checkpoint_zip")
+    if uploaded_checkpoint is not None and st.button("保存ZIPから復元", use_container_width=True):
+        try:
+            tables = load_checkpoint(uploaded_checkpoint.getvalue())
+            for key in checkpoint_keys.values():
+                st.session_state.pop(key, None)
+            for key, table in tables.items():
+                st.session_state[checkpoint_keys[key]] = table
+            st.success("復元しました。取得状況と対象レースを確認してください。")
+        except (ValueError, KeyError, OSError, UnicodeError, RuntimeError) as error:
+            st.error(f"ZIPを復元できません：{error}")
+    st.caption("ZIPはiPhoneに保存してください。Streamlitのセッションだけでは永続保存されません。")
+
+
 uploaded = st.file_uploader("保存した成績CSVを選択（複数ファイル可）", type=["csv"], accept_multiple_files=True)
 race_ids_raw = st.text_area(
     "過去の対象レースID（12桁、改行またはカンマ区切り）",
