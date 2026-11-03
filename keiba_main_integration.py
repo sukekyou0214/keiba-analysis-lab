@@ -39,6 +39,8 @@ def render_main_integration(menu):
         with st.expander('対象レースの分析',expanded=True):
             render_workspace(sections[menu],embedded=True)
             render_pace_enrichment()
+            from keiba_main_laps import render_main_laps
+            render_main_laps()
 
 
 def bridge_main_dataset(config,state):

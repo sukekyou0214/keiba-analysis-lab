@@ -1518,6 +1518,8 @@ def classify_lap_shape_v16(lap_text, distance, validation='OK'):
     tail_mean = sum(tail5) / len(tail5)
     # 残り1000m直前の200m×3（1600mは最初の加速区間を除いた2区間）。
     baseline = laps[-8:-5] if n >= 9 else laps[1:-5]
+    if not baseline:
+        return {'展開タイプ': '判定不可', '判定根拠': '残1000m直前の比較区間が不足しています'}
     baseline_mean = sum(baseline) / len(baseline)
     relative_gain = baseline_mean - tail_mean  # 正なら後半1000mが速い
     early_tail_mean = sum(tail5[:2]) / 2  # 残1000〜600m

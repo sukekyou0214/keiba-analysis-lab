@@ -1701,6 +1701,8 @@ def classify_lap_shape_v16(lap_text, distance, validation='OK'):
     tail_mean = sum(tail5) / len(tail5)
     # 残り1000m直前の200m×3（1600mは最初の加速区間を除いた2区間）。
     baseline = laps[-8:-5] if n >= 9 else laps[1:-5]
+    if not baseline:
+        return {'展開タイプ': '判定不可', '判定根拠': '残1000m直前の比較区間が不足しています'}
     baseline_mean = sum(baseline) / len(baseline)
     relative_gain = baseline_mean - tail_mean  # 正なら後半1000mが速い
     early_tail_mean = sum(tail5[:2]) / 2  # 残1000〜600m
@@ -2499,9 +2501,10 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                     vb171 = pd.to_numeric(lapgroup171.loc[bad171, col171], errors='coerce').dropna()
                     comp171[lab171+'_差'] = va171.mean()-vb171.mean() if len(va171) and len(vb171) else float('nan')
                 label171, _, _ = interpret_running_pattern(comp171)
-            diag171 = diagnose_horse_v17(hdiagnose171, label171)
-            from keiba_diagnosis_evidence import summarize_source_pace
+            diag171 = diagnose_horse_v17(allhorse171, label171)
+            from keiba_diagnosis_evidence import summarize_source_pace, summarize_lap_results
             diag171['ペース別3着内'] = summarize_source_pace(allhorse171)
+            diag171['ラップ別3着内'] = summarize_lap_results(allhorse171, quick_shapes171)
             diag171['馬名'] = name171
             diag171['ラップ確認走数'] = len(lapgroup171)
             records171.append(diag171)
@@ -2511,11 +2514,15 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             if selected_page208 == '🏇 総合診断':
                 st.markdown('#### 全馬の特徴を比較')
                 st.caption('過去走から分かる走り方・好走展開の比較。能力順位や今回の勝率ではありません。')
+                evidence_kind22 = st.radio('比較する実績', ['S/M/H別', '200mラップ別'], horizontal=True, key='main_evidence_kind_v22')
+                evidence_col22 = 'ペース別3着内' if evidence_kind22 == 'S/M/H別' else 'ラップ別3着内'
                 fixed_order_table_v209(
-                    quick_display171, ['馬名','走りの総合診断','ペース別3着内','信頼度','好走走数'],
+                    quick_display171, ['馬名','走りの総合診断',evidence_col22,'信頼度','好走走数'],
                     {'馬名':'馬番＋正式馬名','走りの総合診断':'強み・走り方',
-                     'ペース別3着内':'ペース別3着内','信頼度':'根拠の信頼度','好走走数':'好走走数'})
+                     'ペース別3着内':'ペース別3着内','ラップ別3着内':'ラップ別3着内','信頼度':'根拠の信頼度','好走走数':'好走走数'})
                 st.caption('S＝スロー、M＝ミドル、H＝ハイ。数字は3着内走数／着順とペース確認済み走数。未取得は集計から除外。少数例のため適性や勝率を断定しません。')
+                if evidence_kind22 == '200mラップ別':
+                    st.caption('瞬＝瞬発戦、持＝ロングスパート戦、消＝消耗戦、混＝混合・判定保留。3着内走数／ラップ検証済み走数。レース全体の独自分類で、馬自身の個別ラップや将来の好走確率ではありません。')
                 st.caption('信頼度は走り方のデータ充実度の目安で、ペース適性や予測的中率ではありません。')
                 # Ver.20.10: 計算結果を変えず、根拠となる有効データと欠測を監査する。
                 with st.expander('分析の信頼性チェック（全馬）', expanded=False):
