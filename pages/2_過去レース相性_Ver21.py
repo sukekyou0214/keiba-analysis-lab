@@ -36,7 +36,7 @@ with st.expander("過去10年の対象レース結果を自動取得（試験版
                 historical_df, acquisition_log = fetch_target_history(
                     special_url, int(current_start), int(current_end)
                 )
-            for cache_key in ("v21_horse_log", "v21_horse_raw", "v21_affinity_result"):
+            for cache_key in ("v21_horse_log", "v21_horse_raw", "v21_affinity_result", "v21_data_quality"):
                 st.session_state.pop(cache_key, None)
             st.session_state["v21_target_results"] = historical_df
             st.session_state["v21_acquisition_log"] = acquisition_log
@@ -74,6 +74,9 @@ with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
             with st.spinner("過去戦績を取得中"):
                 new_raw, new_log = collect_batch(target_df, get_results, completed=finished)
             if not new_log.empty:
+                st.session_state.pop("v21_affinity_result", None)
+                st.session_state.pop("v21_data_quality", None)
+            if not new_log.empty:
                 st.session_state["v21_horse_log"] = pd.concat([previous_log, new_log], ignore_index=True).drop_duplicates("horse_id", keep="last")
             if not new_raw.empty:
                 previous_raw = st.session_state.get("v21_horse_raw", pd.DataFrame())
@@ -95,7 +98,12 @@ with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
         else:
             try:
                 from keiba_affinity_workflow import analyze_verified_bundle
-                converted_history = convert_auto(history)
+                # Restored checkpoints may contain raw provider columns or
+                # already-converted history columns; never convert twice.
+                if {"着順_数値", "人気", "レースID", "馬ID", "日付", "レース名"}.issubset(history.columns):
+                    converted_history = history.copy()
+                else:
+                    converted_history = convert_auto(history)
                 affinity_result, data_quality = analyze_verified_bundle(
                     targets, target_log, converted_history, horse_log
                 )
@@ -143,7 +151,7 @@ with st.expander("データをまとめて保存・復元"):
             problems = audit_checkpoint(tables)
             if problems:
                 raise ValueError(" / ".join(problems))
-            for key in checkpoint_keys.values():
+            for key in (*checkpoint_keys.values(), "v21_data_quality"):
                 st.session_state.pop(key, None)
             for key, table in tables.items():
                 st.session_state[checkpoint_keys[key]] = table
