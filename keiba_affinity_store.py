@@ -113,6 +113,15 @@ def audit_checkpoint(tables: dict[str, pd.DataFrame]) -> list[str]:
                 issues.append("取得成功と記録された馬の戦績データが不足しています")
     if raw is not None and "馬ID" not in raw:
         issues.append("馬別戦績データに馬IDがありません")
-    if "affinity" in tables and (target is None or log is None or raw is None or horse_log is None):
-        issues.append("分析結果の根拠となる取得データが不足しています")
+    if "affinity" in tables:
+        if target is None or log is None or raw is None or horse_log is None:
+            issues.append("分析結果の根拠となる取得データが不足しています")
+        elif not {"status", "race_id"}.issubset(log) or not log["status"].eq("成功").all():
+            issues.append("過去レースの取得が未完了のため分析結果を復元できません")
+        elif not {"horse_id", "status"}.issubset(horse_log) or not horse_log["status"].eq("成功").all():
+            issues.append("馬別戦績の取得が未完了のため分析結果を復元できません")
+        elif {"馬ID", "レースID"}.issubset(target) and "馬ID" in raw:
+            from keiba_affinity_pipeline import complete_horse_manifest
+            if not complete_horse_manifest(target, horse_log, raw):
+                issues.append("馬の戦績と取得ログが一致しないため分析結果を復元できません")
     return issues
