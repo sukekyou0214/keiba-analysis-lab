@@ -40,3 +40,18 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertIn('Ver.22.1',(root/'app.py').read_text())
         self.assertFalse((root/'pages/3_エリザベス女王杯_Ver22.py').exists())
         self.assertNotIn('V22_ACCESS_PASSWORD',(root/'keiba_workspace_ui.py').read_text())
+
+    def test_pace_dedup_and_stop_preserves_partial(self):
+        from keiba_main_integration import enrich_pace,recent_pace_ids
+        d=pd.DataFrame([{'馬ID':str(h),'馬名':str(h),'着順_数値':2,'日付':'2026-10-01','レースID':rid} for h,rid in [(1,'202608010101'),(2,'202608010101'),(3,'202608010102')]])
+        self.assertEqual(len(recent_pace_ids(d)),2)
+        saved=[];calls=[]
+        def loader(rid):
+            calls.append(rid)
+            if rid.endswith('2'):raise ValueError('制限')
+            return 'ハイ寄り'
+        result,error=enrich_pace(d,loader,lambda f:saved.append(f.copy()),sleeper=lambda _:None)
+        self.assertIsNotNone(error)
+        self.assertEqual(len(saved),1)
+        self.assertEqual(result['netkeibaペース'].eq('ハイ寄り').sum(),2)
+        self.assertEqual(len(recent_pace_ids(result)),1)
