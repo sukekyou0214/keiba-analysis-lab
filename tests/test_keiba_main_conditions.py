@@ -61,7 +61,7 @@ class MainConditionTests(unittest.TestCase):
         data['馬ID']='1';data['馬名']='試験馬';data['レース格']='G2'
         a=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=30)
         for k,v in {'auto_df':prepare(data),'auto_horses':{'1':'試験馬'},'auto_numbers':{},
-                    'auto_race_id':rid,'race_input_v141':rid,'main_shared_evidence':True}.items():
+                    'auto_race_id':rid,'race_input_v141':rid,'main_shared_evidence':True,'evidence_active_main_rid':rid}.items():
             a.session_state[k]=v
         a.run()
         self.assertEqual(len(a.exception),0)

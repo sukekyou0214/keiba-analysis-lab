@@ -61,6 +61,21 @@ class MainRankingTests(unittest.TestCase):
         d=self.data().assign(競馬場='東京',距離_m=1600,netkeibaペース=None)
         self.assertTrue(pd.isna(self.run_rank(d).iloc[0]['参考順位']))
 
+    def test_lower_class_wins_do_not_replace_graded_reference_by_default(self):
+        graded=self.data()
+        lower=graded.assign(レース格='3勝',日付='2026-10-20',レースID='202608010201',着順_数値=1)
+        original=self.run_rank(graded).iloc[0]
+        actual=self.run_rank(pd.concat([graded,lower],ignore_index=True)).iloc[0]
+        self.assertEqual(original['総合参考点'],actual['総合参考点'])
+        self.assertEqual(actual['比較対象'],'G1〜G3')
+        self.assertTrue(pd.isna(self.run_rank(lower).iloc[0]['参考順位']))
+
+    def test_unknown_grade_does_not_become_graded_evidence(self):
+        self.assertTrue(pd.isna(self.run_rank(self.data().drop(columns='レース格')).iloc[0]['参考順位']))
+        result=main_ranking(self.data().drop(columns='レース格'),{'1':'試験馬'},main_context('202608050411',{}),graded_only=False)
+        self.assertEqual(result.iloc[0]['比較対象'],'全クラス')
+        self.assertEqual(result.iloc[0]['参考順位'],1)
+
     def test_dirt_ranking_uses_dirt_pace_evidence(self):
         context={**main_context('202608050411',{}),'surface':'ダ'}
         out=main_ranking(self.data().assign(コース='ダ'),{'1':'試験馬'},context).iloc[0]

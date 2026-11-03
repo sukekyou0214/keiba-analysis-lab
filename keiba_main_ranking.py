@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 
-def main_ranking(data, horses, context, metadata=None, pace='M'):
+def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=True):
     from keiba_v22 import rank_entries
     if context is None:
         return pd.DataFrame()
@@ -21,7 +21,13 @@ def main_ranking(data, horses, context, metadata=None, pace='M'):
             for col in ['想定人気','予定騎手','確認日時']:
                 row[col]=matched.iloc[0].get(col,pd.NA)
         rows.append(row)
-    return rank_entries(pd.DataFrame(rows),data,config=SimpleNamespace(**context),pace=pace)
+    selected=data
+    if graded_only:
+        grades=data.get('レース格',pd.Series('',index=data.index))
+        selected=data.loc[grades.isin(['G1','G2','G3'])].copy()
+    result=rank_entries(pd.DataFrame(rows),selected,config=SimpleNamespace(**context),pace=pace)
+    result['比較対象']='G1〜G3' if graded_only else '全クラス'
+    return result
 
 
 def fetch_current_metadata(context):
@@ -60,9 +66,11 @@ def render_main_ranking(renderer, data, horses, numbers, context):
         if len(dates):st.caption('予定情報の確認日時：'+str(dates.iloc[0]))
         if set(metadata['馬ID'].astype(str)) != {str(x) for x in horses}:
             st.info('出走表と本体の対象馬が異なります。参考順位は本体で読込済みの馬が対象です。')
+    graded_only=st.checkbox('重賞実績で比較する（G1〜G3）',value=True,key='main_reference_graded_v22')
+    st.caption('比較対象：'+('G1〜G3の取得済み実績。クラス間の混在を抑えますが、G1とG3の難易度差は未補正です。' if graded_only else '全クラスの取得済み実績。未勝利・条件戦の好成績も含まれるため、重賞向けの能力順位には使えません。'))
     pace=st.radio('参考順位に使う想定ペース',['S','M','H'],index=1,horizontal=True,key='main_reference_pace_v22')
     try:
-        ranking=main_ranking(data,horses,context,metadata,pace)
+        ranking=main_ranking(data,horses,context,metadata,pace,graded_only)
     except ValueError as exc:
         st.warning('参考順位を保留しました：'+str(exc))
         return
@@ -84,6 +92,8 @@ def render_main_ranking(renderer, data, horses, numbers, context):
             value=row.get(label,pd.NA)
             st.write(label+'：'+('未確認' if pd.isna(value) else str(value)))
         mine=data.loc[data['馬ID'].astype(str).eq(str(row['馬ID']))].copy()
+        if graded_only:
+            mine=mine.loc[mine.get('レース格',pd.Series('',index=mine.index)).isin(['G1','G2','G3'])]
         mine=mine.loc[pd.to_datetime(mine['日付'],errors='coerce').lt(pd.Timestamp(context['race_date']))]
         st.write('検証済みラップでの3着内実績：'+summarize_lap_results(mine,load_lap_full_progress(context['race_id'])))
     st.download_button('全頭参考順位CSV',ranking.to_csv(index=False).encode('utf-8-sig'),file_name='race_reference_ranking.csv',mime='text/csv',key='main_reference_download_v22')
