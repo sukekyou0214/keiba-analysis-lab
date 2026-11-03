@@ -14,26 +14,6 @@ def render_workspace(selected_section=None,embedded=False):
     st.markdown('<style>.block-container{padding-top:1rem} h1{font-size:1.65rem!important} div[data-testid="stMetricValue"]{font-size:1.3rem}</style>',unsafe_allow_html=True)
     if not embedded:st.title('重賞共通分析 Ver.22')
 
-    # A public Streamlit deployment must not expose shared provider data.
-    # Enable only behind an owner-controlled password; no default or committed secret.
-    import hmac
-    try:
-        access_password = st.secrets.get('V22_ACCESS_PASSWORD', '')
-    except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
-        access_password = ''
-    if not access_password:
-        st.info('本人用画面の準備が必要です。Streamlit Secretsに V22_ACCESS_PASSWORD を設定すると取得・分析を利用できます。')
-        st.caption('データは公開リポジトリへ保存しません。利用条件に沿った本人用の分析画面です。')
-        st.stop()
-    if not st.session_state.get('v22_authenticated', False):
-        entered = st.text_input('本人用パスワード', type='password')
-        if st.button('分析画面を開く'):
-            if hmac.compare_digest(entered.encode(), str(access_password).encode()):
-                st.session_state['v22_authenticated'] = True
-                st.rerun()
-            else:
-                st.error('パスワードを確認してください')
-        st.stop()
     from keiba_race_config import PRESETS, RaceConfig, VENUES
     if embedded:
         current_rid=str(st.session_state.get('auto_race_id',''))

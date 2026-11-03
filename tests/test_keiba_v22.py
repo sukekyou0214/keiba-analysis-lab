@@ -83,18 +83,19 @@ class V22Test(unittest.TestCase):
     def test_entry_parser_missing_pop_and_jockey(self):
         html='<h1 class="RaceName">エリザベス女王杯</h1><table>'+''.join(f'<tr class="HorseList"><td class="HorseName"><a href="https://db.netkeiba.com/horse/202000000{i}/">馬{i}</a></td></tr>' for i in range(1,7))+'</table>'
         d=parse_entries(html);self.assertEqual(len(d),6);self.assertTrue(d['想定人気'].isna().all())
-    def test_page_without_secret_is_closed(self):
+    def test_workspace_without_secret_is_available(self):
         from streamlit.testing.v1 import AppTest
-        a=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'pages/3_エリザベス女王杯_Ver22.py')).run()
+        a=AppTest.from_string("from keiba_workspace_ui import render_workspace\nrender_workspace()").run()
         self.assertEqual(len(a.exception),0)
-        self.assertEqual(len(a.button),0)
+        self.assertTrue(any(x.label=='対象レース' for x in a.selectbox))
+        self.assertFalse(any(x.label=='本人用パスワード' for x in a.text_input))
     def test_page_authenticated_all_sections(self):
         from streamlit.testing.v1 import AppTest
         with tempfile.TemporaryDirectory() as root:
             from unittest.mock import patch
             with patch.dict(os.environ,{'KEIBA_V22_STORE':str(Path(root)/'test.sqlite')}):
-                a=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'pages/3_エリザベス女王杯_Ver22.py'))
-                a.secrets['V22_ACCESS_PASSWORD']='test-only';a.session_state['v22_authenticated']=True
+                a=AppTest.from_string("from keiba_workspace_ui import render_workspace\nrender_workspace()")
+                
                 a.run();self.assertEqual(len(a.exception),0)
                 for section in ['詳細分析','詳細設定','総合診断']:
                     a.radio[0].set_value(section).run();self.assertEqual(len(a.exception),0)

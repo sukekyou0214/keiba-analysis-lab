@@ -34,8 +34,8 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{'KEIBA_V22_STORE':'/tmp/config-test-placeholder.sqlite'}):
             # Use per-test path; no network actions in switching tests.
             os.environ['KEIBA_V22_STORE']=str(Path(root)/'db')
-            a=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'pages/3_エリザベス女王杯_Ver22.py'))
-            a.secrets['V22_ACCESS_PASSWORD']='test-only';a.session_state['v22_authenticated']=True
+            a=AppTest.from_string("from keiba_workspace_ui import render_workspace\nrender_workspace()")
+            
             a.run()
             for name in PRESETS:
                 a.selectbox[0].set_value(name).run()

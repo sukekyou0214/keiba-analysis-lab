@@ -33,3 +33,10 @@ class MainIntegrationTests(unittest.TestCase):
         self.assertEqual(b['horse_raw'].iloc[0]['netkeibaペース'],'ハイ寄り')
         state['auto_race_id']='202605041111'
         self.assertIsNone(bridge_main_dataset(C,state))
+
+    def test_main_version_and_removed_standalone_page(self):
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        self.assertIn('Ver.22.1',(root/'app.py').read_text())
+        self.assertFalse((root/'pages/3_エリザベス女王杯_Ver22.py').exists())
+        self.assertNotIn('V22_ACCESS_PASSWORD',(root/'keiba_workspace_ui.py').read_text())
