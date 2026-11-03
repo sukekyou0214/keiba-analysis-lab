@@ -115,7 +115,7 @@ with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
 
 
 with st.expander("データをまとめて保存・復元"):
-    from keiba_affinity_store import pack_checkpoint, load_checkpoint
+    from keiba_affinity_store import pack_checkpoint, load_checkpoint, audit_checkpoint
     checkpoint_keys = {
         "targets": "v21_target_results",
         "target_log": "v21_acquisition_log",
@@ -140,6 +140,9 @@ with st.expander("データをまとめて保存・復元"):
     if uploaded_checkpoint is not None and st.button("保存ZIPから復元", use_container_width=True):
         try:
             tables = load_checkpoint(uploaded_checkpoint.getvalue())
+            problems = audit_checkpoint(tables)
+            if problems:
+                raise ValueError(" / ".join(problems))
             for key in checkpoint_keys.values():
                 st.session_state.pop(key, None)
             for key, table in tables.items():
