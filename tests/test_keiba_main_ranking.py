@@ -95,7 +95,9 @@ class MainRankingTests(unittest.TestCase):
                 a.session_state[k]=v
             a.run()
             self.assertEqual(len(a.exception),0)
-            self.assertEqual(a.radio(key='main_evidence_kind_v22').value,'全頭参考順位')
+            self.assertEqual(a.radio(key='main_evidence_kind_v22').value,'今回条件・前走')
+            a.radio(key='main_evidence_kind_v22').set_value('全頭参考順位（研究中）').run()
+            self.assertEqual(len(a.exception),0)
             html='\n'.join(x.value for x in a.markdown)
             self.assertIn('実績参考順位',html)
             self.assertTrue(any(b.label=='全頭参考順位CSV' for b in a.get('download_button')))

@@ -14,10 +14,12 @@ from bs4 import BeautifulSoup
 _pending_bridge=st.session_state.pop('pending_main_bridge',None)
 if _pending_bridge:
     st.session_state.update(_pending_bridge)
+if st.session_state.get('main_evidence_kind_v22')=='全頭参考順位':
+    st.session_state['main_evidence_kind_v22']='今回条件・前走'
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
 st.markdown('<style>.block-container{padding-top:1rem!important} h3{font-size:1.35rem!important} h4{font-size:1.15rem!important}</style>',unsafe_allow_html=True)
-st.markdown('### 🏇 競馬分析ラボ Ver.22.1')
+st.markdown('### 🏇 競馬分析ラボ Ver.22.2')
 st.caption('総合診断・詳細分析・詳細設定は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2340,6 +2342,9 @@ if selected_page208 == '🧰 管理・検証':
     with st.expander('研究用ページ（オプション）',expanded=False):
         st.page_link('pages/2_過去レース相性_Ver21.py',label='過去レース相性・取得検証')
         st.page_link('pages/1_過去10年分析.py',label='過去10年の研究ページ')
+    from keiba_main_conditions import main_context
+    from keiba_reference_replay import render_reference_replay
+    render_reference_replay(main_context(st.session_state.get('auto_race_id',''),st.session_state),st.session_state)
 else:
     st.caption('左上の ☰ から画面を切り替えられます。')
 
@@ -2425,7 +2430,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
     with main_holder208.container():
         if selected_page208 != '🏇 総合診断':
             st.subheader('ペース予測・対応馬' if selected_page208 == '🌊 ペース分析' else '出走馬の総合診断')
-        if selected_page208 != '🏇 総合診断' or st.session_state.get('main_evidence_kind_v22','全頭参考順位') != '全頭参考順位':
+        if selected_page208 != '🏇 総合診断' or st.session_state.get('main_evidence_kind_v22','今回条件・前走') != '全頭参考順位（研究中）':
             st.caption('集計条件：対象開催日前の取得済み全戦績。同じコース種別で開催場・距離を照合します。' if st.session_state.get('main_evidence_kind_v22') == '今回条件・前走' else '集計条件：各馬の直近10走に含まれるG1・G2・G3。')
         quick171 = analysis_df.copy()
         if '日付' in quick171.columns:
@@ -2492,10 +2497,10 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             quick_display171 = display_horse_column(quick_result171, horses, st.session_state.auto_numbers)
             if selected_page208 == '🏇 総合診断':
                 st.markdown('#### 全馬の特徴を比較')
-                evidence_kind22 = st.radio('比較する実績', ['全頭参考順位', '今回条件・前走', 'S/M/H別', '200mラップ別'], horizontal=True, key='main_evidence_kind_v22')
+                evidence_kind22 = st.radio('比較する実績', ['今回条件・前走', 'S/M/H別', '200mラップ別', '全頭参考順位（研究中）'], horizontal=True, key='main_evidence_kind_v22')
                 evidence_col22 = 'ペース別3着内' if evidence_kind22 == 'S/M/H別' else 'ラップ別3着内'
                 compare_cols22 = ['馬名','今回条件実績','前走内容'] if evidence_kind22 == '今回条件・前走' else ['馬名','走りの総合診断',evidence_col22,'信頼度','好走走数']
-                if evidence_kind22 == '全頭参考順位':
+                if evidence_kind22 == '全頭参考順位（研究中）':
                     from keiba_main_ranking import render_main_ranking
                     render_main_ranking(fixed_order_table_v209,analysis_df,horses,st.session_state.auto_numbers,context22)
                 else:
@@ -2509,7 +2514,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                     st.caption('S＝スロー、M＝ミドル、H＝ハイ。数字は3着内走数／着順とペース確認済み走数。未取得は集計から除外。少数例のため適性や勝率を断定しません。')
                 if evidence_kind22 == '200mラップ別':
                     st.caption('瞬＝瞬発戦、持＝ロングスパート戦、消＝消耗戦、混＝混合・判定保留。3着内走数／ラップ検証済み走数。レース全体の独自分類で、馬自身の個別ラップや将来の好走確率ではありません。')
-                if evidence_kind22 != '全頭参考順位':
+                if evidence_kind22 != '全頭参考順位（研究中）':
                     st.caption('信頼度は走り方のデータ充実度の目安で、ペース適性や予測的中率ではありません。')
                 # Ver.20.10: 計算結果を変えず、根拠となる有効データと欠測を監査する。
                 with st.expander('分析の信頼性チェック（全馬）', expanded=False):
