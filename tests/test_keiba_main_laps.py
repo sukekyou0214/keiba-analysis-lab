@@ -53,6 +53,11 @@ class MainLapTests(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertTrue(out.empty)
 
+    def test_short_distance_without_baseline_is_unclassified_not_crash(self):
+        from keiba_core import classify_lap_shape_v16
+        result=classify_lap_shape_v16('12.0 - 11.0 - 11.0 - 11.0 - 11.0 - 12.0',1200)
+        self.assertEqual(result['展開タイプ'],'判定不可')
+
     def test_only_recent_five_per_horse_and_no_invalid_ids(self):
         data=pd.DataFrame([{'馬ID':'1','レースID':f'20260801010{i}','日付':f'2026-10-0{i}'} for i in range(1,7)])
         self.assertNotIn('202608010101',recent_lap_ids(data))

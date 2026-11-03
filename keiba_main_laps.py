@@ -47,7 +47,7 @@ def enrich_laps(data, stored, loader, save, cached=lambda _:None,
                    '検証':payload['検証'] if valid else '取得不可',
                    '取得状態':'成功' if valid else '取得不可',
                    '取得方法':'保存済み' if hit else '新規取得',
-                   '取得理由':'' if valid else str(payload['検証']), **extra}
+                   '取得理由':'' if valid else (str(payload['検証']) if payload['検証'] != 'OK' else extra['判定根拠']), **extra}
         except ValueError as exc:
             if str(exc) != 'ラップタイム見出しが見つかりません':
                 error = str(exc)[:180]
