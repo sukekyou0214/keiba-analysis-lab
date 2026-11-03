@@ -68,7 +68,9 @@ class MainRankingTests(unittest.TestCase):
         actual=self.run_rank(pd.concat([graded,lower],ignore_index=True)).iloc[0]
         self.assertEqual(original['総合参考点'],actual['総合参考点'])
         self.assertEqual(actual['比較対象'],'G1〜G3')
-        self.assertTrue(pd.isna(self.run_rank(lower).iloc[0]['参考順位']))
+        missing=self.run_rank(lower).iloc[0]
+        self.assertTrue(pd.isna(missing['参考順位']))
+        self.assertEqual(missing['判定'],'対象の重賞戦績なし・保留')
 
     def test_unknown_grade_does_not_become_graded_evidence(self):
         self.assertTrue(pd.isna(self.run_rank(self.data().drop(columns='レース格')).iloc[0]['参考順位']))
