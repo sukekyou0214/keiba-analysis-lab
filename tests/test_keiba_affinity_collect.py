@@ -73,6 +73,28 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(manifest.iloc[0]["status"], "失敗")
         self.assertIn("mismatch", manifest.iloc[0]["reason"])
 
+    def test_date_mismatch_rejected(self):
+        class FakeResponse:
+            apparent_encoding = "utf-8"
+            encoding = "utf-8"
+            def __init__(self, text):
+                self.text = text
+            def raise_for_status(self):
+                pass
+
+        class FakeSession:
+            def get(self, url, **kwargs):
+                html = special_html().replace("2025/11/02", "2025/10/26") if "special/index" in url else result_html()
+                return FakeResponse(html)
+
+        with patch("keiba_affinity_collect.time.sleep"):
+            df, manifest = fetch_target_history(
+                "https://race.netkeiba.com/special/index.html?id=0109",
+                2025, 2025, session=FakeSession(), delay_seconds=0.5)
+        self.assertTrue(df.empty)
+        self.assertEqual(manifest.iloc[0]["status"], "失敗")
+        self.assertIn("date disagrees", manifest.iloc[0]["reason"])
+
     def test_request_budget_rejected(self):
         with self.assertRaises(ValueError):
             fetch_target_history("https://race.netkeiba.com/special/index.html?id=0109",
