@@ -188,3 +188,24 @@ def venue_bundle(tables, venue):
         'horse_raw':tables['horse_raw'].loc[tables['horse_raw']['馬ID'].astype(str).isin(horses)].copy(),
         'horse_log':tables['horse_log'].loc[tables['horse_log']['horse_id'].astype(str).isin(horses)].copy(),
     }
+
+
+def match_historical_patterns(features, patterns, minimum=10):
+    """Descriptive matches only: Kyoto cohorts; no target outcome in predictors.
+
+    Matching is not a fitted model or independent evidence across overlapping
+    conditions. Unknowns and sample-poor patterns never count as matches.
+    """
+    rows=[]
+    if patterns.empty:return pd.DataFrame()
+    for label,column in [('前走','前走'),('脚質','脚質')]:
+        value=features.get(column)
+        if pd.isna(value) or value in ('不明',''):continue
+        matches=patterns.loc[patterns['開催'].eq('京都') & patterns['項目'].eq(label)
+                             & patterns['条件'].eq(str(value)) & patterns['出走数'].ge(minimum)]
+        for _,r in matches.iterrows():
+            if pd.isna(r['3着内率']):continue
+            rows.append({'条件':f'{label}：{value}','標本数':int(r['出走数']),
+                         '3着内数':int(r['3着内数']),'過去3着内率':float(r['3着内率']),
+                         '位置付け':'探索的・条件の重複あり・予測確率ではない'})
+    return pd.DataFrame(rows)
