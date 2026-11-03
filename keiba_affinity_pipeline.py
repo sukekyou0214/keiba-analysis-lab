@@ -33,7 +33,7 @@ def collect_batch(target, loader, completed=None, limit=20, delay=1.0, sleeper=t
 
 
 
-def complete_horse_manifest(target, logs):
+def complete_horse_manifest(target, logs, histories=None):
     """Require one successful acquisition record for every target horse."""
     if logs.empty or not {"horse_id", "status"}.issubset(logs):
         return False
@@ -41,4 +41,16 @@ def complete_horse_manifest(target, logs):
         return False
     expected = set(target["馬ID"].astype(str))
     observed = set(logs["horse_id"].astype(str))
-    return expected == observed and logs["status"].eq("成功").all()
+    if expected != observed or not logs["status"].eq("成功").all():
+        return False
+    if histories is not None:
+        if histories.empty or "馬ID" not in histories:
+            return False
+        raw_ids = histories["馬ID"].astype("string")
+        if raw_ids.isna().any() or set(raw_ids) != expected:
+            return False
+        if "レースID" in histories:
+            known = histories.loc[histories["レースID"].notna() & histories["レースID"].astype(str).ne("")]
+            if known.duplicated(["馬ID", "レースID"]).any():
+                return False
+    return True
