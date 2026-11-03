@@ -8,10 +8,10 @@ from keiba_affinity_collect import HORSE_ID
 from keiba_v22 import ENTRY_URL
 
 
-def parse_entries(html, source=ENTRY_URL):
+def parse_entries(html, source=ENTRY_URL, expected_name='エリザベス女王杯'):
     soup=BeautifulSoup(html,'html.parser')
     title=soup.select_one('h1.RaceName')
-    if title is None or 'エリザベス女王杯' not in title.get_text():
+    if title is None or expected_name not in title.get_text():
         raise ValueError('対象レースの見出しを確認できません')
     rows=[]
     for tr in soup.select('tr.HorseList'):
