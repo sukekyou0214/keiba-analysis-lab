@@ -89,7 +89,7 @@ with st.expander("過去10年の対象レース結果を自動取得（試験版
             history = st.session_state.get("v21_horse_raw")
             if targets is None or target_log is None or history is None or horse_log is None:
                 st.error("必要な取得結果が不足しています。")
-            elif not target_log["status"].eq("成功").all() or not complete_horse_manifest(targets, horse_log):
+            elif not target_log["status"].eq("成功").all() or not complete_horse_manifest(targets, horse_log, history):
                 st.error("未取得・取得失敗の馬がいるため相性判定を中止しました。")
             else:
                 try:
