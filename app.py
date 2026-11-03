@@ -16,10 +16,13 @@ if _pending_bridge:
     st.session_state.update(_pending_bridge)
 if st.session_state.get('main_evidence_kind_v22')=='全頭参考順位':
     st.session_state['main_evidence_kind_v22']='今回条件・前走'
+APP_VERSION = '22.2'
+from keiba_release import prepare_release
+_navigation = prepare_release(APP_VERSION)
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
 st.markdown('<style>.block-container{padding-top:1rem!important} h3{font-size:1.35rem!important} h4{font-size:1.15rem!important}</style>',unsafe_allow_html=True)
-st.markdown('### 🏇 競馬分析ラボ Ver.22.2')
+st.markdown(f'### 🏇 競馬分析ラボ Ver.{APP_VERSION}')
 st.caption('総合診断・詳細分析・詳細設定は左上の ☰ メニューから選べます。')
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36'}
@@ -2293,8 +2296,7 @@ if st.session_state.get('nav_page_v208') == '🧰 管理・検証':
                     st.error(f'再取得を完了できませんでした。以前の保存データは維持しています：{exc_v192}')
 
 # 3部門のメニューから既存の分析画面へ振り分ける。
-from keiba_navigation import render_navigation
-selected_page208 = render_navigation()
+selected_page208 = _navigation.render_navigation()
 
 # 過去10年分析: 独自メニュー内に直接表示する（switch_page は使用しない）。
 if selected_page208 == '📚 過去10年分析':
