@@ -65,7 +65,7 @@ class MainConditionTests(unittest.TestCase):
             a.session_state[k]=v
         a.run()
         self.assertEqual(len(a.exception),0)
-        self.assertTrue(any(s.value=='出走馬の総合診断' for s in a.subheader))
+        self.assertTrue(any('全馬の特徴を比較' in s.value for s in a.markdown))
         self.assertEqual(a.selectbox(key='common_race_choice').value,'その他（設定して利用）')
 
     def test_original_main_displays_condition_and_previous_race(self):

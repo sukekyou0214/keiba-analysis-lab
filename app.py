@@ -16,6 +16,7 @@ if _pending_bridge:
     st.session_state.update(_pending_bridge)
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
+st.markdown('<style>.block-container{padding-top:1rem!important} h3{font-size:1.35rem!important} h4{font-size:1.15rem!important}</style>',unsafe_allow_html=True)
 st.markdown('### 🏇 競馬分析ラボ Ver.22.1')
 st.caption('総合診断・詳細分析・詳細設定は左上の ☰ メニューから選べます。')
 
@@ -2422,8 +2423,10 @@ if selected_page208 == '🧰 管理・検証':
 if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各馬の特徴'):
     main_holder208 = st.empty()
     with main_holder208.container():
-        st.subheader('ペース予測・対応馬' if selected_page208 == '🌊 ペース分析' else '出走馬の総合診断')
-        st.caption('集計条件：対象開催日前の取得済み全戦績。同じコース種別で開催場・距離を照合します。' if st.session_state.get('main_evidence_kind_v22','全頭参考順位') in ['全頭参考順位','今回条件・前走'] else '集計条件：各馬の直近10走に含まれるG1・G2・G3。')
+        if selected_page208 != '🏇 総合診断':
+            st.subheader('ペース予測・対応馬' if selected_page208 == '🌊 ペース分析' else '出走馬の総合診断')
+        if selected_page208 != '🏇 総合診断' or st.session_state.get('main_evidence_kind_v22','全頭参考順位') != '全頭参考順位':
+            st.caption('集計条件：対象開催日前の取得済み全戦績。同じコース種別で開催場・距離を照合します。' if st.session_state.get('main_evidence_kind_v22') == '今回条件・前走' else '集計条件：各馬の直近10走に含まれるG1・G2・G3。')
         quick171 = analysis_df.copy()
         if '日付' in quick171.columns:
             quick171 = quick171.sort_values('日付', ascending=False, na_position='last', kind='stable')
@@ -2489,7 +2492,6 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             quick_display171 = display_horse_column(quick_result171, horses, st.session_state.auto_numbers)
             if selected_page208 == '🏇 総合診断':
                 st.markdown('#### 全馬の特徴を比較')
-                st.caption('過去走から分かる走り方・好走展開の比較。能力順位や今回の勝率ではありません。')
                 evidence_kind22 = st.radio('比較する実績', ['全頭参考順位', '今回条件・前走', 'S/M/H別', '200mラップ別'], horizontal=True, key='main_evidence_kind_v22')
                 evidence_col22 = 'ペース別3着内' if evidence_kind22 == 'S/M/H別' else 'ラップ別3着内'
                 compare_cols22 = ['馬名','今回条件実績','前走内容'] if evidence_kind22 == '今回条件・前走' else ['馬名','走りの総合診断',evidence_col22,'信頼度','好走走数']
