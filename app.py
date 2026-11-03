@@ -21,7 +21,7 @@ from keiba_release import prepare_release
 _navigation = prepare_release(APP_VERSION)
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
-st.markdown('<style>.block-container{padding-top:1rem!important} h3{font-size:1.35rem!important} h4{font-size:1.15rem!important}</style>',unsafe_allow_html=True)
+st.markdown('<style>.block-container{padding-top:3rem!important} h3{font-size:1.35rem!important} h4{font-size:1.15rem!important}</style>',unsafe_allow_html=True)
 st.markdown(f'### 🏇 競馬分析ラボ Ver.{APP_VERSION}')
 st.caption('総合診断・詳細分析・詳細設定は左上の ☰ メニューから選べます。')
 
@@ -2433,7 +2433,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
         if selected_page208 != '🏇 総合診断':
             st.subheader('ペース予測・対応馬' if selected_page208 == '🌊 ペース分析' else '出走馬の総合診断')
         if selected_page208 != '🏇 総合診断' or st.session_state.get('main_evidence_kind_v22','今回条件・前走') != '全頭参考順位（研究中）':
-            st.caption('集計条件：対象開催日前の取得済み全戦績。同じコース種別で開催場・距離を照合します。' if st.session_state.get('main_evidence_kind_v22') == '今回条件・前走' else '集計条件：各馬の直近10走に含まれるG1・G2・G3。')
+            st.caption('集計条件：対象開催日前の取得済み全戦績。同じコース種別で開催場・距離を照合します。' if st.session_state.get('main_evidence_kind_v22','今回条件・前走') == '今回条件・前走' else '集計条件：各馬の直近10走に含まれるG1・G2・G3。')
         quick171 = analysis_df.copy()
         if '日付' in quick171.columns:
             quick171 = quick171.sort_values('日付', ascending=False, na_position='last', kind='stable')
