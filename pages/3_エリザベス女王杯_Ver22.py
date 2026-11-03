@@ -51,8 +51,9 @@ else:
                 for field,key in mapping.items():
                     st.session_state[key]=detected.get(field,defaults[field])
                 st.session_state['custom_day']=date.fromisoformat(detected['race_date']) if 'race_date' in detected else None
-                from keiba_race_metadata import metadata_fields
-                known,missing=metadata_fields(detected)
+                labels={'name':'レース名','special_url':'重賞特集URL','race_date':'開催日','venue':'競馬場','surface':'コース','distance':'距離'}
+                known=[label for field,label in labels.items() if field in detected]
+                missing=[label for field,label in labels.items() if field not in detected]
                 st.session_state['custom_read_summary']=(entry,known,missing)
                 st.success('ページで確認できた項目を入力しました。')
             except Exception as error:st.warning(f'自動入力を停止しました：{error}')
