@@ -2,6 +2,7 @@ name: Ver21 affinity regression
 on:
   push:
     branches:
+      - main
       - feature/ver21-race-affinity
   pull_request:
     branches:
