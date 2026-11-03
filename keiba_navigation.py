@@ -17,5 +17,5 @@ def render_navigation():
             page=selected
         st.caption('管理・検証は予想の主画面から分けたオプションです。')
         st.divider()
-        st.caption('競馬分析ラボ Ver.22.1')
+        st.caption('競馬分析ラボ Ver.22.2')
     return page

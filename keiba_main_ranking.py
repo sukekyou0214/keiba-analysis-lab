@@ -73,7 +73,7 @@ def render_main_ranking(renderer, data, horses, numbers, context):
                 st.info('出走表と本体の対象馬が異なります。参考順位は本体で読込済みの馬が対象です。')
         graded_only=st.checkbox('重賞実績で比較する（G1〜G3）',value=True,key='main_reference_graded_v22')
         st.caption('比較対象：'+('G1〜G3の取得済み実績。クラス間の混在を抑えますが、G1とG3の難易度差は未補正です。' if graded_only else '全クラスの取得済み実績。未勝利・条件戦の好成績も含まれるため、重賞向けの能力順位には使えません。'))
-    st.caption(('G1〜G3' if graded_only else '全クラス')+'の実績参考順位。能力指数・勝率は未検証です。')
+    st.caption(('G1〜G3' if graded_only else '全クラス')+'の実績参考順位（研究中）。過去検証で有効性は確認できていません。')
     pace=st.radio('参考順位に使う想定ペース',['S','M','H'],index=1,horizontal=True,key='main_reference_pace_v22')
     try:
         ranking=main_ranking(data,horses,context,metadata,pace,graded_only)
