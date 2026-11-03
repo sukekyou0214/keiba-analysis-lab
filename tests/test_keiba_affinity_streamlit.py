@@ -60,6 +60,13 @@ class PageSmokeTest(unittest.TestCase):
         self.assertTrue("v21_affinity_result" in app.session_state)
         self.assertFalse(app.session_state["v21_affinity_result"].empty)
 
+    def test_existing_main_screen_starts_without_regression(self):
+        path = Path(__file__).resolve().parents[1] / "app.py"
+        app = AppTest.from_file(str(path), default_timeout=30).run()
+        self.assertEqual([str(x.message) for x in app.exception], [])
+        self.assertTrue(any("競馬分析ラボ" in element.value
+                            for element in app.markdown))
+
     def test_csv_analysis_without_upload_shows_validation(self):
         page = Path(__file__).resolve().parents[1] / "pages/2_過去レース相性_Ver21.py"
         app = AppTest.from_file(str(page), default_timeout=25).run()
