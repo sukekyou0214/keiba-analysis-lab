@@ -4,6 +4,7 @@ Run only when explicitly selected by CI for a bounded smoke test.
 This does not certify 10 years of complete history.
 """
 import sys
+import os
 import requests
 from keiba_affinity_collect import (
     UA, discover_historical_entries, parse_historical_result,
@@ -24,6 +25,24 @@ def read(url):
 
 
 def main():
+    if os.environ.get("KEIBA_LIVE_FULL") == "1":
+        from keiba_affinity_collect import fetch_target_history
+        results, log = fetch_target_history(
+            SPECIAL, 2016, 2025, delay_seconds=1.0, max_races=10
+        )
+        for _, row in log.iterrows():
+            print("YEAR:", row["year"], row["status"], "starters:",
+                  row["entrants"], "note:", row["reason"], flush=True)
+        if len(log) != 10 or not log["status"].eq("成功").all():
+            raise ValueError("Historical 10-year acquisition incomplete")
+        counts = results.groupby(results["レースID"].str[:4]).size().to_dict()
+        print("Verified starters by year:", counts, flush=True)
+        if set(counts) != {str(y) for y in range(2016, 2026)}:
+            raise ValueError("Missing target year")
+        if len(results) != 144:
+            raise ValueError(f"Unexpected sum of starters: {len(results)}")
+        print("PASS: ten verified years, 144 actual starters", flush=True)
+        return
     special = read(SPECIAL)
     entry = discover_historical_entries(special, 2025, 2025).get(2025)
     if not entry:
