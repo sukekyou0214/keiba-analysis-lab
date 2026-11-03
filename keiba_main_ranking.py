@@ -102,4 +102,6 @@ def render_main_ranking(renderer, data, horses, numbers, context):
             mine=mine.loc[mine.get('レース格',pd.Series('',index=mine.index)).isin(['G1','G2','G3'])]
         mine=mine.loc[pd.to_datetime(mine['日付'],errors='coerce').lt(pd.Timestamp(context['race_date']))]
         st.write('検証済みラップでの3着内実績：'+summarize_lap_results(mine,load_lap_full_progress(context['race_id'])))
+        from keiba_main_patterns import render_pattern_match
+        render_pattern_match(context,data,row['馬ID'],st.session_state)
     st.download_button('全頭参考順位CSV',ranking.to_csv(index=False).encode('utf-8-sig'),file_name='race_reference_ranking.csv',mime='text/csv',key='main_reference_download_v22')
