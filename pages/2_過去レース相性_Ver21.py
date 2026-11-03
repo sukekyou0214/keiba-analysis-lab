@@ -71,7 +71,7 @@ with st.expander("過去10年の対象レース結果を自動取得（試験版
                 with st.spinner("過去戦績を取得中"):
                     new_raw, new_log = collect_batch(target_df, get_results, completed=finished)
                 if not new_log.empty:
-                    st.session_state["v21_horse_log"] = pd.concat([previous_log, new_log], ignore_index=True)
+                    st.session_state["v21_horse_log"] = pd.concat([previous_log, new_log], ignore_index=True).drop_duplicates("horse_id", keep="last")
                 if not new_raw.empty:
                     previous_raw = st.session_state.get("v21_horse_raw", pd.DataFrame())
                     st.session_state["v21_horse_raw"] = pd.concat([previous_raw, new_raw], ignore_index=True)
