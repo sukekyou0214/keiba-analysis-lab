@@ -69,3 +69,46 @@ def load_checkpoint(blob: bytes) -> dict[str, pd.DataFrame]:
                        "horse_id": "string", "race_id": "string"},
             )
         return result
+
+
+def audit_checkpoint(tables: dict[str, pd.DataFrame]) -> list[str]:
+    """Find inconsistencies without silently dropping or inventing rows."""
+    issues = []
+    target = tables.get("targets")
+    log = tables.get("target_log")
+    raw = tables.get("horse_raw")
+    horse_log = tables.get("horse_log")
+    if target is not None:
+        required = {"レースID", "馬ID", "日付", "レース名", "着順_数値", "人気"}
+        if not required.issubset(target):
+            issues.append("対象レースの必須列が不足しています")
+        elif target.empty:
+            issues.append("対象レースの結果が空です")
+        elif target.duplicated(["レースID", "馬ID"]).any():
+            issues.append("対象レースに重複する馬IDがあります")
+    if log is not None:
+        if not {"race_id", "status", "entrants"}.issubset(log):
+            issues.append("対象レースの取得ログに必須列がありません")
+        elif log.empty or log["race_id"].astype("string").duplicated().any():
+            issues.append("対象レースの取得ログが空か重複しています")
+        elif target is not None and {"レースID", "馬ID"}.issubset(target):
+            counts = target.groupby("レースID").size().to_dict()
+            for _, entry in log.loc[log["status"].eq("成功")].iterrows():
+                if counts.get(str(entry["race_id"])) != int(entry["entrants"]):
+                    issues.append("取得成功と記録された対象レースの頭数が一致しません")
+                    break
+    if horse_log is not None:
+        if not {"horse_id", "status"}.issubset(horse_log):
+            issues.append("馬別取得ログの必須列が不足しています")
+        elif horse_log["horse_id"].astype("string").duplicated().any():
+            issues.append("馬別取得ログに重複があります")
+        elif raw is not None and "馬ID" in raw:
+            successful = set(horse_log.loc[horse_log["status"].eq("成功"), "horse_id"].astype(str))
+            present = set(raw["馬ID"].dropna().astype(str))
+            if not successful.issubset(present):
+                issues.append("取得成功と記録された馬の戦績データが不足しています")
+    if raw is not None and "馬ID" not in raw:
+        issues.append("馬別戦績データに馬IDがありません")
+    if "affinity" in tables and (target is None or log is None or raw is None or horse_log is None):
+        issues.append("分析結果の根拠となる取得データが不足しています")
+    return issues
