@@ -74,12 +74,13 @@ def history_frame(raw):
         if col not in d: d[col]=pd.NA
     # No independent numeric pace inference is passed off as a source S/M/H label.
     d['ペース区分']=d['netkeibaペース'].map({'スロー寄り':'S','ミドル寄り':'M','ハイ寄り':'H','S':'S','M':'M','H':'H'})
-    ratio=d['4角順位']/d['頭数'].where(d['頭数'].gt(0))
+    valid_position=d['頭数'].ge(2)&d['4角順位'].ge(1)&d['4角順位'].le(d['頭数'])
+    ratio=(d['4角順位']/d['頭数']).where(valid_position)
     d['脚質']='不明'
     d.loc[ratio.notna() & ratio.le(.33),'脚質']='先行'
     d.loc[ratio.gt(.33) & ratio.le(.67),'脚質']='差し'
     d.loc[ratio.gt(.67),'脚質']='追込'
-    d.loc[d['4角順位'].eq(1),'脚質']='逃げ'
+    d.loc[valid_position&d['4角順位'].eq(1),'脚質']='逃げ'
     return d
 
 def rate(frame):
@@ -152,6 +153,11 @@ def pattern_tables(features):
         for (venue,label),g in d.groupby(['開催区分',col],dropna=False):
             odds=pd.to_numeric(g.get('単勝オッズ',pd.Series(index=g.index,dtype=float)),errors='coerce')
             f=pd.to_numeric(g['着順_数値'],errors='coerce')
+            valid=f.ge(1)&f.mod(1).eq(0)
+            if '頭数' in g:
+                field=pd.to_numeric(g['頭数'],errors='coerce')
+                valid &= field.isna()|f.le(field)
+            f=f.where(valid)
             complete=odds.notna().all() and f.notna().all()
             rows.append({'開催':venue,'項目':col,'条件':str(label) if pd.notna(label) else '不明','出走数':len(g),'結果判明数':int(f.notna().sum()),'3着内数':int(f.le(3).sum()),'3着内率':rate(g),'単勝回収率':float(odds.where(f.eq(1),0).sum()/len(g)*100) if complete else float('nan'),'複勝回収率':float('nan'),'信頼度':'参考' if len(g)>=10 else '小標本'})
     return pd.DataFrame(rows)
@@ -217,15 +223,16 @@ def match_historical_patterns(features, patterns, minimum=10, venue='京都'):
     conditions. Unknowns and sample-poor patterns never count as matches.
     """
     rows=[]
-    if patterns.empty:return pd.DataFrame()
+    required={'開催','項目','条件','出走数','結果判明数','3着内数','3着内率'}
+    if patterns.empty or not required.issubset(patterns):return pd.DataFrame()
     for label,column in [('前走','前走'),('脚質','脚質')]:
         value=features.get(column)
         if pd.isna(value) or value in ('不明',''):continue
         matches=patterns.loc[patterns['開催'].eq(venue) & patterns['項目'].eq(label)
-                             & patterns['条件'].eq(str(value)) & patterns['出走数'].ge(minimum)]
+                             & patterns['条件'].eq(str(value)) & patterns['結果判明数'].ge(minimum)]
         for _,r in matches.iterrows():
             if pd.isna(r['3着内率']):continue
-            rows.append({'条件':f'{label}：{value}','標本数':int(r['出走数']),
+            rows.append({'条件':f'{label}：{value}','標本数':int(r['結果判明数']),'対象出走数':int(r['出走数']),
                          '3着内数':int(r['3着内数']),'過去3着内率':float(r['3着内率']),
                          '位置付け':'探索的・条件の重複あり・予測確率ではない'})
     return pd.DataFrame(rows)

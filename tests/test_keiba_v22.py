@@ -26,7 +26,7 @@ class V22Test(unittest.TestCase):
 
     def test_pattern_match_excludes_hanshin_small_and_missing(self):
         patterns=pd.DataFrame([
-            {'開催':venue,'項目':'前走','条件':'前哨戦','出走数':n,'3着内数':3,'3着内率':30.0}
+            {'開催':venue,'項目':'前走','条件':'前哨戦','出走数':n,'結果判明数':n,'3着内数':3,'3着内率':30.0}
             for venue,n in [('京都',10),('阪神',50),('京都',2)]])
         matches=match_historical_patterns({'前走':'前哨戦','脚質':pd.NA},patterns)
         self.assertEqual(len(matches),1)

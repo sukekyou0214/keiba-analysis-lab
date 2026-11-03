@@ -78,6 +78,7 @@ def render_workspace(selected_section=None,embedded=False):
         configured_rid=parse_qs(urlparse(config.entry_url).query).get('race_id',[''])[0]
         if configured_rid==str(st.session_state.get('auto_race_id','')):
             st.session_state['main_target_context']=checked_context(configured_rid,{**vars(config),'source':'対象レースの設定'})
+            st.session_state['main_history_config']=vars(config)
     st.caption(f'{config.name} · {config.race_date} · {config.venue}{config.surface}{config.distance}m · 予定情報は変更があります')
     store=Store(); scope=config.historical_scope
     current_scope=config.current_scope
