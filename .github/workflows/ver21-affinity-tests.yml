@@ -21,4 +21,4 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_keiba_affinity*.py' -v
       - name: One-year public live-data smoke probe (diagnostic only)
         continue-on-error: true
-        run: PYTHONPATH=. python scripts/ver21_live_probe.py
+        run: PYTHONPATH=. KEIBA_LIVE_FULL=1 python scripts/ver21_live_probe.py
