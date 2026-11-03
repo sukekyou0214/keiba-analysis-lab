@@ -16,6 +16,7 @@ class PageSmokeTest(unittest.TestCase):
     def test_injected_verified_data_calculates_in_page(self):
         page = Path(__file__).resolve().parents[1] / "pages/2_過去レース相性_Ver21.py"
         app = AppTest.from_file(str(page), default_timeout=25).run()
+        app.selectbox[0].set_value("天皇賞・秋（過去検証用）").run()
         rid = "202505041111"
         horses = ("2020000001", "2020000002")
         target = pd.DataFrame([
@@ -68,7 +69,7 @@ class PageSmokeTest(unittest.TestCase):
         self.assertTrue(any("① 対象レースを取得" in x.label for x in app.expander))
         self.assertTrue(any("② 馬別戦績を取得・相性計算" in x.label for x in app.expander))
         self.assertTrue(any("③ 途中保存・ZIP復元" in x.label for x in app.expander))
-        self.assertTrue(any("id=0109" in x.value for x in app.text_input))
+        self.assertTrue(any("id=0117" in x.value for x in app.text_input))
         app.session_state["v21_target_results"] = pd.DataFrame([
             {"レースID": "202505041111", "馬ID": "2020000001"},
             {"レースID": "202505041111", "馬ID": "2020000002"},
@@ -79,6 +80,18 @@ class PageSmokeTest(unittest.TestCase):
         app.run()
         self.assertEqual(len(app.exception), 0)
         self.assertTrue(any("1/2頭" in m.value for m in app.metric))
+
+
+    def test_wrong_race_cannot_collect_or_calculate(self):
+        page = Path(__file__).resolve().parents[1] / "pages/2_過去レース相性_Ver21.py"
+        app = AppTest.from_file(str(page), default_timeout=25).run()
+        app.session_state["v21_target_results"] = pd.DataFrame([{
+            "レースID":"202505041111", "馬ID":"2020000001", "日付":"2025-11-02",
+            "レース名":"天皇賞（秋）", "馬名":"試験馬"}])
+        app.run()
+        self.assertEqual(len(app.exception),0)
+        for label in ["未取得の馬を20頭取得","全頭取得完了を検査して相性計算"]:
+            self.assertTrue(next(b for b in app.button if b.label==label).disabled)
 
     def test_existing_main_screen_starts_without_regression(self):
         path = Path(__file__).resolve().parents[1] / "app.py"

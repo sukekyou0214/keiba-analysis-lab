@@ -104,7 +104,16 @@ with st.expander("① 対象レースを取得", expanded=True):
 
 with st.expander("② 馬別戦績を取得・相性計算", expanded=True):
     st.caption("過去レース全頭の取得成功が前提です。重複取得を避けて最大20頭ずつ取得します。")
-    if st.button("未取得の馬を20頭取得", use_container_width=True):
+    from keiba_v22 import validate_scope
+    _scope_ok = True
+    _existing = st.session_state.get("v21_target_results")
+    if isinstance(_existing, pd.DataFrame) and not _existing.empty:
+        try:
+            validate_scope(_existing, special_url, int(current_start), int(current_end))
+        except ValueError:
+            _scope_ok = False
+            st.warning("別レース・別年度の保存データです。現在の対象では取得・計算できません。以前のデータはZIPで保存できます。")
+    if st.button("未取得の馬を20頭取得", use_container_width=True, disabled=not _scope_ok):
         from keiba_affinity_pipeline import collect_batch
         from keiba_core import get_results
         target_df = st.session_state.get("v21_target_results")
@@ -129,7 +138,7 @@ with st.expander("② 馬別戦績を取得・相性計算", expanded=True):
         with st.expander("馬別取得ログを表示"):
             st.dataframe(horse_log, hide_index=True, use_container_width=True)
         st.download_button("馬別取得ログCSV", to_csv_bytes(horse_log), "horse_acquisition.csv", mime="text/csv")
-    if st.button("全頭取得完了を検査して相性計算", use_container_width=True):
+    if st.button("全頭取得完了を検査して相性計算", use_container_width=True, disabled=not _scope_ok):
         from keiba_affinity_pipeline import complete_horse_manifest
         from keiba_core import convert_auto
         targets = st.session_state.get("v21_target_results")
@@ -162,7 +171,7 @@ with st.expander("② 馬別戦績を取得・相性計算", expanded=True):
             except Exception as error:
                 st.error(f"相性計算を中止しました：{error}")
     affinity_result = st.session_state.get("v21_affinity_result")
-    if affinity_result is not None:
+    if affinity_result is not None and _scope_ok:
         st.subheader("相性候補")
         if "v21_last_elapsed" in st.session_state:
             st.caption(f"前回の相性計算：{st.session_state['v21_last_elapsed']:.1f}秒 / 候補{len(affinity_result)}件")
@@ -215,6 +224,7 @@ with st.expander("③ 途中保存・ZIP復元"):
     if uploaded_checkpoint is not None and st.button("保存ZIPから復元", use_container_width=True):
         try:
             tables = load_checkpoint(uploaded_checkpoint.getvalue())
+            validate_scope(tables.get("targets", pd.DataFrame()), special_url, int(current_start), int(current_end))
             problems = audit_checkpoint(tables)
             if problems:
                 raise ValueError(" / ".join(problems))
