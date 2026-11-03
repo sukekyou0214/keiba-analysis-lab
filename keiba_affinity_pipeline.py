@@ -1,0 +1,32 @@
+"""Ver.21 bounded historical horse-result collection."""
+import time
+import pandas as pd
+
+
+def collect_batch(target, loader, completed=None, limit=20, delay=1.0, sleeper=time.sleep):
+    if not 1 <= limit <= 25 or not 0.5 <= delay <= 30:
+        raise ValueError("Invalid batch parameters")
+    if target.empty or not {"馬ID", "馬名"}.issubset(target):
+        raise ValueError("Target entrants required")
+    horses = target[["馬ID", "馬名"]].drop_duplicates("馬ID")
+    done = set(completed or [])
+    frames, log = [], []
+    for index, (_, horse) in enumerate(horses.iterrows()):
+        horse_id = str(horse["馬ID"])
+        if horse_id in done:
+            continue
+        if len(log) >= limit:
+            break
+        if log:
+            sleeper(delay)
+        try:
+            data = loader(horse_id, str(horse["馬名"]))
+            if not isinstance(data, pd.DataFrame) or data.empty:
+                raise ValueError("Empty result")
+            if "馬ID" not in data or not data["馬ID"].astype(str).eq(horse_id).all():
+                raise ValueError("Mismatched horse ID")
+            frames.append(data)
+            log.append({"horse_id": horse_id, "status": "成功", "rows": len(data), "reason": ""})
+        except Exception as exc:
+            log.append({"horse_id": horse_id, "status": "失敗", "rows": 0, "reason": str(exc)[:180]})
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(), pd.DataFrame(log)
