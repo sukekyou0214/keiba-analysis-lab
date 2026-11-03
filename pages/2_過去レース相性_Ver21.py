@@ -94,21 +94,21 @@ with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
             st.error("未取得・取得失敗の馬がいるため相性判定を中止しました。")
         else:
             try:
-                from keiba_affinity_adapter import normalize_legacy_results
-                from keiba_affinity import analyze_race_affinity
-                normalized_targets = normalize_legacy_results(targets)
-                normalized_history = normalize_legacy_results(convert_auto(history))
-                normalized_history = normalized_history.loc[~normalized_history["race_id"].isin(normalized_targets["race_id"])]
-                combined = pd.concat([normalized_targets, normalized_history], ignore_index=True)
-                if combined.duplicated(["race_id", "horse_id"]).any() or combined["race_date"].isna().any():
-                    raise ValueError("重複または日付欠損を検出しました")
-                affinity_result = analyze_race_affinity(normalized_targets, combined)
+                from keiba_affinity_workflow import analyze_verified_bundle
+                converted_history = convert_auto(history)
+                affinity_result, data_quality = analyze_verified_bundle(
+                    targets, target_log, converted_history, horse_log
+                )
                 st.session_state["v21_affinity_result"] = affinity_result
+                st.session_state["v21_data_quality"] = data_quality
             except Exception as error:
                 st.error(f"相性計算を中止しました：{error}")
     affinity_result = st.session_state.get("v21_affinity_result")
     if affinity_result is not None:
         st.dataframe(affinity_result, hide_index=True, use_container_width=True)
+        quality_frame = st.session_state.get("v21_data_quality")
+        if quality_frame is not None:
+            st.dataframe(quality_frame, hide_index=True, use_container_width=True)
         st.download_button("相性候補CSV", to_csv_bytes(affinity_result), "race_affinity.csv", mime="text/csv")
 
 
