@@ -38,6 +38,7 @@ def render_main_integration(menu):
         from keiba_workspace_ui import render_workspace
         with st.expander('対象レースの分析',expanded=True):
             render_workspace(sections[menu],embedded=True)
+            render_pace_enrichment()
 
 
 def bridge_main_dataset(config,state):
@@ -62,3 +63,50 @@ def bridge_main_dataset(config,state):
         logs.append({'horse_id':hid,'status':'成功' if n else '未取得','rows':n,
                      'reason':'本体内の戦績存在を確認（新規通信なし）' if n else '対象日前の戦績なし'})
     return {'targets':entries,'horse_raw':raw,'horse_log':pd.DataFrame(logs)}
+
+
+def recent_pace_ids(data,per_horse=5):
+    required={'馬ID','日付','レースID'}
+    if data.empty or not required.issubset(data):return []
+    frame=data.copy();frame['日付']=pd.to_datetime(frame['日付'],errors='coerce')
+    recent=frame.sort_values('日付',ascending=False).groupby('馬ID',sort=False).head(per_horse)
+    ids=recent['レースID'].fillna('').astype(str)
+    known=data.get('netkeibaペース',pd.Series('',index=data.index)).isin(['スロー寄り','ミドル寄り','ハイ寄り'])
+    done=set(data.loc[known,'レースID'].astype(str))
+    return [x for x in ids[ids.str.fullmatch(r'\d{12}')].drop_duplicates() if x not in done]
+
+
+def enrich_pace(data,loader,save,progress=lambda *args:None,sleeper=None):
+    """Serial, saved per result, no retry; stops on first unavailable source."""
+    import time
+    from keiba_core import apply_netkeiba_pace
+    sleeper=sleeper or time.sleep
+    out=data.copy();pending=recent_pace_ids(out);error=None
+    for n,rid in enumerate(pending,1):
+        sleeper(2)
+        try:
+            value=loader(rid)
+            if value not in ['スロー寄り','ミドル寄り','ハイ寄り']:raise ValueError('S/M/Hの明示判定を確認できません')
+            out=apply_netkeiba_pace(out,{rid:value})
+            save(out)
+            progress(n,len(pending))
+        except Exception as exc:
+            error=str(exc)[:180];break
+    return out,error
+
+
+def render_pace_enrichment():
+    import streamlit as st
+    data=st.session_state.get('auto_df')
+    if not isinstance(data,pd.DataFrame) or data.empty:return
+    pending=recent_pace_ids(data)
+    st.caption(f'本体の直近5走：S/M/H未取得 {len(pending)}レース（同一レースは1回だけ取得）')
+    if st.button('本体の不足データを補完：直近5走のS/M/H',disabled=not pending,key='main_enrich_pace'):
+        from keiba_core import get_netkeiba_pace,save_race_cache
+        bar=st.progress(0)
+        def save(frame):
+            save_race_cache(st.session_state['auto_race_id'],st.session_state['auto_horses'],frame)
+            st.session_state['auto_df']=frame
+        _,error=enrich_pace(data,get_netkeiba_pace,save,lambda n,total:bar.progress(n/total))
+        if error:st.warning('取得を停止しました。取得済み分は保存済みです：'+error)
+        else:st.success('本体のS/M/Hを補完しました。総合診断・ペース分析へ反映されます。')
