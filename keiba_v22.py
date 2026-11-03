@@ -83,7 +83,12 @@ def history_frame(raw):
     return d
 
 def rate(frame):
-    f=frame['着順_数値'].dropna()
+    f=pd.to_numeric(frame['着順_数値'],errors='coerce')
+    valid=f.ge(1)&f.mod(1).eq(0)
+    if '頭数' in frame:
+        field=pd.to_numeric(frame['頭数'],errors='coerce')
+        valid &= field.isna()|f.le(field)
+    f=f.loc[valid]
     return float(f.le(3).mean()*100) if len(f) else float('nan')
 
 def pre_features(h, cutoff, config=None):
@@ -101,8 +106,9 @@ def pre_features(h, cutoff, config=None):
     out['京都走数']=len(kyoto);out['京都複勝率']=rate(kyoto)
     k22=kyoto.loc[kyoto['距離_m'].eq(2200)]
     out['京都2200走数']=len(k22);out['京都2200複勝率']=rate(k22)
+    pace_base=h.loc[h['コース'].eq(config.surface if config else '芝')]
     for pace in ['S','M','H']:
-        sub=turf.loc[turf['ペース区分'].eq(pace)]
+        sub=pace_base.loc[pace_base['ペース区分'].eq(pace)]
         out[f'{pace}走数']=len(sub);out[f'{pace}複勝率']=rate(sub)
     venue=config.venue if config else '京都'
     distance=config.distance if config else 2200
@@ -154,6 +160,9 @@ def rank_entries(entries, raw, cutoff='2026-11-15', pace='M', config=None):
     """Transparent heuristic with evidence coverage; no fabricated model EV."""
     if config:cutoff=config.race_date
     h=history_frame(raw); rows=[]
+    if not h.empty and {'馬ID','レースID'}.issubset(h):
+        identified=h['レースID'].fillna('').astype(str).str.fullmatch(r'\d{12}')
+        h=pd.concat([h.loc[identified].drop_duplicates(['馬ID','レースID']),h.loc[~identified]],ignore_index=True)
     if not h.empty and h['日付'].isna().any(): raise ValueError('日付不明の戦績が含まれています')
     for _,e in entries.iterrows():
         mine=h.loc[h['馬ID'].astype(str).eq(str(e['馬ID']))] if not h.empty else h
@@ -162,20 +171,21 @@ def rank_entries(entries, raw, cutoff='2026-11-15', pace='M', config=None):
         f=pre_features(mine,cutoff,config)
         recent=mine.loc[mine['日付'].lt(pd.Timestamp(cutoff)) & mine['コース'].eq(config.surface if config else '芝')].sort_values('日付',ascending=False).head(5)
         # Finishing percentile is relative placing, not a speed or ability index.
-        valid=recent['着順_数値'].notna() & recent['頭数'].gt(1)
+        valid=recent['着順_数値'].ge(1) & recent['着順_数値'].le(recent['頭数']) & recent['着順_数値'].mod(1).eq(0) & recent['頭数'].gt(1)
         ability=((1-(recent.loc[valid,'着順_数値']-1)/(recent.loc[valid,'頭数']-1))*100).mean()
         components=[(ability,.4),(f['対象場距離複勝率'],.2),(f['対象距離複勝率'],.15),(f['対象場複勝率'],.1),(f[f'{pace}複勝率'],.15)]
         known=[(v,w) for v,w in components if pd.notna(v)]
         coverage=sum(w for _,w in known)
-        score=sum(v*w for v,w in known)/coverage if coverage>=.4 else float('nan')
-        rows.append({**e.to_dict(),**f,'近5走着順参考点':ability,'総合参考点':round(score,1) if pd.notna(score) else score,'評価項目充足率':round(coverage*100),'判定':'暫定・少数' if f['芝走数']<5 or coverage<.8 else '暫定','持続力':'ラップ未取得・判定保留','瞬発力':'上がり順位未取得・判定保留','消耗戦':'ラップ未取得・判定保留','好走パターン一致度':'研究データ検証待ち','妙味':'想定人気未取得・保留'})
+        score=sum(v*w for v,w in known)/coverage if coverage>=.6 and valid.sum()>=3 else float('nan')
+        rows.append({**e.to_dict(),**f,'近5走着順参考点':ability,'近5走有効数':int(valid.sum()),'総合参考点':round(score,1) if pd.notna(score) else score,'評価項目充足率':round(coverage*100),'判定':'順位保留・根拠不足' if pd.isna(score) else ('暫定・少数' if valid.sum()<5 or coverage<.8 else '暫定'),'持続力':'ラップ未取得・判定保留','瞬発力':'上がり順位未取得・判定保留','消耗戦':'ラップ未取得・判定保留','好走パターン一致度':'研究データ検証待ち','妙味':'想定人気未取得・保留'})
     d=pd.DataFrame(rows)
     if d.empty:return d
     d=d.sort_values('総合参考点',ascending=False,na_position='last').reset_index(drop=True)
     d['参考順位']=d['総合参考点'].rank(method='min',ascending=False).astype('Int64')
     if '想定人気' in d:
         pop=pd.to_numeric(d['想定人気'],errors='coerce')
-        mask=pop.between(4,9)&d['参考順位'].le(5)&d['評価項目充足率'].ge(80) if '評価項目充足率' in d else pd.Series(False,index=d.index)
+        d.loc[pop.ge(1),'妙味']='順位差による抽出対象外（期待値未検証）'
+        mask=pop.between(4,9)&d['参考順位'].le(5)&d['評価項目充足率'].ge(80)&d['近5走有効数'].ge(5) if '評価項目充足率' in d else pd.Series(False,index=d.index)
         d.loc[mask,'妙味']='中穴候補（参考順位差・期待値未検証）'
     return d
 
