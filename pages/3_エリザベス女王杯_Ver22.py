@@ -39,13 +39,25 @@ if choice in PRESETS:
     config=PRESETS[choice]
 else:
     with st.expander('対象レースの設定',expanded=True):
-        race_name=st.text_input('正式レース名（成績ページとの照合用）')
-        special=st.text_input('重賞特集URL')
         entry=st.text_input('出馬表URL（過去分析のみなら空欄可）')
-        day=st.date_input('対象開催日')
-        venue_input=st.selectbox('対象競馬場',list(VENUES.values()))
-        surface=st.selectbox('コース',['芝','ダ'])
-        distance=st.number_input('対象距離m',min_value=1000,max_value=4000,value=2000,step=100)
+        if st.button('URLからレース設定を読み取る',disabled=not entry):
+            try:
+                from keiba_race_metadata import fetch_metadata
+                from datetime import date
+                with st.spinner('出馬表の情報を確認中'):
+                    detected=fetch_metadata(entry)
+                mapping={'name':'custom_name','special_url':'custom_special','venue':'custom_venue','surface':'custom_surface','distance':'custom_distance'}
+                for field,key in mapping.items():
+                    if field in detected:st.session_state[key]=detected[field]
+                if 'race_date' in detected:st.session_state['custom_day']=date.fromisoformat(detected['race_date'])
+                st.success('読み取れた項目を入力しました。空欄と開催日は確認してください。')
+            except Exception as error:st.warning(f'自動入力を停止しました：{error}')
+        race_name=st.text_input('正式レース名（成績ページとの照合用）',key='custom_name')
+        special=st.text_input('重賞特集URL',key='custom_special')
+        day=st.date_input('対象開催日',key='custom_day')
+        venue_input=st.selectbox('対象競馬場',list(VENUES.values()),key='custom_venue')
+        surface=st.selectbox('コース',['芝','ダ'],key='custom_surface')
+        distance=st.number_input('対象距離m',min_value=1000,max_value=4000,value=2000,step=100,key='custom_distance')
         last=st.number_input('過去分析の最終年',min_value=2000,max_value=2099,value=2025)
         first=st.number_input('過去分析の開始年',min_value=2000,max_value=2099,value=2016)
     try:
