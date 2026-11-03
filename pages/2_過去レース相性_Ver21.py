@@ -56,6 +56,59 @@ with st.expander("過去10年の対象レース結果を自動取得（試験版
             )
     st.caption("このデータだけでは過去出走歴の相性は判定できません。各馬の過去戦績と結合する次工程が必要です。")
 
+    with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
+        st.caption("過去レース全頭の取得成功が前提です。重複取得を避けて最大20頭ずつ取得します。")
+        if st.button("未取得の馬を20頭取得", use_container_width=True):
+            from keiba_affinity_pipeline import collect_batch
+            from keiba_core import get_results
+            target_df = st.session_state.get("v21_target_results")
+            manifest_df = st.session_state.get("v21_acquisition_log")
+            if target_df is None or target_df.empty or manifest_df is None or not manifest_df["status"].eq("成功").all():
+                st.error("対象レースの全年度取得が完了していません。")
+            else:
+                previous_log = st.session_state.get("v21_horse_log", pd.DataFrame())
+                finished = set(previous_log.loc[previous_log["status"].eq("成功"), "horse_id"]) if not previous_log.empty else set()
+                with st.spinner("過去戦績を取得中"):
+                    new_raw, new_log = collect_batch(target_df, get_results, completed=finished)
+                if not new_log.empty:
+                    st.session_state["v21_horse_log"] = pd.concat([previous_log, new_log], ignore_index=True)
+                if not new_raw.empty:
+                    previous_raw = st.session_state.get("v21_horse_raw", pd.DataFrame())
+                    st.session_state["v21_horse_raw"] = pd.concat([previous_raw, new_raw], ignore_index=True)
+        horse_log = st.session_state.get("v21_horse_log")
+        if horse_log is not None and not horse_log.empty:
+            st.dataframe(horse_log, hide_index=True, use_container_width=True)
+            st.download_button("馬別取得ログCSV", to_csv_bytes(horse_log), "horse_acquisition.csv", mime="text/csv")
+        if st.button("全頭取得完了を検査して相性計算", use_container_width=True):
+            from keiba_affinity_pipeline import complete_horse_manifest
+            from keiba_core import convert_auto
+            targets = st.session_state.get("v21_target_results")
+            target_log = st.session_state.get("v21_acquisition_log")
+            history = st.session_state.get("v21_horse_raw")
+            if targets is None or target_log is None or history is None or horse_log is None:
+                st.error("必要な取得結果が不足しています。")
+            elif not target_log["status"].eq("成功").all() or not complete_horse_manifest(targets, horse_log):
+                st.error("未取得・取得失敗の馬がいるため相性判定を中止しました。")
+            else:
+                try:
+                    from keiba_affinity_adapter import normalize_legacy_results
+                    from keiba_affinity import analyze_race_affinity
+                    normalized_targets = normalize_legacy_results(targets)
+                    normalized_history = normalize_legacy_results(convert_auto(history))
+                    normalized_history = normalized_history.loc[~normalized_history["race_id"].isin(normalized_targets["race_id"])]
+                    combined = pd.concat([normalized_targets, normalized_history], ignore_index=True)
+                    if combined.duplicated(["race_id", "horse_id"]).any() or combined["race_date"].isna().any():
+                        raise ValueError("重複または日付欠損を検出しました")
+                    affinity_result = analyze_race_affinity(normalized_targets, combined)
+                    st.session_state["v21_affinity_result"] = affinity_result
+                except Exception as error:
+                    st.error(f"相性計算を中止しました：{error}")
+        affinity_result = st.session_state.get("v21_affinity_result")
+        if affinity_result is not None:
+            st.dataframe(affinity_result, hide_index=True, use_container_width=True)
+            st.download_button("相性候補CSV", to_csv_bytes(affinity_result), "race_affinity.csv", mime="text/csv")
+
+
 
 uploaded = st.file_uploader("保存した成績CSVを選択（複数ファイル可）", type=["csv"], accept_multiple_files=True)
 race_ids_raw = st.text_area(
