@@ -1,7 +1,7 @@
 """Offline tests for historical horse-result batches."""
 import unittest
 import pandas as pd
-from keiba_affinity_pipeline import collect_batch
+from keiba_affinity_pipeline import collect_batch, complete_horse_manifest
 
 
 class HistoryBatchTests(unittest.TestCase):
@@ -44,6 +44,17 @@ class HistoryBatchTests(unittest.TestCase):
         df, log = collect_batch(self.horses, fail, limit=1, sleeper=lambda _: None)
         self.assertTrue(df.empty)
         self.assertIn("Test failure", log.iloc[0]["reason"])
+
+    def test_complete_manifest(self):
+        logs = pd.DataFrame([
+            {"horse_id": horse_id, "status": "成功"}
+            for horse_id in self.horses["馬ID"]
+        ])
+        self.assertTrue(complete_horse_manifest(self.horses, logs))
+        self.assertFalse(complete_horse_manifest(self.horses, logs.head(2)))
+        failed = logs.copy()
+        failed.loc[0, "status"] = "失敗"
+        self.assertFalse(complete_horse_manifest(self.horses, failed))
 
     def test_rejects_unbounded(self):
         with self.assertRaises(ValueError):
