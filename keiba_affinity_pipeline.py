@@ -30,3 +30,15 @@ def collect_batch(target, loader, completed=None, limit=20, delay=1.0, sleeper=t
         except Exception as exc:
             log.append({"horse_id": horse_id, "status": "失敗", "rows": 0, "reason": str(exc)[:180]})
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(), pd.DataFrame(log)
+
+
+
+def complete_horse_manifest(target, logs):
+    """Require one successful acquisition record for every target horse."""
+    if logs.empty or not {"horse_id", "status"}.issubset(logs):
+        return False
+    if logs["horse_id"].duplicated().any():
+        return False
+    expected = set(target["馬ID"].astype(str))
+    observed = set(logs["horse_id"].astype(str))
+    return expected == observed and logs["status"].eq("成功").all()
