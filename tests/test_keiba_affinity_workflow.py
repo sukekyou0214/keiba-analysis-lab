@@ -52,6 +52,24 @@ class WorkflowTests(unittest.TestCase):
         )
         self.assertEqual(len(output), 2)
 
+    def test_unknown_overseas_race_id_is_reported_and_excluded(self):
+        t, tl, h, hl = sample()
+        overseas = pd.DataFrame([{
+            "レースID": "", "馬ID": "2020000001", "馬名": "甲",
+            "日付": "2023-04-01", "レース名": "香港C",
+            "着順_数値": 3, "人気": 4,
+        }, {
+            "レースID": "", "馬ID": "2020000001", "馬名": "甲",
+            "日付": "2022-04-01", "レース名": "海外G1",
+            "着順_数値": 5, "人気": 8,
+        }])
+        h = pd.concat([h, overseas], ignore_index=True)
+        output, quality = analyze_verified_bundle(t, tl, h, hl)
+        self.assertEqual(quality.loc[0, "excluded_unverifiable_history_rows"], 2)
+        self.assertEqual(quality.loc[0, "history_id_coverage"], "partial")
+        self.assertNotIn("香港C", output["race_name"].tolist())
+        self.assertNotIn("海外G1", output["race_name"].tolist())
+
     def test_missing_year_blocks(self):
         t, tl, h, hl = sample()
         tl.loc[0, "status"] = "失敗"
