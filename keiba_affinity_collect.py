@@ -165,7 +165,7 @@ def fetch_target_history(special_url: str, first_year: int, last_year: int,
     results, manifest = [], []
     for index, year in enumerate(range(first_year, last_year + 1)):
         entry = entries.get(year)
-        rid = entry[\"race_id\"] if entry else None
+        rid = entry["race_id"] if entry else None
         if rid is None:
             manifest.append({"year": year, "race_id": "", "status": "失敗",
                              "entrants": 0, "reason": "レースID未発見"})
