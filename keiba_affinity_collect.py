@@ -55,16 +55,15 @@ def discover_historical_ids(html: str, first_year: int, last_year: int) -> dict[
 
 
 def discover_historical_entries(html: str, first_year: int, last_year: int):
-    """Race IDs plus expected starter counts from the historical summary table."""
+    """Find IDs, advertised starters and dates from the special-page summary."""
     ids = discover_historical_ids(html, first_year, last_year)
     soup = BeautifulSoup(html, "html.parser")
     heading = next((h for h in soup.find_all(["h2", "h3", "h4"])
                     if "過去のレース結果" in h.get_text(" ", strip=True)), None)
     table = heading.find_next("table") if heading else None
-    counts = {}
+    details = {}
     for row in table.select("tr"):
         cells = row.find_all(["th", "td"], recursive=False)
-        # Typical special page columns: date, race, venue, distance, runners.
         if len(cells) < 5:
             continue
         for a in row.select('a[href*="/race/"]'):
@@ -72,12 +71,25 @@ def discover_historical_entries(html: str, first_year: int, last_year: int):
             if not hit:
                 continue
             rid = hit.group(1)
-            if rid != ids.get(int(rid[:4])):
+            year = int(rid[:4])
+            if rid != ids.get(year):
                 continue
-            number = re.fullmatch(r"\s*(\d{1,2})\s*", cells[4].get_text(" ", strip=True))
-            if number:
-                counts[int(rid[:4])] = int(number.group(1))
-    return {year: {"race_id": rid, "expected_entrants": counts.get(year)}
+            count = re.fullmatch(r"\s*(\d{1,2})\s*", cells[4].get_text(" ", strip=True))
+            date_text = cells[0].get_text(" ", strip=True)
+            date_match = re.search(r"(20\d{2})[/-](\d{1,2})[/-](\d{1,2})", date_text)
+            declared_date = None
+            if date_match:
+                try:
+                    declared_date = pd.Timestamp(*(int(x) for x in date_match.groups())).strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+            details[year] = {
+                "race_id": rid,
+                "expected_entrants": int(count.group(1)) if count else None,
+                "expected_date": declared_date,
+            }
+    return {year: details.get(year, {"race_id": rid, "expected_entrants": None,
+                                      "expected_date": None})
             for year, rid in ids.items()}
 
 
@@ -180,6 +192,11 @@ def fetch_target_history(special_url: str, first_year: int, last_year: int,
                 raise ValueError(f"{rid}: listed entrant count unavailable; cannot verify completeness")
             if expected != len(frame):
                 raise ValueError(f"{rid}: entrant count mismatch, listed={expected} extracted={len(frame)}")
+            expected_date = entry["expected_date"]
+            if expected_date is None:
+                raise ValueError(f"{rid}: historical race date unavailable in special table")
+            if frame["日付"].nunique() != 1 or frame["日付"].iloc[0] != expected_date:
+                raise ValueError(f"{rid}: race date disagrees with special table")
             results.append(frame)
             manifest.append({"year": year, "race_id": rid, "status": "成功",
                              "entrants": len(frame), "reason": ""})
