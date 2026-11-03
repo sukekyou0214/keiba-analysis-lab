@@ -35,6 +35,8 @@ with st.expander("過去10年の対象レース結果を自動取得（試験版
                 historical_df, acquisition_log = fetch_target_history(
                     special_url, int(current_start), int(current_end)
                 )
+            for cache_key in ("v21_horse_log", "v21_horse_raw", "v21_affinity_result"):
+                st.session_state.pop(cache_key, None)
             st.session_state["v21_target_results"] = historical_df
             st.session_state["v21_acquisition_log"] = acquisition_log
         except Exception as error:
