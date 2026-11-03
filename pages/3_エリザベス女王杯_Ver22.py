@@ -47,19 +47,29 @@ else:
                 with st.spinner('出馬表の情報を確認中'):
                     detected=fetch_metadata(entry)
                 mapping={'name':'custom_name','special_url':'custom_special','venue':'custom_venue','surface':'custom_surface','distance':'custom_distance'}
+                defaults={'name':'','special_url':'','venue':'札幌','surface':'芝','distance':2000}
                 for field,key in mapping.items():
-                    if field in detected:st.session_state[key]=detected[field]
-                if 'race_date' in detected:st.session_state['custom_day']=date.fromisoformat(detected['race_date'])
-                st.success('読み取れた項目を入力しました。空欄と開催日は確認してください。')
+                    st.session_state[key]=detected.get(field,defaults[field])
+                st.session_state['custom_day']=date.fromisoformat(detected['race_date']) if 'race_date' in detected else None
+                from keiba_race_metadata import metadata_fields
+                known,missing=metadata_fields(detected)
+                st.session_state['custom_read_summary']=(entry,known,missing)
+                st.success('ページで確認できた項目を入力しました。')
             except Exception as error:st.warning(f'自動入力を停止しました：{error}')
+        summary=st.session_state.get('custom_read_summary')
+        if summary and summary[0]==entry:
+            st.caption('ページで確認済み：'+'、'.join(summary[1]))
+            if summary[2]:st.warning('手入力で確認が必要：'+'、'.join(summary[2]))
         race_name=st.text_input('正式レース名（成績ページとの照合用）',key='custom_name')
         special=st.text_input('重賞特集URL',key='custom_special')
-        day=st.date_input('対象開催日',key='custom_day')
+        day=st.date_input('対象開催日',value=None,key='custom_day')
         venue_input=st.selectbox('対象競馬場',list(VENUES.values()),key='custom_venue')
         surface=st.selectbox('コース',['芝','ダ'],key='custom_surface')
         distance=st.number_input('対象距離m',min_value=1000,max_value=4000,value=2000,step=100,key='custom_distance')
         last=st.number_input('過去分析の最終年',min_value=2000,max_value=2099,value=2025)
         first=st.number_input('過去分析の開始年',min_value=2000,max_value=2099,value=2016)
+    if day is None:
+        st.info('対象開催日を入力してください');st.stop()
     try:
         config=RaceConfig(race_name,special,entry,str(day),venue_input,int(distance),surface,int(first),int(last))
     except ValueError as error:

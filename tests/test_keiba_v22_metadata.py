@@ -14,3 +14,12 @@ class MetadataTests(unittest.TestCase):
     def test_urls_are_restricted(self):
         for u in ['http://race.netkeiba.com/race/shutuba.html?race_id=202608050411','https://example.com/','https://race.netkeiba.com.evil.test/race/shutuba.html?race_id=202608050411']:
             with self.assertRaises(ValueError):validate_entry_url(u)
+
+    def test_selected_calendar_date_only(self):
+        h='<h1 class="RaceName">試験</h1><div class="RaceList_Date"><li class="Active"><a href="?kaisai_date=20261115">11/15</a></li><li><a href="?kaisai_date=20261116">11/16</a></li></div>'
+        self.assertEqual(parse_metadata(h,URL)['race_date'],'2026-11-15')
+    def test_coverage_reports_missing_not_default(self):
+        known,missing=metadata_fields({'name':'試験','distance':2200})
+        self.assertEqual(known,['レース名','距離'])
+        self.assertIn('開催日',missing)
+        self.assertIn('競馬場',missing)
