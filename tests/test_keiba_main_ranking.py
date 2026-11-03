@@ -96,6 +96,7 @@ class MainRankingTests(unittest.TestCase):
             a.run()
             self.assertEqual(len(a.exception),0)
             self.assertEqual(a.radio(key='main_evidence_kind_v22').value,'今回条件・前走')
+            self.assertTrue(any('対象開催日前の取得済み全戦績' in c.value for c in a.caption))
             a.radio(key='main_evidence_kind_v22').set_value('全頭参考順位（研究中）').run()
             self.assertEqual(len(a.exception),0)
             html='\n'.join(x.value for x in a.markdown)
