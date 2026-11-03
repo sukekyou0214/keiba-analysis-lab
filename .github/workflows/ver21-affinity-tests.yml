@@ -17,5 +17,5 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install "pandas>=2,<3" requests beautifulsoup4
-      - run: python -m compileall -q keiba_affinity.py keiba_affinity_adapter.py keiba_affinity_collect.py keiba_core.py 'pages/2_過去レース相性_Ver21.py' tests/test_keiba_affinity.py tests/test_keiba_affinity_adapter.py tests/test_keiba_affinity_collect.py
+      - run: python -m compileall -q keiba_affinity.py keiba_affinity_adapter.py keiba_affinity_collect.py keiba_affinity_pipeline.py keiba_core.py 'pages/2_過去レース相性_Ver21.py' tests/test_keiba_affinity.py tests/test_keiba_affinity_adapter.py tests/test_keiba_affinity_collect.py tests/test_keiba_affinity_pipeline.py
       - run: python -m unittest discover -s tests -p 'test_keiba_affinity*.py' -v
