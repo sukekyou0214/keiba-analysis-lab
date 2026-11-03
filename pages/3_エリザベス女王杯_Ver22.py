@@ -65,6 +65,29 @@ if mode=='総合診断':
         st.write('中穴候補：'+('、'.join(candidates['馬名']) if len(candidates) else '保留（想定人気・評価根拠が揃っていません）'))
         name=st.selectbox('馬ごとの根拠',ranking['馬名'])
         st.dataframe(ranking.loc[ranking['馬名'].eq(name)].T.rename(columns={ranking.index[ranking['馬名'].eq(name)][0]:'値'}),use_container_width=True)
+        # Show pre-race historical evidence without silently turning it into EV.
+        with st.expander('京都開催の過去傾向との照合'):
+            try:
+                from keiba_affinity_pipeline import complete_horse_manifest
+                from keiba_v22 import match_historical_patterns
+                historical_target=tables.get('targets',pd.DataFrame())
+                historical_raw=tables.get('horse_raw',pd.DataFrame())
+                target_manifest=tables.get('target_log',pd.DataFrame())
+                if (target_manifest.empty or len(target_manifest)!=10
+                        or not target_manifest['status'].eq('成功').all()
+                        or not complete_horse_manifest(historical_target,tables.get('horse_log',pd.DataFrame()),historical_raw)):
+                    raise ValueError('過去10年・全頭の取得完了後に照合できます')
+                past=historical_features(historical_target,historical_raw)
+                if set(pd.to_datetime(past['日付']).dt.year)!=set(range(2016,2026)):
+                    raise ValueError('過去10年の年度が揃っていません')
+                matched=match_historical_patterns(ranking.loc[ranking['馬名'].eq(name)].iloc[0],pattern_tables(past))
+                if matched.empty:
+                    st.info('前走・脚質で一致する10例以上の京都開催データはありません')
+                else:
+                    st.dataframe(matched,hide_index=True,use_container_width=True,column_config={'過去3着内率':st.column_config.NumberColumn(format='%.1f%%')})
+                    st.caption('同じ馬や条件が重複するため、率の加算・平均による勝率換算は行いません。京都開催のみを使用します。')
+            except ValueError as error:
+                st.info(str(error))
         st.download_button('全頭比較CSV',to_csv_bytes(ranking),'elizabeth_2026_ranking.csv')
     st.markdown('[既存の総合分析を開く](/)')
 elif mode=='詳細分析':

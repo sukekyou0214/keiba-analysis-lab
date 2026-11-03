@@ -24,6 +24,15 @@ class V22Test(unittest.TestCase):
             self.assertEqual(len(scoped['horse_log']),1)
             self.assertEqual(len(scoped['target_log']),1)
 
+    def test_pattern_match_excludes_hanshin_small_and_missing(self):
+        patterns=pd.DataFrame([
+            {'開催':venue,'項目':'前走','条件':'前哨戦','出走数':n,'3着内数':3,'3着内率':30.0}
+            for venue,n in [('京都',10),('阪神',50),('京都',2)]])
+        matches=match_historical_patterns({'前走':'前哨戦','脚質':pd.NA},patterns)
+        self.assertEqual(len(matches),1)
+        self.assertEqual(matches.iloc[0]['標本数'],10)
+        self.assertTrue(match_historical_patterns({'前走':pd.NA,'脚質':'不明'},patterns).empty)
+
     def test_scope_and_hanshin(self):
         t=self.target();validate_scope(t,ELIZABETH,2016,2025)
         t['レース名']='天皇賞（秋）'
