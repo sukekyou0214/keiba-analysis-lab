@@ -22,15 +22,3 @@ jobs:
       - name: 2025 one-race one-horse live smoke (diagnostic only)
         continue-on-error: true
         run: PYTHONPATH=. python scripts/ver21_live_probe.py
-      - name: One-time 2016-2025 all-horse live acceptance audit
-        continue-on-error: true
-        timeout-minutes: 15
-        run: PYTHONPATH=. python scripts/ver21_full_history_audit.py
-      - name: Preserve live audit evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ver21-ten-year-evidence
-          path: ver21-audit-output/
-          if-no-files-found: ignore
-          retention-days: 30
