@@ -43,7 +43,7 @@ class MainIntegrationTests(unittest.TestCase):
 
     def test_pace_dedup_and_stop_preserves_partial(self):
         from keiba_main_integration import enrich_pace,recent_pace_ids
-        d=pd.DataFrame([{'馬ID':str(h),'日付':'2026-10-01','レースID':rid} for h,rid in [(1,'202608010101'),(2,'202608010101'),(3,'202608010102')]])
+        d=pd.DataFrame([{'馬ID':str(h),'馬名':str(h),'着順_数値':2,'日付':'2026-10-01','レースID':rid} for h,rid in [(1,'202608010101'),(2,'202608010101'),(3,'202608010102')]])
         self.assertEqual(len(recent_pace_ids(d)),2)
         saved=[];calls=[]
         def loader(rid):
