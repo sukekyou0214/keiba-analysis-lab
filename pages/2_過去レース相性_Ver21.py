@@ -113,7 +113,8 @@ with st.expander("② 馬別戦績を取得・相性計算", expanded=True):
                 st.session_state["v21_horse_raw"] = pd.concat([previous_raw, new_raw], ignore_index=True)
     horse_log = st.session_state.get("v21_horse_log")
     if horse_log is not None and not horse_log.empty:
-        st.dataframe(horse_log, hide_index=True, use_container_width=True)
+        with st.expander("馬別取得ログを表示"):
+            st.dataframe(horse_log, hide_index=True, use_container_width=True)
         st.download_button("馬別取得ログCSV", to_csv_bytes(horse_log), "horse_acquisition.csv", mime="text/csv")
     if st.button("全頭取得完了を検査して相性計算", use_container_width=True):
         from keiba_affinity_pipeline import complete_horse_manifest
@@ -134,16 +135,24 @@ with st.expander("② 馬別戦績を取得・相性計算", expanded=True):
                     converted_history = history.copy()
                 else:
                     converted_history = convert_auto(history)
-                affinity_result, data_quality = analyze_verified_bundle(
-                    targets, target_log, converted_history, horse_log
-                )
+                import time
+                started = time.monotonic()
+                with st.spinner("相性を計算中です。結果が出るまで画面を閉じずにお待ちください"):
+                    affinity_result, data_quality = analyze_verified_bundle(
+                        targets, target_log, converted_history, horse_log
+                    )
+                elapsed = time.monotonic() - started
                 st.session_state["v21_affinity_result"] = affinity_result
                 st.session_state["v21_data_quality"] = data_quality
+                st.session_state["v21_last_elapsed"] = elapsed
+                st.success(f"相性計算が完了しました（{elapsed:.1f}秒、候補{len(affinity_result)}件）。結果はこの下に表示されます。")
             except Exception as error:
                 st.error(f"相性計算を中止しました：{error}")
     affinity_result = st.session_state.get("v21_affinity_result")
     if affinity_result is not None:
         st.subheader("相性候補")
+        if "v21_last_elapsed" in st.session_state:
+            st.caption(f"前回の相性計算：{st.session_state['v21_last_elapsed']:.1f}秒 / 候補{len(affinity_result)}件")
         if affinity_result.empty:
             st.info("条件を満たす候補がありません。データ品質を確認してください。")
         else:
