@@ -19,6 +19,6 @@ jobs:
       - run: python -m pip install "pandas>=2,<3" requests beautifulsoup4 streamlit
       - run: python -m compileall -q keiba_affinity.py keiba_affinity_adapter.py keiba_affinity_collect.py keiba_affinity_pipeline.py keiba_affinity_store.py keiba_affinity_workflow.py keiba_core.py 'pages/2_過去レース相性_Ver21.py' tests/test_keiba_affinity.py tests/test_keiba_affinity_adapter.py tests/test_keiba_affinity_collect.py tests/test_keiba_affinity_pipeline.py tests/test_keiba_affinity_store.py tests/test_keiba_affinity_streamlit.py tests/test_keiba_affinity_workflow.py
       - run: python -m unittest discover -s tests -p 'test_keiba_affinity*.py' -v
-      - name: One-year public live-data smoke probe (diagnostic only)
+      - name: 2025 race and one-horse live-data probe (diagnostic only)
         continue-on-error: true
-        run: PYTHONPATH=. KEIBA_LIVE_FULL=1 python scripts/ver21_live_probe.py
+        run: PYTHONPATH=. python scripts/ver21_live_probe.py
