@@ -1847,29 +1847,9 @@ def venue_name(value):
 
 
 def convert_auto(raw):
-    data = raw.copy()
-    required = ['距離', '馬 場', '開催', '着 順', '上り', '通過', '日付']
-    missing = [c for c in required if c not in data.columns]
-    if missing:
-        raise ValueError('取得データに必要な列がありません: ' + '、'.join(missing))
-    dist = data['距離'].astype(str)
-    data['距離_m'] = pd.to_numeric(dist.str.extract(r'(\d{3,4})')[0], errors='coerce')
-    data['コース'] = dist.str.extract(r'(芝|ダ|障)')[0]
-    data['馬場状態'] = data['馬 場'].astype(str).str.strip()
-    data['競馬場'] = data['開催'].apply(venue_name)
-    data['着順_数値'] = pd.to_numeric(data['着 順'], errors='coerce')
-    data['上がり3F_秒'] = pd.to_numeric(data['上り'], errors='coerce')
-    data['通過順'] = data['通過'].fillna('').astype(str)
-    data['4角順位'] = pd.to_numeric(data['通過'].astype(str).str.extract(r'(\d+)\s*$')[0], errors='coerce')
-    data['上がり順位'] = float('nan')
-    data['日付'] = pd.to_datetime(data['日付'], errors='coerce')
-    data['頭数'] = pd.to_numeric(data.get('頭 数'), errors='coerce')
-    # netkeibaの「ペース」は前半3F-後半3Fの表記。距離差があるため目安として扱う。
-    pace_pair = data['ペース'].astype(str).str.extract(r'(\d{2}\.\d)\s*[-－ー〜～]\s*(\d{2}\.\d)') if 'ペース' in data.columns else pd.DataFrame(index=data.index, columns=[0, 1])
-    data['前半3F'] = pd.to_numeric(pace_pair[0], errors='coerce')
-    data['後半3F'] = pd.to_numeric(pace_pair[1], errors='coerce')
-    data['前後半3F差'] = data['前半3F'] - data['後半3F']
-    return data[['馬名', '馬ID', 'レースID', '日付', '競馬場', 'コース', '距離_m', '馬場状態', '着順_数値', '4角順位', '上がり3F_秒', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差', 'レース名', '格付け根拠', 'レース格', '通過順']].copy()
+    # 本体と共通分析で同じ変換を使い、着差・人気の取りこぼしを防ぐ。
+    from keiba_core import convert_auto as convert_source_results
+    return convert_source_results(raw)
 
 
 def prepare(data):
@@ -2450,7 +2430,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
     main_holder208 = st.empty()
     with main_holder208.container():
         st.subheader('ペース予測・対応馬' if selected_page208 == '🌊 ペース分析' else '出走馬の総合診断')
-        st.caption('集計条件：各馬の直近10走に含まれるG1・G2・G3。条件変更は「分析条件」へ。')
+        st.caption('集計条件：対象開催日前の取得済み全戦績。同じコース種別で開催場・距離を照合します。' if st.session_state.get('main_evidence_kind_v22','今回条件・前走') == '今回条件・前走' else '集計条件：各馬の直近10走に含まれるG1・G2・G3。')
         quick171 = analysis_df.copy()
         if '日付' in quick171.columns:
             quick171 = quick171.sort_values('日付', ascending=False, na_position='last', kind='stable')
@@ -2482,6 +2462,8 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             quick_lapped171 = quick_lapped171.drop_duplicates(['馬名','_quick_rid171'])
         quick_names171 = list(dict.fromkeys(list(horses.values()) if horses else []))
         quick_names171 += [nm for nm in quick171['馬名'].dropna().unique() if nm not in quick_names171]
+        from keiba_main_conditions import main_context, condition_evidence
+        context22 = main_context(quick_race171, st.session_state)
         records171 = []
         for name171 in quick_names171:
             allhorse171 = quick171.loc[quick171['馬名'].eq(name171)]
@@ -2505,6 +2487,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             from keiba_diagnosis_evidence import summarize_source_pace, summarize_lap_results
             diag171['ペース別3着内'] = summarize_source_pace(allhorse171)
             diag171['ラップ別3着内'] = summarize_lap_results(allhorse171, quick_shapes171)
+            diag171.update(condition_evidence(analysis_df.loc[analysis_df['馬名'].eq(name171)], context22))
             diag171['馬名'] = name171
             diag171['ラップ確認走数'] = len(lapgroup171)
             records171.append(diag171)
@@ -2514,13 +2497,17 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             if selected_page208 == '🏇 総合診断':
                 st.markdown('#### 全馬の特徴を比較')
                 st.caption('過去走から分かる走り方・好走展開の比較。能力順位や今回の勝率ではありません。')
-                evidence_kind22 = st.radio('比較する実績', ['S/M/H別', '200mラップ別'], horizontal=True, key='main_evidence_kind_v22')
+                evidence_kind22 = st.radio('比較する実績', ['今回条件・前走', 'S/M/H別', '200mラップ別'], horizontal=True, key='main_evidence_kind_v22')
                 evidence_col22 = 'ペース別3着内' if evidence_kind22 == 'S/M/H別' else 'ラップ別3着内'
+                compare_cols22 = ['馬名','今回条件実績','前走内容'] if evidence_kind22 == '今回条件・前走' else ['馬名','走りの総合診断',evidence_col22,'信頼度','好走走数']
                 fixed_order_table_v209(
-                    quick_display171, ['馬名','走りの総合診断',evidence_col22,'信頼度','好走走数'],
+                    quick_display171, compare_cols22,
                     {'馬名':'馬番＋正式馬名','走りの総合診断':'強み・走り方',
-                     'ペース別3着内':'ペース別3着内','ラップ別3着内':'ラップ別3着内','信頼度':'根拠の信頼度','好走走数':'好走走数'})
-                st.caption('S＝スロー、M＝ミドル、H＝ハイ。数字は3着内走数／着順とペース確認済み走数。未取得は集計から除外。少数例のため適性や勝率を断定しません。')
+                     'ペース別3着内':'ペース別3着内','ラップ別3着内':'ラップ別3着内','今回条件実績':'今回条件の3着内実績','前走内容':'前走内容','信頼度':'根拠の信頼度','好走走数':'好走走数'})
+                if evidence_kind22 == '今回条件・前走':
+                    st.caption('数字＝3着内走数／着順確認済み走数。—＝取得済み戦績に有効例なし。未経験や適性なしとは断定しません。同場同距離・同距離・同場の件数は重複します。着差と上がりの欠損は補いません。')
+                elif evidence_kind22 == 'S/M/H別':
+                    st.caption('S＝スロー、M＝ミドル、H＝ハイ。数字は3着内走数／着順とペース確認済み走数。未取得は集計から除外。少数例のため適性や勝率を断定しません。')
                 if evidence_kind22 == '200mラップ別':
                     st.caption('瞬＝瞬発戦、持＝ロングスパート戦、消＝消耗戦、混＝混合・判定保留。3着内走数／ラップ検証済み走数。レース全体の独自分類で、馬自身の個別ラップや将来の好走確率ではありません。')
                 st.caption('信頼度は走り方のデータ充実度の目安で、ペース適性や予測的中率ではありません。')

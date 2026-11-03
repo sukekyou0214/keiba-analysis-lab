@@ -34,6 +34,8 @@ def render_main_integration(menu):
     if isinstance(main_data,pd.DataFrame) and not main_data.empty and main_rid and main_rid!=st.session_state.get('evidence_active_main_rid'):
         st.session_state['main_shared_evidence']=True
         st.session_state['evidence_active_main_rid']=main_rid
+    from keiba_main_conditions import render_condition_context
+    render_condition_context()
     if st.checkbox('対象レースの過去傾向・適性・取得設定を開く',key='main_shared_evidence'):
         from keiba_workspace_ui import render_workspace
         with st.expander('対象レースの分析',expanded=True):
