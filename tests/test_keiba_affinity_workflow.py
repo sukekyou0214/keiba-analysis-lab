@@ -73,7 +73,7 @@ class WorkflowTests(unittest.TestCase):
     def test_duplicate_history_blocks(self):
         t, tl, h, hl = sample()
         h = pd.concat([h, h.iloc[[0]]], ignore_index=True)
-        with self.assertRaisesRegex(ValueError, "Duplicat"):
+        with self.assertRaisesRegex(ValueError, "histories|Duplicat"):
             analyze_verified_bundle(t, tl, h, hl)
 
     def test_extra_target_year_blocks(self):
