@@ -35,7 +35,15 @@ def render_workspace(selected_section=None,embedded=False):
                 st.error('パスワードを確認してください')
         st.stop()
     from keiba_race_config import PRESETS, RaceConfig, VENUES
-    choice=st.selectbox('対象レース',list(PRESETS)+['その他（設定して利用）'])
+    if embedded:
+        current_rid=str(st.session_state.get('auto_race_id',''))
+        if current_rid and current_rid!=st.session_state.get('shared_last_main_rid'):
+            from urllib.parse import parse_qs,urlparse
+            for label,preset in PRESETS.items():
+                if parse_qs(urlparse(preset.entry_url).query).get('race_id',[''])[0]==current_rid:
+                    st.session_state['common_race_choice']=label
+            st.session_state['shared_last_main_rid']=current_rid
+    choice=st.selectbox('対象レース',list(PRESETS)+['その他（設定して利用）'],key='common_race_choice')
     if choice in PRESETS:
         config=PRESETS[choice]
     else:
@@ -91,6 +99,23 @@ def render_workspace(selected_section=None,embedded=False):
             if legacy:
                 st.session_state[current_key]=legacy
                 store.save(current_scope,legacy)
+    if embedded:
+        from keiba_main_integration import bridge_main_dataset
+        try:
+            inherited=bridge_main_dataset(config,st.session_state)
+            if inherited is not None:
+                previous=st.session_state[current_key]
+                # Preserve tentative jockey/popularity only for verified same IDs/source.
+                old=previous.get('targets',pd.DataFrame())
+                if not old.empty and '取得元' in old and old['取得元'].eq(config.entry_url).all():
+                    for column in ['想定人気','予定騎手']:
+                        if column in old:
+                            inherited['targets'][column]=inherited['targets']['馬ID'].map(old.drop_duplicates('馬ID').set_index('馬ID')[column])
+                st.session_state[current_key]=inherited
+                st.caption(f'本体で読込済みの{len(inherited["targets"])}頭・{len(inherited["horse_raw"])}走を使用しています（再取得なし）。')
+        except ValueError as error:
+            st.warning(f'本体データの引継ぎを停止：{error}')
+            return
     tables=st.session_state[historical_key]; current=st.session_state[current_key]
     if tables.get('targets',pd.DataFrame()).shape[0]:
         try:config.validate_targets(tables['targets'])
