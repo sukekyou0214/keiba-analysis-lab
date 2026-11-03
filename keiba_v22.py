@@ -13,7 +13,7 @@ def scope_key(url, start=2016, end=2025):
     from keiba_affinity_collect import validate_special_url
     from urllib.parse import parse_qs, urlparse
     validate_special_url(url)
-    if not 2000 <= int(start) <= int(end) <= 2025:
+    if not 2000 <= int(start) <= int(end) <= 2099:
         raise ValueError('Invalid historical years')
     return f"special-{int(parse_qs(urlparse(url).query)['id'][0])}-{int(start)}-{int(end)}"
 
@@ -86,7 +86,7 @@ def rate(frame):
     f=frame['着順_数値'].dropna()
     return float(f.le(3).mean()*100) if len(f) else float('nan')
 
-def pre_features(h, cutoff):
+def pre_features(h, cutoff, config=None):
     h=h.loc[h['日付'].lt(pd.Timestamp(cutoff))].sort_values('日付',ascending=False)
     if h['日付'].isna().any(): raise ValueError('日付不明')
     turf=h.loc[h['コース'].eq('芝')]
@@ -104,19 +104,26 @@ def pre_features(h, cutoff):
     for pace in ['S','M','H']:
         sub=turf.loc[turf['ペース区分'].eq(pace)]
         out[f'{pace}走数']=len(sub);out[f'{pace}複勝率']=rate(sub)
+    venue=config.venue if config else '京都'
+    distance=config.distance if config else 2200
+    surface=config.surface if config else '芝'
+    selected=h.loc[h['コース'].eq(surface)]
+    for label,sub in [('対象場',selected.loc[selected['競馬場'].eq(venue)]),('対象距離',selected.loc[selected['距離_m'].eq(distance)]),('対象場距離',selected.loc[selected['競馬場'].eq(venue)&selected['距離_m'].eq(distance)])]:
+        out[label+'走数']=len(sub);out[label+'複勝率']=rate(sub)
     return out
 
-def historical_features(targets, raw):
-    validate_scope(targets,ELIZABETH,2016,2025)
+def historical_features(targets, raw, config=None):
+    if config:config.validate_targets(targets)
+    else:validate_scope(targets,ELIZABETH,2016,2025)
     h=history_frame(raw)
     if h.empty: raise ValueError('馬別戦績が未取得です')
     if h['日付'].isna().any(): raise ValueError('日付不明の戦績があり、前走を保証できません')
     rows=[]
     for _,r in targets.iterrows():
         prior=h.loc[h['馬ID'].astype(str).eq(str(r['馬ID']))]
-        f=pre_features(prior,r['日付'])
+        f=pre_features(prior,r['日付'],config)
         rid=str(r['レースID'])
-        rows.append({**r.to_dict(),**f,'開催区分':'阪神' if rid[4:6]=='09' else '京都'})
+        rows.append({**r.to_dict(),**f,'開催区分':__import__('keiba_race_config').VENUES.get(rid[4:6],'不明')})
     return pd.DataFrame(rows)
 
 def pattern_tables(features):
@@ -143,20 +150,21 @@ def pattern_tables(features):
             rows.append({'開催':venue,'項目':col,'条件':str(label) if pd.notna(label) else '不明','出走数':len(g),'結果判明数':int(f.notna().sum()),'3着内数':int(f.le(3).sum()),'3着内率':rate(g),'単勝回収率':float(odds.where(f.eq(1),0).sum()/len(g)*100) if complete else float('nan'),'複勝回収率':float('nan'),'信頼度':'参考' if len(g)>=10 else '小標本'})
     return pd.DataFrame(rows)
 
-def rank_entries(entries, raw, cutoff='2026-11-15', pace='M'):
+def rank_entries(entries, raw, cutoff='2026-11-15', pace='M', config=None):
     """Transparent heuristic with evidence coverage; no fabricated model EV."""
+    if config:cutoff=config.race_date
     h=history_frame(raw); rows=[]
     if not h.empty and h['日付'].isna().any(): raise ValueError('日付不明の戦績が含まれています')
     for _,e in entries.iterrows():
         mine=h.loc[h['馬ID'].astype(str).eq(str(e['馬ID']))] if not h.empty else h
         if mine.empty:
             rows.append({**e.to_dict(),'総合参考点':float('nan'),'判定':'戦績未取得','妙味':'保留'});continue
-        f=pre_features(mine,cutoff)
-        recent=mine.loc[mine['日付'].lt(pd.Timestamp(cutoff)) & mine['コース'].eq('芝')].sort_values('日付',ascending=False).head(5)
+        f=pre_features(mine,cutoff,config)
+        recent=mine.loc[mine['日付'].lt(pd.Timestamp(cutoff)) & mine['コース'].eq(config.surface if config else '芝')].sort_values('日付',ascending=False).head(5)
         # Finishing percentile is relative placing, not a speed or ability index.
         valid=recent['着順_数値'].notna() & recent['頭数'].gt(1)
         ability=((1-(recent.loc[valid,'着順_数値']-1)/(recent.loc[valid,'頭数']-1))*100).mean()
-        components=[(ability,.4),(f['京都2200複勝率'],.2),(f['2200m複勝率'],.15),(f['京都複勝率'],.1),(f[f'{pace}複勝率'],.15)]
+        components=[(ability,.4),(f['対象場距離複勝率'],.2),(f['対象距離複勝率'],.15),(f['対象場複勝率'],.1),(f[f'{pace}複勝率'],.15)]
         known=[(v,w) for v,w in components if pd.notna(v)]
         coverage=sum(w for _,w in known)
         score=sum(v*w for v,w in known)/coverage if coverage>=.4 else float('nan')
@@ -172,13 +180,15 @@ def rank_entries(entries, raw, cutoff='2026-11-15', pace='M'):
     return d
 
 
-def venue_bundle(tables, venue):
+def venue_bundle(tables, venue, config=None):
     """Scope all four verified inputs together; never reuse combined affinity."""
-    if venue not in {'京都','阪神'}:
+    from keiba_race_config import VENUES
+    if venue not in VENUES.values():
         raise ValueError('開催場は京都または阪神です')
     target=tables['targets']
-    validate_scope(target,ELIZABETH,2016,2025)
-    code='08' if venue=='京都' else '09'
+    if config:config.validate_targets(target)
+    else:validate_scope(target,ELIZABETH,2016,2025)
+    code=next(k for k,v in VENUES.items() if v==venue)
     target=target.loc[target['レースID'].astype(str).str[4:6].eq(code)].copy()
     if target.empty:raise ValueError('選択した開催場のデータがありません')
     races=set(target['レースID'].astype(str));horses=set(target['馬ID'].astype(str))
@@ -190,7 +200,7 @@ def venue_bundle(tables, venue):
     }
 
 
-def match_historical_patterns(features, patterns, minimum=10):
+def match_historical_patterns(features, patterns, minimum=10, venue='京都'):
     """Descriptive matches only: Kyoto cohorts; no target outcome in predictors.
 
     Matching is not a fitted model or independent evidence across overlapping
@@ -201,7 +211,7 @@ def match_historical_patterns(features, patterns, minimum=10):
     for label,column in [('前走','前走'),('脚質','脚質')]:
         value=features.get(column)
         if pd.isna(value) or value in ('不明',''):continue
-        matches=patterns.loc[patterns['開催'].eq('京都') & patterns['項目'].eq(label)
+        matches=patterns.loc[patterns['開催'].eq(venue) & patterns['項目'].eq(label)
                              & patterns['条件'].eq(str(value)) & patterns['出走数'].ge(minimum)]
         for _,r in matches.iterrows():
             if pd.isna(r['3着内率']):continue
