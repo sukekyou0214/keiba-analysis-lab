@@ -10,6 +10,10 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 
+# Apply the shared acquisition only before the original input widget is created.
+_pending_bridge=st.session_state.pop('pending_main_bridge',None)
+if _pending_bridge:
+    st.session_state.update(_pending_bridge)
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
 st.markdown('### 🏇 競馬分析ラボ Ver.20.18.0')
@@ -2366,6 +2370,10 @@ if selected_page208 == '🧰 管理・検証':
 else:
     st.caption('左上の ☰ から画面を切り替えられます。')
 
+
+# Shared race evidence lives inside the original main screen and menu.
+from keiba_main_integration import render_main_integration
+render_main_integration(selected_page208)
 
 horses = st.session_state.auto_horses
 # バックアップの注意書きはデータ管理を開いたときだけ案内。
