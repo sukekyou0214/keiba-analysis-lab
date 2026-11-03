@@ -16,16 +16,46 @@ from keiba_affinity import to_csv_bytes
 from keiba_affinity_adapter import analyze_legacy_csv
 
 st.set_page_config(page_title="Ver.21 過去レース相性", page_icon="📊", layout="centered")
-st.title("過去レース相性分析｜Ver.21 試験版")
-st.caption("既存の総合診断は変更しません。過去の対象レース全出走馬の成績CSVを使って検証します。")
-st.warning("試験版：対象レースの出走頭数・開催日を取得元と照合します。未取得年度やID不明の海外戦績は分析の制限事項です。相性候補は予測的中を保証しません。")
+st.markdown("""
+<style>
+/* Keep the mobile header and acquisition controls readable without zooming. */
+.block-container {padding-top: 1rem; padding-bottom: 2rem;}
+h1 {font-size: clamp(1.45rem, 5vw, 2rem) !important; line-height: 1.25 !important;}
+h2, h3 {font-size: 1.15rem !important;}
+div[data-testid="stAlert"] {font-size: .9rem;}
+div[data-testid="stMetricValue"] {font-size: 1.35rem;}
+</style>
+""", unsafe_allow_html=True)
+st.title("過去レース相性分析")
+st.caption("Ver.21 試験版 · 過去の出走歴と好走傾向を検証")
+st.info("使い方：①対象レースを取得 → ②馬別戦績を20頭ずつ取得 → ③相性を計算。取得途中はZIPで保存できます。")
+st.caption("注意：結果は探索的な相性候補です。IDを確認できない海外戦績は除外し、予測精度は保証しません。")
+
+# Show progress before the long acquisition controls on narrow iPhone screens.
+_progress_targets = st.session_state.get("v21_target_results")
+_progress_log = st.session_state.get("v21_horse_log")
+if isinstance(_progress_targets, pd.DataFrame) and not _progress_targets.empty:
+    _total_horses = int(_progress_targets["馬ID"].astype(str).nunique())
+    _done_horses = (int(_progress_log.loc[
+        _progress_log["status"].eq("成功"), "horse_id"
+    ].astype(str).nunique()) if isinstance(_progress_log, pd.DataFrame)
+        and not _progress_log.empty else 0)
+    _done_horses = min(_done_horses, _total_horses)
+    a, b = st.columns(2)
+    a.metric("対象レース出走", f"{len(_progress_targets)}件")
+    b.metric("馬別戦績取得", f"{_done_horses}/{_total_horses}頭")
+    st.progress(_done_horses / _total_horses)
+    if _done_horses < _total_horses:
+        st.caption("②を繰り返して全頭取得してください。途中でも③のZIP保存が使えます。")
+    else:
+        st.success("馬別戦績の取得が揃いました。②内の相性計算へ進んでください。")
 from keiba_affinity_collect import fetch_target_history
 
-with st.expander("過去10年の対象レース結果を自動取得（試験版）"):
+with st.expander("① 対象レースを取得", expanded=True):
     st.caption("netkeibaの重賞特集ページを指定します。まずは10レースまで。取得先の利用条件・アクセス制限を守って利用してください。")
     special_url = st.text_input(
         "netkeiba重賞特集ページ",
-        placeholder="https://race.netkeiba.com/special/index.html?id=0109",
+        value="https://race.netkeiba.com/special/index.html?id=0109",
         key="v21_special_url",
     )
     current_start = st.number_input("取得開始年", min_value=2000, max_value=2025, value=2016, step=1)
@@ -57,9 +87,9 @@ with st.expander("過去10年の対象レース結果を自動取得（試験版
                 "historical_target_results.csv", mime="text/csv",
                 use_container_width=True,
             )
-    st.caption("このデータだけでは過去出走歴の相性は判定できません。各馬の過去戦績と結合する次工程が必要です。")
+    st.caption("対象レース取得後、②で各馬の過去戦績を取得してください。")
 
-with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
+with st.expander("② 馬別戦績を取得・相性計算", expanded=True):
     st.caption("過去レース全頭の取得成功が前提です。重複取得を避けて最大20頭ずつ取得します。")
     if st.button("未取得の馬を20頭取得", use_container_width=True):
         from keiba_affinity_pipeline import collect_batch
@@ -113,7 +143,22 @@ with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
                 st.error(f"相性計算を中止しました：{error}")
     affinity_result = st.session_state.get("v21_affinity_result")
     if affinity_result is not None:
-        st.dataframe(affinity_result, hide_index=True, use_container_width=True)
+        st.subheader("相性候補")
+        if affinity_result.empty:
+            st.info("条件を満たす候補がありません。データ品質を確認してください。")
+        else:
+            _view = affinity_result.copy()
+            _view["3着内率"] = (_view["place_rate"] * 100).round(1)
+            _view["比較群3着内率"] = (_view["comparison_place_rate"] * 100).round(1)
+            _view["比較差（pt）"] = (_view["adjusted_place_difference"] * 100).round(1)
+            _view = _view.rename(columns={
+                "race_name": "過去レース", "n": "経験馬数",
+                "places": "3着内頭数", "confidence": "判定",
+            })
+            _view = _view[["過去レース", "経験馬数", "3着内頭数", "3着内率",
+                            "比較群3着内率", "比較差（pt）", "判定"]]
+            st.dataframe(_view, hide_index=True, use_container_width=True)
+            st.caption("比較差は同じ対象レース・人気帯の比較に基づく参考値。小標本は判定保留です。")
         quality_frame = st.session_state.get("v21_data_quality")
         if quality_frame is not None:
             st.dataframe(quality_frame, hide_index=True, use_container_width=True)
@@ -122,7 +167,7 @@ with st.expander("各馬の過去戦績を追加取得（20頭ずつ）"):
 
 
 
-with st.expander("データをまとめて保存・復元"):
+with st.expander("③ 途中保存・ZIP復元"):
     from keiba_affinity_store import pack_checkpoint, load_checkpoint, audit_checkpoint
     checkpoint_keys = {
         "targets": "v21_target_results",
@@ -161,52 +206,53 @@ with st.expander("データをまとめて保存・復元"):
     st.caption("ZIPはiPhoneに保存してください。Streamlitのセッションだけでは永続保存されません。")
 
 
-uploaded = st.file_uploader("保存した成績CSVを選択（複数ファイル可）", type=["csv"], accept_multiple_files=True)
-race_ids_raw = st.text_area(
+with st.expander("上級者向け：手持ちのCSVから分析"):
+    uploaded = st.file_uploader("保存した成績CSVを選択（複数ファイル可）", type=["csv"], accept_multiple_files=True)
+    race_ids_raw = st.text_area(
     "過去の対象レースID（12桁、改行またはカンマ区切り）",
     placeholder="例：202505041111\n202405041111",
     height=95,
 )
-if st.button("過去レース相性を計算", type="primary", use_container_width=True):
-    if not uploaded:
-        st.error("CSVファイルを選択してください。")
-    else:
-        try:
-            frames = []
-            for upload in uploaded:
-                payload = upload.getvalue()
-                parsed = None
-                for enc in ("utf-8-sig", "cp932", "utf-8"):
-                    try:
-                        parsed = pd.read_csv(
-                            io.BytesIO(payload), encoding=enc,
-                            dtype={"馬ID": "string", "レースID": "string", "horse_id": "string", "race_id": "string"},
-                        )
-                        break
-                    except UnicodeDecodeError:
-                        pass
-                if parsed is None:
-                    raise ValueError(f"{upload.name}: unsupported encoding")
-                frames.append(parsed)
-            ids = [part.strip() for part in re.split(r"[,，\s]+", race_ids_raw) if part.strip()]
-            result, quality = analyze_legacy_csv(pd.concat(frames, ignore_index=True), ids)
-            st.subheader("データ品質")
-            st.dataframe(quality.T.rename(columns={0: "値"}), use_container_width=True)
-            if result.empty:
-                st.info("出走経験の候補がありません。元データに過去出走歴が含まれているか確認してください。")
-            else:
-                st.subheader("相性候補（探索的）")
-                st.dataframe(result, use_container_width=True, hide_index=True)
+    if st.button("過去レース相性を計算", type="primary", use_container_width=True):
+        if not uploaded:
+            st.error("CSVファイルを選択してください。")
+        else:
+            try:
+                frames = []
+                for upload in uploaded:
+                    payload = upload.getvalue()
+                    parsed = None
+                    for enc in ("utf-8-sig", "cp932", "utf-8"):
+                        try:
+                            parsed = pd.read_csv(
+                                io.BytesIO(payload), encoding=enc,
+                                dtype={"馬ID": "string", "レースID": "string", "horse_id": "string", "race_id": "string"},
+                            )
+                            break
+                        except UnicodeDecodeError:
+                            pass
+                    if parsed is None:
+                        raise ValueError(f"{upload.name}: unsupported encoding")
+                    frames.append(parsed)
+                ids = [part.strip() for part in re.split(r"[,，\s]+", race_ids_raw) if part.strip()]
+                result, quality = analyze_legacy_csv(pd.concat(frames, ignore_index=True), ids)
+                st.subheader("データ品質")
+                st.dataframe(quality.T.rename(columns={0: "値"}), use_container_width=True)
+                if result.empty:
+                    st.info("出走経験の候補がありません。元データに過去出走歴が含まれているか確認してください。")
+                else:
+                    st.subheader("相性候補（探索的）")
+                    st.dataframe(result, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        "race_affinity.csv をダウンロード",
+                        to_csv_bytes(result),
+                        "race_affinity.csv", mime="text/csv",
+                        use_container_width=True,
+                    )
                 st.download_button(
-                    "race_affinity.csv をダウンロード",
-                    to_csv_bytes(result),
-                    "race_affinity.csv", mime="text/csv",
+                    "data_quality.csv をダウンロード",
+                    to_csv_bytes(quality), "data_quality.csv", mime="text/csv",
                     use_container_width=True,
                 )
-            st.download_button(
-                "data_quality.csv をダウンロード",
-                to_csv_bytes(quality), "data_quality.csv", mime="text/csv",
-                use_container_width=True,
-            )
-        except (ValueError, TypeError, KeyError, pd.errors.ParserError) as error:
-            st.error(f"計算できませんでした：{error}")
+            except (ValueError, TypeError, KeyError, pd.errors.ParserError) as error:
+                st.error(f"計算できませんでした：{error}")
