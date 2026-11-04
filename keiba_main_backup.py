@@ -92,8 +92,13 @@ def render_main_backup():
         if isinstance(data,pd.DataFrame) and not data.empty and rid:
             try:
                 stored,_=Store().load('main-entry-metadata-'+rid)
-                blob=pack_main_backup(rid,st.session_state['auto_horses'],st.session_state.get('auto_numbers',{}),data,
-                    load_lap_full_progress(rid),stored.get('targets'),main_context(rid,st.session_state))
+                horses = st.session_state['auto_horses']
+                active_data = data.loc[data['馬ID'].astype(str).isin(horses)]
+                laps = load_lap_full_progress(rid)
+                if not laps.empty:
+                    laps = laps.loc[laps['レースID'].astype(str).isin(active_data['レースID'].astype(str))]
+                blob=pack_main_backup(rid,horses,st.session_state.get('auto_numbers',{}),active_data,
+                    laps,stored.get('targets'),main_context(rid,st.session_state))
                 st.download_button('本体データをまとめて保存',blob,file_name=f'keiba_main_{rid}.zip',mime='application/zip',key='main_backup_download_v22')
             except ValueError as exc:st.warning('保存ファイルを作成できません：'+str(exc))
         upload=st.file_uploader('本体の保存ZIPを復元',type=['zip'],key='main_backup_upload_v22')
