@@ -60,6 +60,36 @@ def render_condition_context():
                 st.warning('開催条件の確認を停止しました：'+str(exc)[:180])
 
 
+def restore_saved_margins(data, context, state):
+    """Fill missing margins from the matching research snapshot without fetching."""
+    from sqlite3 import Error as DatabaseError
+    from zipfile import BadZipFile
+    from keiba_main_integration import merge_saved_enrichment
+    from keiba_main_patterns import history_config
+    from keiba_v22 import Store, validate_scope
+
+    keys = ['馬ID', 'レースID', '日付']
+    if data.empty or not set(keys).issubset(data):
+        return data
+    if '着差' in data and pd.to_numeric(data['着差'], errors='coerce').notna().all():
+        return data
+    config = history_config(context, state)
+    if config is None:
+        return data
+    try:
+        tables, _ = Store().load(config.historical_scope)
+        if not tables:
+            return data
+        validate_scope(tables['targets'], config.special_url, config.first_year, config.last_year)
+        raw = tables['horse_raw']
+        if not set(keys + ['着差']).issubset(raw):
+            return data
+        merged, count = merge_saved_enrichment(data, raw[keys + ['着差']])
+        return merged if count else data
+    except (BadZipFile, DatabaseError, KeyError, OSError, ValueError):
+        return data
+
+
 def condition_evidence(data, context):
     empty = {'今回条件実績':'条件未確認', '前走内容':'対象開催日未確認'}
     if context is None:

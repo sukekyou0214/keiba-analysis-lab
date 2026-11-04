@@ -2465,8 +2465,9 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             quick_lapped171 = quick_lapped171.drop_duplicates(['馬名','_quick_rid171'])
         quick_names171 = list(dict.fromkeys(list(horses.values()) if horses else []))
         quick_names171 += [nm for nm in quick171['馬名'].dropna().unique() if nm not in quick_names171]
-        from keiba_main_conditions import main_context, condition_evidence
+        from keiba_main_conditions import main_context, condition_evidence, restore_saved_margins
         context22 = main_context(quick_race171, st.session_state)
+        condition_data22 = restore_saved_margins(analysis_df, context22, st.session_state)
         records171 = []
         for name171 in quick_names171:
             allhorse171 = quick171.loc[quick171['馬名'].eq(name171)]
@@ -2490,7 +2491,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
             from keiba_diagnosis_evidence import summarize_source_pace, summarize_lap_results
             diag171['ペース別3着内'] = summarize_source_pace(allhorse171)
             diag171['ラップ別3着内'] = summarize_lap_results(allhorse171, quick_shapes171)
-            diag171.update(condition_evidence(analysis_df.loc[analysis_df['馬名'].eq(name171)], context22))
+            diag171.update(condition_evidence(condition_data22.loc[condition_data22['馬名'].eq(name171)], context22))
             diag171['馬名'] = name171
             diag171['ラップ確認走数'] = len(lapgroup171)
             records171.append(diag171)
@@ -2511,7 +2512,7 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                         {'馬名':'馬番＋正式馬名','走りの総合診断':'強み・走り方',
                          'ペース別3着内':'ペース別3着内','ラップ別3着内':'ラップ別3着内','今回条件実績':'今回条件の3着内実績','前走内容':'前走内容','信頼度':'根拠の信頼度','好走走数':'好走走数'})
                 if evidence_kind22 == '今回条件・前走':
-                    st.caption('数字＝3着内走数／着順確認済み走数。—＝取得済み戦績に有効例なし。未経験や適性なしとは断定しません。同場同距離・同距離・同場の件数は重複します。着差と上がりの欠損は補いません。')
+                    st.caption('数字＝3着内走数／着順確認済み走数。—＝取得済み戦績に有効例なし。未経験や適性なしとは断定しません。同場同距離・同距離・同場の件数は重複します。着差は同じ戦績の保存記録も照合し、確認できない値は欠損と表示します。')
                 elif evidence_kind22 == 'S/M/H別':
                     st.caption('S＝スロー、M＝ミドル、H＝ハイ。数字は3着内走数／着順とペース確認済み走数。未取得は集計から除外。少数例のため適性や勝率を断定しません。')
                 if evidence_kind22 == '200mラップ別':
