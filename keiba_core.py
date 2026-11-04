@@ -1077,15 +1077,16 @@ def get_horses(race_id):
                 if num:
                     numbers[hid] = int(num.group(1))
             break
-    # HTML構造が変わっても最低限取得できるようにする。
-    for a in soup.select('a[href*="/horse/"]'):
-        hit = re.search(r'/horse/(\d{10})', a.get('href', ''))
-        if not hit:
-            continue
-        hid = hit.group(1)
-        name = horse_name_candidate(a)
-        if name and (hid not in horses or len(name) > len(horses[hid])):
-            horses[hid] = name
+    # 出馬表行が取得できた場合はページ内の関連記事などを対象にしない。
+    if not horses:
+        for a in soup.select('a[href*="/horse/"]'):
+            hit = re.search(r'/horse/(\d{10})', a.get('href', ''))
+            if not hit:
+                continue
+            hid = hit.group(1)
+            name = horse_name_candidate(a)
+            if name and (hid not in horses or len(name) > len(horses[hid])):
+                horses[hid] = name
     if not horses:
         raise ValueError('出走馬を取得できませんでした。ページ構造やアクセス制限を確認してください。')
     return horses, numbers
