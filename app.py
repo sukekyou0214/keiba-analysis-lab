@@ -2467,6 +2467,18 @@ if selected_page208 in ('🏇 総合診断', '🌊 ペース分析', '🐎 各�
                 evidence_kind22 = st.radio('比較する実績', ['今回条件・前走', 'S/M/H別', '200mラップ別', '全頭参考順位（研究中）'], horizontal=True, key='main_evidence_kind_v22')
                 evidence_col22 = 'ペース別3着内' if evidence_kind22 == 'S/M/H別' else 'ラップ別3着内'
                 compare_cols22 = ['馬名','今回条件実績','前走内容'] if evidence_kind22 == '今回条件・前走' else ['馬名','走りの総合診断',evidence_col22,'信頼度','好走走数']
+                if evidence_kind22 == 'S/M/H別' and context22:
+                    pace_dates = pd.to_datetime(analysis_df['日付'], errors='coerce')
+                    pace_history = analysis_df.loc[
+                        pace_dates.lt(pd.Timestamp(context22['race_date']))
+                        & analysis_df['コース'].eq(context22['surface'])
+                    ]
+                    estimate, _, pressure, known, _, _ = estimate_field_pace_v19(pace_history, quick_names171)
+                    leaders = pressure.loc[pressure['逃げ候補']]
+                    leader_names = '、'.join(leaders['馬名']) or '該当なし'
+                    st.write(f'**展開の目安：{estimate or "判定保留"}** · 逃げ候補 {leader_names}')
+                    st.caption(f'同じコース種別の直近5走を使用。初通過を2走以上確認：{known}/{len(quick_names171)}頭。'
+                               f'逃げ候補が先頭だった過去レース：S {leaders["先頭S"].sum()}・M {leaders["先頭M"].sum()}・H {leaders["先頭H"].sum()}走（ペース判明分）。')
                 if evidence_kind22 == '全頭参考順位（研究中）':
                     from keiba_main_ranking import render_main_ranking
                     render_main_ranking(fixed_order_table_v209,analysis_df,horses,st.session_state.auto_numbers,context22)
