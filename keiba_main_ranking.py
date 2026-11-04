@@ -28,6 +28,9 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
     result=rank_entries(pd.DataFrame(rows),selected,config=SimpleNamespace(**context),pace=pace)
     if graded_only and not result.empty:
         result.loc[result['判定'].eq('戦績未取得'),'判定']='対象の重賞戦績なし・保留'
+    if result.empty:
+        return result
+    result['予定騎手'] = result['予定騎手'].replace(r'^\s*(?:[○〇◯*－—-]+|未定)?\s*$', pd.NA, regex=True)
     result['比較対象']='G1〜G3' if graded_only else '全クラス'
     return result
 
@@ -84,8 +87,11 @@ def render_main_ranking(renderer, data, horses, numbers, context):
         st.info('参考順位の対象馬がありません。')
         return
     shown=display_horse_column(ranking,horses,numbers)
-    renderer(shown,['馬名','参考順位','総合参考点','評価項目充足率','想定人気','判定'],
-             {'馬名':'馬番＋正式馬名','参考順位':'実績参考順位','総合参考点':'参考点','評価項目充足率':'項目充足率(%)','想定人気':'想定人気','判定':'根拠の状態'})
+    renderer(shown,['馬名','参考順位','総合参考点','評価項目充足率','予定騎手','想定人気','判定'],
+             {'馬名':'馬番＋正式馬名','参考順位':'実績参考順位','総合参考点':'参考点','評価項目充足率':'項目充足率(%)','予定騎手':'予定騎手','想定人気':'想定人気','判定':'根拠の状態'})
+    jockey_count = ranking['予定騎手'].fillna('').astype(str).str.strip().ne('').sum()
+    popularity_count = pd.to_numeric(ranking['想定人気'], errors='coerce').notna().sum()
+    st.caption(f'出走表の予定情報 · 予定騎手 {jockey_count}/{len(ranking)}頭 · 想定人気 {popularity_count}/{len(ranking)}頭')
     st.caption('着順の頭数補正40%、同場同距離20%、同距離15%、同場10%、想定ペース別15%で仮集計。欠損項目を除いて重みを再配分します。近5走の有効成績3走以上・項目充足率60%以上で順位を付けます。')
     st.caption('参考点は実績の比較用です。レース格・相手関係・時計の補正を含まず、総合能力・勝率・期待値の評価は未検証です。')
     candidates=ranking.loc[ranking['妙味'].str.startswith('中穴候補',na=False)]
