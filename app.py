@@ -1237,47 +1237,7 @@ def horse_name_candidate(a):
     return max(names, key=len, default='')
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def get_horses(race_id):
-    """馬名は正式表記の最良候補を採用し、同じ馬IDの後続短縮リンクで上書きしない。"""
-    url = f'https://race.netkeiba.com/race/shutuba.html?race_id={race_id}'
-    res = requests.get(url, headers=HEADERS, timeout=20)
-    res.raise_for_status()
-    res.encoding = res.apparent_encoding
-    soup = BeautifulSoup(res.text, 'html.parser')
-    horses, numbers = {}, {}
-    # 出馬表の各馬の行を優先（馬番は枠番ではなく「馬番」欄から取得）。
-    for row in soup.select('tr.HorseList, tr[class*="HorseList"]'):
-        links = row.select('td.HorseInfo a[href*="/horse/"], td[class*="HorseInfo"] a[href*="/horse/"]')
-        if not links:
-            links = row.select('a[href*="/horse/"]')
-        for a in links:
-            hit = re.search(r'/horse/(\d{10})', a.get('href', ''))
-            if not hit:
-                continue
-            hid = hit.group(1)
-            name = horse_name_candidate(a)
-            if name and (hid not in horses or len(name) > len(horses[hid])):
-                horses[hid] = name
-            cell = row.select_one('td.Umaban, td[class*="Umaban"], .Umaban')
-            if cell is not None:
-                txt = cell.get_text(' ', strip=True)
-                num = re.search(r'(?<!\d)(1[0-9]|[1-9]|2[0-9])(?!\d)', txt)
-                if num:
-                    numbers[hid] = int(num.group(1))
-            break
-    # HTML構造が変わっても最低限取得できるようにする。
-    for a in soup.select('a[href*="/horse/"]'):
-        hit = re.search(r'/horse/(\d{10})', a.get('href', ''))
-        if not hit:
-            continue
-        hid = hit.group(1)
-        name = horse_name_candidate(a)
-        if name and (hid not in horses or len(name) > len(horses[hid])):
-            horses[hid] = name
-    if not horses:
-        raise ValueError('出走馬を取得できませんでした。ページ構造やアクセス制限を確認してください。')
-    return horses, numbers
+from keiba_core import get_horses
 
 
 def update_cached_names(data, horses):
