@@ -86,6 +86,8 @@ def render_main_ranking(renderer, data, horses, numbers, context):
     if ranking.empty:
         st.info('参考順位の対象馬がありません。')
         return
+    ranked_count = ranking['参考順位'].notna().sum()
+    st.caption(f'{pace}想定 · 順位表示 {ranked_count}/{len(ranking)}頭 · 保留 {len(ranking) - ranked_count}頭')
     shown=display_horse_column(ranking,horses,numbers)
     renderer(shown,['馬名','参考順位','総合参考点','評価項目充足率','予定騎手','想定人気','判定'],
              {'馬名':'馬番＋正式馬名','参考順位':'実績参考順位','総合参考点':'参考点','評価項目充足率':'項目充足率(%)','予定騎手':'予定騎手','想定人気':'想定人気','判定':'根拠の状態'})
