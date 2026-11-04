@@ -35,9 +35,9 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
     if held.any():
         short = result['近5走有効数'].lt(3)
         sparse = result['評価項目充足率'].lt(60)
-        result.loc[held & short & ~sparse, '判定'] = '保留・有効成績3走未満'
-        result.loc[held & ~short & sparse, '判定'] = '保留・充足率60%未満'
-        result.loc[held & short & sparse, '判定'] = '保留・有効走数と充足率不足'
+        result.loc[held & short & ~sparse, '判定'] = '根拠不足（有効成績3走未満）'
+        result.loc[held & ~short & sparse, '判定'] = '根拠不足（充足率60%未満）'
+        result.loc[held & short & sparse, '判定'] = '根拠不足（有効走数・充足率）'
     result['比較対象']='G1〜G3' if graded_only else '全クラス'
     return result
 
