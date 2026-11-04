@@ -3,6 +3,14 @@ import pandas as pd
 from urllib.parse import urlparse,parse_qs
 
 
+def horses_without_history(horses, data):
+    """Request only current entrants whose IDs have no cached history."""
+    cached_ids = set()
+    if isinstance(data, pd.DataFrame) and '馬ID' in data:
+        cached_ids = set(data['馬ID'].dropna().astype(str).str.replace(r'\.0$', '', regex=True))
+    return {horse_id: name for horse_id, name in horses.items() if str(horse_id) not in cached_ids}
+
+
 def prepare_main_bridge(config,current):
     from keiba_core import convert_auto,prepare
     from keiba_affinity_pipeline import complete_horse_manifest

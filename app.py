@@ -2070,28 +2070,32 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
                         st.session_state.auto_numbers = nums_now
                 _fetch_marks_v2083['出馬表・キャッシュ更新'] = time.perf_counter() - _fetch_t0_v2083
                 _fetch_stage_v2083 = time.perf_counter()
-                if data_now is None:
+                from keiba_main_integration import horses_without_history
+                missing_horses = horses_without_history(horses_now, data_now)
+                if missing_horses:
                     datasets = []
                     horse_errors = []
                     progress = st.progress(0)
                     status = st.empty()
-                    for i, (horse_id, name) in enumerate(horses_now.items(), 1):
-                        status.write(f'② 過去成績を取得中：{name}（{i}/{len(horses_now)}）')
+                    for i, (horse_id, name) in enumerate(missing_horses.items(), 1):
+                        status.write(f'② 未取得の過去成績を取得中：{name}（{i}/{len(missing_horses)}）')
                         try:
                             datasets.append(get_results(horse_id, name))
                         except Exception as e:
                             horse_errors.append(f'{name}：{e}')
-                        progress.progress(i / len(horses_now))
-                        if i < len(horses_now):
-                            time.sleep(1)
+                        progress.progress(i / len(missing_horses))
+                        if i < len(missing_horses):
+                            time.sleep(2)
                     status.empty()
                     progress.empty()
-                    if not datasets:
+                    if datasets:
+                        fresh = convert_auto(pd.concat(datasets, ignore_index=True))
+                        data_now = prepare(fresh if data_now is None else pd.concat([data_now, fresh], ignore_index=True))
+                        st.session_state.auto_df = data_now
+                        save_race_cache(race_id, horses_now, data_now)
+                        st.success(f'未取得馬の過去成績：{len(fresh)}走を追加しました')
+                    elif data_now is None or data_now.empty:
                         raise ValueError('過去成績を1件も取得できませんでした')
-                    data_now = prepare(convert_auto(pd.concat(datasets, ignore_index=True)))
-                    st.session_state.auto_df = data_now
-                    save_race_cache(race_id, horses_now, data_now)
-                    st.success(f'過去成績：{len(data_now)}走を取得・保存しました')
                     if horse_errors:
                         st.session_state['fetch_issues_v174'].append('過去成績の取得失敗：' + ' / '.join(horse_errors))
                         st.warning('取得できなかった馬：' + ' / '.join(horse_errors))
