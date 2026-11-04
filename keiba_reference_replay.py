@@ -88,6 +88,31 @@ def replay_reference(config,tables,paces=('S','M','H'),progress=lambda *args:Non
     return pd.DataFrame(summary),race_metrics,pd.DataFrame(records)
 
 
+def ranking_coverage(rows, pace):
+    """Explain the current replay eligibility gates using saved entrant rows."""
+    required = {'開催', '想定ペース', '参考順位', '近5走有効数', '項目充足率'}
+    if rows.empty or not required.issubset(rows.columns):
+        return pd.DataFrame()
+
+    selected = rows.loc[rows['想定ペース'].eq(pace)]
+    counts = []
+    for venue, group in selected.groupby('開催', sort=False):
+        ranked = group['参考順位'].notna()
+        short_history = pd.to_numeric(group['近5走有効数'], errors='coerce').fillna(0).lt(3)
+        low_coverage = pd.to_numeric(group['項目充足率'], errors='coerce').fillna(0).lt(60)
+        held = ~ranked
+        counts.append({
+            '開催': venue,
+            '出走記録': len(group),
+            '順位提示': int(ranked.sum()),
+            '有効走数のみ不足': int((held & short_history & ~low_coverage).sum()),
+            '項目充足率のみ不足': int((held & ~short_history & low_coverage).sum()),
+            '両方不足': int((held & short_history & low_coverage).sum()),
+            'その他の保留': int((held & ~short_history & ~low_coverage).sum()),
+        })
+    return pd.DataFrame(counts)
+
+
 def render_reference_replay(context,state):
     import streamlit as st
     from keiba_main_patterns import history_config
@@ -122,6 +147,11 @@ def render_reference_replay(context,state):
         st.caption('共通対象は参考点で順位を提示できた馬に揃えた比較です。対象馬数が異なる全体の比較とは分けて確認します。')
         st.caption('同点は全馬を選出するため「上位3位群」が3頭を超える場合があります。率は結果確認済みの選出馬を分母にします。順位提示率の低い比較は、出走全馬の評価ではありません。')
         st.caption('確定人気は発走直前の比較基準です。前もって取得した想定人気とは異なります。重みの調整・シナリオの事後選択はせず、京都・阪神を分けて表示します。少数レースの回顧で、将来精度の保証ではありません。')
+        coverage = ranking_coverage(saved.get('horse_raw', pd.DataFrame()), show_pace)
+        if not coverage.empty:
+            st.markdown('**参考順位を保留した理由**')
+            st.dataframe(coverage, hide_index=True, width='stretch')
+            st.caption('近5走の有効成績3走以上・項目充足率60%以上が提示条件です。各件数は同じ馬の複数年の出走を含みます。')
         races=saved['targets']
         if races['過去ペース判定数'].eq(0).all():
             st.info('過去10年の検証用データでは、対象日前の明示S/M/Hが0件です。出走馬用に補完したデータとは別の集計で、ペース別の差は検証できません。')
