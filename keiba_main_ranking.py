@@ -31,6 +31,13 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
     if result.empty:
         return result
     result['予定騎手'] = result['予定騎手'].replace(r'^\s*(?:[○〇◯*－—-]+|未定)?\s*$', pd.NA, regex=True)
+    held = result['参考順位'].isna() & result['判定'].eq('順位保留・根拠不足')
+    if held.any():
+        short = result['近5走有効数'].lt(3)
+        sparse = result['評価項目充足率'].lt(60)
+        result.loc[held & short & ~sparse, '判定'] = '保留・有効成績3走未満'
+        result.loc[held & ~short & sparse, '判定'] = '保留・充足率60%未満'
+        result.loc[held & short & sparse, '判定'] = '保留・有効走数と充足率不足'
     result['比較対象']='G1〜G3' if graded_only else '全クラス'
     return result
 
@@ -102,6 +109,18 @@ def render_main_ranking(renderer, data, horses, numbers, context):
     with st.expander('参考順位の根拠を見る',expanded=False):
         name=st.selectbox('根拠を確認する馬',ranking['馬名'].tolist(),key='main_reference_horse_v22')
         row=ranking.loc[ranking['馬名'].eq(name)].iloc[0]
+        if context['surface'] == '芝':
+            distance_evidence = []
+            for distance in (1800, 2000, 2200, 2400):
+                runs = row.get(f'{distance}m走数', pd.NA)
+                rate = row.get(f'{distance}m複勝率', pd.NA)
+                if pd.isna(runs) or runs == 0:
+                    value = '該当記録なし'
+                else:
+                    value = f'{int(runs)}走 / 3着内率 ' + ('不明' if pd.isna(rate) else f'{rate:.0f}%')
+                distance_evidence.append(f'{distance}m {value}')
+            st.caption('芝の距離別実績（対象日前・選択中のクラス）')
+            st.write(' · '.join(distance_evidence))
         for label in ['近5走有効数','近5走着順参考点','対象場距離走数','対象場距離複勝率','対象距離走数','対象距離複勝率','対象場走数','対象場複勝率',pace+'走数',pace+'複勝率','予定騎手','想定人気','妙味']:
             value=row.get(label,pd.NA)
             st.write(label+'：'+('未確認' if pd.isna(value) else str(value)))
