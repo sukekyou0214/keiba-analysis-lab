@@ -8,13 +8,29 @@ from keiba_affinity_collect import HORSE_ID
 from keiba_v22 import ENTRY_URL
 
 
+ENTRY_ROW_ID=re.compile(r'tr_\d+')
+
+
+def entry_rows(soup):
+    """出走表本体の馬行だけを返す。
+
+    netkeibaの出走表には、本体表とは別に予想ラップ表（PredictRap_Table）があり、
+    IDなしの先頭馬の複製行や空のテンプレート行が tr.HorseList として混ざる。
+    それらを予定馬として数えない。本体表の行が id=tr_数字 を持つ場合はそれだけを使う。
+    """
+    rows=[tr for tr in soup.select('tr.HorseList')
+          if not any('PredictRap_Table' in (t.get('class') or []) for t in tr.find_parents('table'))]
+    with_id=[tr for tr in rows if ENTRY_ROW_ID.fullmatch(tr.get('id') or '')]
+    return with_id if with_id else rows
+
+
 def parse_entries(html, source=ENTRY_URL, expected_name='エリザベス女王杯'):
     soup=BeautifulSoup(html,'html.parser')
     title=soup.select_one('h1.RaceName')
     if title is None or expected_name not in title.get_text():
         raise ValueError('対象レースの見出しを確認できません')
     rows=[]
-    for tr in soup.select('tr.HorseList'):
+    for tr in entry_rows(soup):
         a=tr.select_one('.HorseName a[href*="/horse/"]')
         if a is None: a=tr.select_one('a[href*="/horse/"]')
         m=HORSE_ID.search(a.get('href','')) if a else None

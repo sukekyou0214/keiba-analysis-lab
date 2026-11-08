@@ -103,7 +103,7 @@ def recent_pace_ids(data,per_horse=5):
 def enrich_pace(data,loader,save,progress=lambda *args:None,sleeper=None):
     """Persist semantic missing labels; stop on transport or unknown failures."""
     import time
-    from keiba_core import apply_netkeiba_pace
+    from keiba_core import apply_netkeiba_pace,as_text_columns
     sleeper=sleeper or time.sleep
     out=data.copy();pending=recent_pace_ids(out);error=None
     for n,rid in enumerate(pending,1):
@@ -119,6 +119,7 @@ def enrich_pace(data,loader,save,progress=lambda *args:None,sleeper=None):
             missing_messages=('ラップタイム欄が見つかりません','ラップ欄にS/M/Hの明示表記が見つかりません','S/M/Hの明示判定を確認できません')
             if isinstance(exc,ValueError) and reason in missing_messages:
                 mask=out['レースID'].astype(str).eq(rid)
+                as_text_columns(out)
                 out.loc[mask,'ペース取得状態']='取得不可'
                 out.loc[mask,'ペース取得理由']=reason
                 # Never fabricate a pace for a semantic missing value.

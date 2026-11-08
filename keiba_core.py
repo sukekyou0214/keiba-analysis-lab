@@ -16,6 +16,18 @@ HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', '京都', '阪神', '小倉']
 METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
+# CSV復元で全欠損になると数値型で読まれる文字列列。判定の書込前にobject型へ揃える。
+TEXT_STATUS_COLUMNS = ['netkeibaペース', 'ペース取得状態', 'ペース取得理由']
+
+
+def as_text_columns(data, columns=TEXT_STATUS_COLUMNS):
+    """欠損値は欠損のまま保持し、列の型だけを文字列を書き込めるobject型にする。"""
+    for column in columns:
+        if column in data.columns and data[column].dtype != object:
+            data[column] = data[column].astype(object)
+    return data
+
+
 ALIASES = {'馬名': ['馬名', '馬名_正規化'], '競馬場': ['競馬場', '場所', '開催場'], '馬場状態': ['馬場状態', '馬 場', '馬場'], '距離_m': ['距離_m', '距離', '距離(m)'], '着順_数値': ['着順_数値', '着順'], '上がり3F_秒': ['上がり3F_秒', '上がり3F', '上り', '上がり'], '4角順位': ['4角順位', '4角', '4角通過順位'], '上がり順位': ['上がり順位', '上り順位'], '日付': ['日付', '年月日', '開催日', 'レース日'], '頭数': ['頭数', '頭 数'], '前半3F': ['前半3F'], '後半3F': ['後半3F'], '前後半3F差': ['前後半3F差'], '推定ペース': ['推定ペース'], '推定脚質': ['推定脚質'], 'レース格': ['レース格', '格付け', 'グレード'], 'レース名': ['レース名'], '格付け根拠': ['格付け根拠'], '通過順': ['通過順', '通過']}
 
 
@@ -1654,6 +1666,7 @@ def apply_netkeiba_pace(data, pace_by_race):
     ids = result['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
     if 'netkeibaペース' not in result.columns:
         result['netkeibaペース'] = ''
+    as_text_columns(result)
     for rid, pace in pace_by_race.items():
         result.loc[ids.eq(str(rid)), 'netkeibaペース'] = pace
     return prepare(result)
@@ -1749,6 +1762,7 @@ def prepare(data):
     data.loc[diff.notna() & diff.gt(1.0), '暫定ペース'] = 'スロー寄り'
     if 'netkeibaペース' not in data.columns:
         data['netkeibaペース'] = ''
+    as_text_columns(data)
     net_pace = data['netkeibaペース'].fillna('').astype(str).str.strip()
     valid_net = net_pace.isin(['スロー寄り', 'ミドル寄り', 'ハイ寄り'])
     # 実戦のペースランキングにはnetkeibaの明示判定のみ使用する。

@@ -20,6 +20,13 @@ def parse_metadata(html,url):
     soup=BeautifulSoup(html,'html.parser');result={}
     title=soup.select_one('h1.RaceName')
     if title and title.get_text(strip=True):result['name']=title.get_text(' ',strip=True)
+    if title:
+        # 見出しのグレードアイコン（Icon_GradeType1〜3）だけをG1〜G3として扱う。
+        grades={f'G{n}' for n in (1,2,3) for icon in title.select('.Icon_GradeType')
+                if f'Icon_GradeType{n}' in (icon.get('class') or [])}
+        if len(grades)==1:result['grade']=grades.pop()
+        elif not grades and re.search(r'新馬|未勝利|勝クラス',(soup.select_one('.RaceData02') or title).get_text(' ',strip=True)):
+            result['grade']='条件戦'
     data=soup.select_one('.RaceData01')
     if data:
         hits=re.findall(r'(芝|ダ)\s*(\d{3,4})\s*m',data.get_text(' ',strip=True))
