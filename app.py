@@ -19,6 +19,7 @@ if st.session_state.get('main_evidence_kind_v22')=='全頭参考順位':
 APP_VERSION = '22.2'
 from keiba_release import prepare_release
 _navigation = prepare_release(APP_VERSION)
+from keiba_core import as_text_columns
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')
 st.markdown('<style>.block-container{padding-top:3rem!important} h3{font-size:1.35rem!important} h4{font-size:1.15rem!important}</style>',unsafe_allow_html=True)
@@ -1802,6 +1803,7 @@ def apply_netkeiba_pace(data, pace_by_race):
     ids = result['レースID'].fillna('').astype(str).str.replace(r'\.0$', '', regex=True)
     if 'netkeibaペース' not in result.columns:
         result['netkeibaペース'] = ''
+    as_text_columns(result)
     for rid, pace in pace_by_race.items():
         result.loc[ids.eq(str(rid)), 'netkeibaペース'] = pace
     return prepare(result)
@@ -1872,6 +1874,7 @@ def prepare(data):
     data.loc[diff.notna() & diff.gt(1.0), '暫定ペース'] = 'スロー寄り'
     if 'netkeibaペース' not in data.columns:
         data['netkeibaペース'] = ''
+    as_text_columns(data)
     net_pace = data['netkeibaペース'].fillna('').astype(str).str.strip()
     valid_net = net_pace.isin(['スロー寄り', 'ミドル寄り', 'ハイ寄り'])
     # 実戦のペースランキングにはnetkeibaの明示判定のみ使用する。

@@ -4,6 +4,8 @@ import re
 import pandas as pd
 from keiba_race_config import PRESETS, VENUES
 
+GRADES={'G1','G2','G3','条件戦'}
+
 
 def checked_context(rid, values):
     if not re.fullmatch(r'\d{12}', str(rid)):
@@ -17,7 +19,8 @@ def checked_context(rid, values):
             return None
         return {'race_id':rid, 'race_date':day.isoformat(), 'venue':venue,
                 'surface':surface, 'distance':distance, 'name':values.get('name','対象レース'),
-                'source':values.get('source','入力設定')}
+                'source':values.get('source','入力設定'),
+                'grade':values.get('grade') if values.get('grade') in GRADES else None}
     except (KeyError, ValueError, TypeError):
         return None
 
