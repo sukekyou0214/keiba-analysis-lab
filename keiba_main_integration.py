@@ -26,9 +26,8 @@ def fetch_missing_histories(missing, loader, sleeper=None, progress=lambda *args
         progress(i,len(items),name)
         try:
             datasets.append(loader(horse_id,name));refusals=0
-        except PolicyStop as exc:
+        except PolicyStop:
             # The shared gate is closed (cooldown) or this operation's budget is used up.
-            errors.append(f'{name}：{exc}')
             return datasets,errors,dict(items[i-1:])
         except requests.RequestException as exc:
             errors.append(f'{name}：{exc}');refusals+=1
@@ -106,8 +105,8 @@ def collect_by_race(race_ids, loader, permanent=(), progress=lambda *args:None):
         progress(i,len(race_ids),rid)
         try:
             results[rid]=loader(rid)
-        except PolicyStop as exc:
-            errors[rid]=str(exc)[:180]
+        except PolicyStop:
+            # Not a failure of this race: the gate stopped the operation. Left for the next run.
             return results,errors,unavailable,race_ids[i-1:]
         except Exception as exc:
             message=str(exc)[:180]
