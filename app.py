@@ -2357,6 +2357,8 @@ if selected_page208 == '🧰 管理・検証':
     from keiba_fetch_status_ui import render_fetch_status
     render_fetch_status(st.session_state.get('auto_race_id', ''), st.session_state.get('auto_horses', {}),
                         st.session_state.get('auto_numbers', {}), st.session_state.get('auto_df'))
+    from keiba_weekend_ui import render_weekend_batch
+    render_weekend_batch()
     with st.expander('研究用ページ（オプション）',expanded=False):
         st.page_link('pages/2_過去レース相性_Ver21.py',label='過去レース相性・取得検証')
         st.page_link('pages/1_過去10年分析.py',label='過去10年の研究ページ')
