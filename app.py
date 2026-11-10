@@ -2036,21 +2036,20 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
                 from keiba_main_integration import horses_without_history
                 missing_horses = horses_without_history(horses_now, data_now)
                 if missing_horses:
-                    datasets = []
-                    horse_errors = []
+                    from keiba_main_integration import fetch_missing_histories
                     progress = st.progress(0)
                     status = st.empty()
-                    for i, (horse_id, name) in enumerate(missing_horses.items(), 1):
-                        status.write(f'② 未取得の過去成績を取得中：{name}（{i}/{len(missing_horses)}）')
-                        try:
-                            datasets.append(get_results(horse_id, name))
-                        except Exception as e:
-                            horse_errors.append(f'{name}：{e}')
-                        progress.progress(i / len(missing_horses))
-                        if i < len(missing_horses):
-                            time.sleep(2)
+                    def show_progress(i, total, name):
+                        status.write(f'② 未取得の過去成績を取得中：{name}（{i}/{total}）')
+                        progress.progress(i / total)
+                    datasets, horse_errors, unfetched = fetch_missing_histories(missing_horses, get_results, progress=show_progress)
                     status.empty()
                     progress.empty()
+                    if unfetched:
+                        stop_note = (f'取得先が連続して応答を拒否したため、残り{len(unfetched)}頭の取得を停止しました。'
+                                     '取得済み分は保存します。時間を置いて同じボタンを押すと未取得馬だけ取得します。')
+                        st.session_state['fetch_issues_v174'].append(stop_note)
+                        st.warning(stop_note)
                     if datasets:
                         fresh = convert_auto(pd.concat(datasets, ignore_index=True))
                         data_now = prepare(fresh if data_now is None else pd.concat([data_now, fresh], ignore_index=True))

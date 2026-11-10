@@ -11,6 +11,30 @@ def horses_without_history(horses, data):
     return {horse_id: name for horse_id, name in horses.items() if str(horse_id) not in cached_ids}
 
 
+def fetch_missing_histories(missing, loader, sleeper=None, progress=lambda *args:None, delay=2.0, max_refusals=2):
+    """Fetch entrants one by one; stop after consecutive HTTP refusals instead of continuing.
+
+    Returns (datasets, errors, unfetched). Already-fetched datasets are always returned so the
+    caller can save them; unfetched horses stay missing and are requested on the next run.
+    """
+    import time
+    import requests
+    sleeper=sleeper or time.sleep
+    items=list(missing.items());datasets=[];errors=[];refusals=0
+    for i,(horse_id,name) in enumerate(items,1):
+        progress(i,len(items),name)
+        try:
+            datasets.append(loader(horse_id,name));refusals=0
+        except requests.RequestException as exc:
+            errors.append(f'{name}：{exc}');refusals+=1
+            if refusals>=max_refusals:
+                return datasets,errors,dict(items[i:])
+        except Exception as exc:
+            errors.append(f'{name}：{exc}')
+        if i<len(items):sleeper(delay)
+    return datasets,errors,{}
+
+
 def prepare_main_bridge(config,current):
     from keiba_core import convert_auto,prepare
     from keiba_affinity_pipeline import complete_horse_manifest
