@@ -119,6 +119,8 @@ def parse_entry_page(html, race_id, listed=None):
                      '騎手': jockey.get_text(' ', strip=True) if jockey else pd.NA,
                      '状態': '取消・除外' if cancelled else '出走予定'})
     entries = pd.DataFrame(rows)
+    if entries.empty and '新馬戦想定' in html:
+        raise ValueError(f'{race_id}: 出走表は未発表（新馬戦の想定は会員向けページのため取得しません）')
     if entries.empty or entries['馬ID'].duplicated().any():
         raise ValueError(f'{race_id}: 出走馬の件数または重複に問題があります')
     info = {'レースID': race_id, 'レース名': meta.get('name', ''), '発走': post[1] if post else '',

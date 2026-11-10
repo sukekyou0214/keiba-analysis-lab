@@ -14,6 +14,7 @@ LIST = ('<ul>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050510">10R 試験S 15:00 芝1600m 4頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba_debut.html?race_id=202608050505&rf=race_list">5R 2歳新馬 芝1800m 2頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050511">11R 読めないS 15:40 芝2000m 9頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba_debut.html?race_id=202608050506">6R 2歳新馬 芝1600m 12頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050509">9R 試験特別 ダ1800m 9頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050508">8R 障害S 障3000m 9頭</a></li></ul>')
 
@@ -64,6 +65,8 @@ class WeekendBatchTests(unittest.TestCase):
                 '<div class="RaceData01">15:00発走 / 芝1600m 右 外</div>', '').replace('<div class="RaceData02"><span>5回</span><span>京都</span><span>2歳 新馬</span></div>', '')
         if url.endswith('202608050511'):
             return '<html><body>メンテナンス中</body></html>'
+        if url.endswith('202608050506'):
+            return '<h1 class="RaceName">2歳新馬</h1><p>新馬戦想定はスーパープレミアムコース登録でご覧になれます。</p>'
         raise AssertionError(url)
 
     def fake_results(self, hid, name):
@@ -91,7 +94,8 @@ class WeekendBatchTests(unittest.TestCase):
             out = Path(root) / 'out'
             races = pd.read_csv(out / f'{DATE}_全芝レース一覧.csv', dtype={'レースID': str})
             # ダート・障害は出走表を開かずに除外。
-            self.assertEqual(sorted(races['レースID']), ['202608050505', '202608050510', '202608050511'])
+            self.assertEqual(sorted(races['レースID']), ['202608050505', '202608050506', '202608050510', '202608050511'])
+            self.assertIn('出走表は未発表', races.set_index('レースID').loc['202608050506', '注意点'])
             broken = races.set_index('レースID').loc['202608050511']
             self.assertIn('出走表を読めず保留', broken['注意点'])
             debut_row = races.set_index('レースID').loc['202608050505']
