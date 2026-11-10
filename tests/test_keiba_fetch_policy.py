@@ -174,6 +174,7 @@ class LoopStopTests(unittest.TestCase):
         self.assertEqual(calls, ['2020000001', '2020000002'])
         self.assertEqual(list(unfetched), ['2020000002', '2020000003', '2020000004'])
         self.assertEqual(len(datasets), 1)
+        self.assertEqual(errors, [])
 
     def test_collect_by_race_separates_permanent_transient_and_unfetched(self):
         from keiba_main_integration import collect_by_race, PACE_UNAVAILABLE
@@ -188,7 +189,7 @@ class LoopStopTests(unittest.TestCase):
         results, errors, unavailable, unfetched = collect_by_race('abcde', loader, PACE_UNAVAILABLE)
         self.assertEqual(results, {'a': 'ハイ寄り'})
         self.assertEqual(list(unavailable), ['b'])
-        self.assertEqual(set(errors), {'c', 'd'})
+        self.assertEqual(set(errors), {'c'})  # a gate stop is not a failure of race d
         self.assertEqual(unfetched, ['d', 'e'])
         self.assertTrue(issubclass(CooldownActive, PolicyStop))
 
