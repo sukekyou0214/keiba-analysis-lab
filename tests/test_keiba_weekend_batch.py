@@ -1,0 +1,165 @@
+"""週末一括分析：通信を差し替えて、取得→参考順位→信頼度→出力までを通しで確認する。"""
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import pandas as pd
+
+import keiba_weekend_batch as wb
+
+DATE = '20261114'
+LIST = ('<ul>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050510">10R 試験S 15:00 芝1600m 4頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050505">5R 2歳新馬 芝1800m 2頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050509">9R 試験特別 ダ1800m 9頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050508">8R 障害S 障3000m 9頭</a></li></ul>')
+
+
+def entry_page(name, data2, horses, cancel=()):
+    rows = ''.join(
+        f'<tr class="HorseList{" Cancel" if hid in cancel else ""}" id="tr_{i}"><td class="Umaban{i} Txt_C">{i}</td>'
+        f'<td class="HorseInfo"><span class="HorseName"><a href="https://db.netkeiba.com/horse/{hid}" title="{hname}">{hname}</a></span></td>'
+        f'<td class="Jockey"><a>騎手{i}</a></td></tr>' for i, (hid, hname) in enumerate(horses, 1))
+    return (f'<h1 class="RaceName">{name}</h1><div class="RaceData01">15:00発走 / 芝1600m 右 外</div>'
+            f'<div class="RaceData02"><span>5回</span><span>京都</span><span>{data2}</span></div>'
+            ''
+            f'<table class="Shutuba_Table">{rows}</table>')
+
+
+MAIN = [(f'202210000{i}', f'試験馬{"アイウエ"[i - 1]}') for i in range(1, 5)]
+DEBUT = [('2024100001', '新馬ア'), ('2024100002', '新馬イ')]
+
+
+def raw_history(hid, name, finishes):
+    rows = []
+    for k, finish in enumerate(finishes):
+        rows.append({'日付': f'2026/{10 - k:02d}/01', '開催': '5京都1', '距離': '芝1600', '馬 場': '良', '着 順': str(finish),
+                     '上り': '34.0', '通過': '3-3', '頭 数': '12', 'レース名': '試験戦', '馬名': name, '馬ID': hid,
+                     'レースID': f'20260805{k:02d}{int(hid[-1]):02d}', 'レース格': 'その他', '格付け根拠': ''})
+    rows.append({'日付': '2026/11/20', '開催': '5京都1', '距離': '芝1600', '馬 場': '良', '着 順': '1', '上り': '34.0',
+                 '通過': '1-1', '頭 数': '12', 'レース名': '未来の戦', '馬名': name, '馬ID': hid, 'レースID': '202699999999', 'レース格': 'その他', '格付け根拠': ''})
+    return pd.DataFrame(rows)
+
+
+class WeekendBatchTests(unittest.TestCase):
+    def setUp(self):
+        from keiba_fetch_policy import FetchPolicy
+        self.policy = patch('keiba_fetch_policy.POLICY', FetchPolicy(sleeper=lambda _: None))
+        self.policy.start()
+        self.addCleanup(self.policy.stop)
+        self.requests = []
+
+    def fake_text(self, url, encoding=None):
+        self.requests.append(url)
+        if 'race_list_sub' in url:
+            return LIST
+        if url.endswith('202608050510'):
+            return entry_page('試験S', '３勝クラス', MAIN, cancel={'2022100004'})
+        if url.endswith('202608050505'):
+            return entry_page('2歳新馬', '2歳 新馬', DEBUT)
+        raise AssertionError(url)
+
+    def fake_results(self, hid, name):
+        self.requests.append(hid)
+        if hid == '2022100003':
+            return raw_history(hid, name, [2])  # 有効1走のみ → 保留
+        return raw_history(hid, name, [1, 2, 3, 4, 5] if hid.endswith('1') else [5, 4, 6, 3, 8])
+
+    def fake_pace(self, rid):
+        self.requests.append(rid)
+        if rid.endswith('0201'):
+            raise ValueError('ラップタイム欄が見つかりません')
+        return 'ハイ寄り' if rid.endswith('01') else 'ミドル寄り'
+
+    def run_batch(self, root):
+        with patch.object(wb, 'fetch_text', self.fake_text), \
+             patch('keiba_core.get_results', self.fake_results), \
+             patch('keiba_core.get_netkeiba_pace', self.fake_pace):
+            return wb.run([DATE], Path(root) / 'work', Path(root) / 'out')
+
+    def test_end_to_end_outputs_and_rules(self):
+        with tempfile.TemporaryDirectory() as root:
+            status = self.run_batch(root)
+            self.assertEqual(status, '完了')
+            out = Path(root) / 'out'
+            races = pd.read_csv(out / f'{DATE}_全芝レース一覧.csv', dtype={'レースID': str})
+            # ダート・障害は出走表を開かずに除外。
+            self.assertEqual(sorted(races['レースID']), ['202608050505', '202608050510'])
+            self.assertFalse(any('202608050509' in u or '202608050508' in u for u in self.requests))
+            # 新馬戦の出走馬は戦績を要求しない。
+            self.assertFalse(any(u in ('2024100001', '2024100002') for u in self.requests))
+            # 取消馬の戦績も要求しない。
+            self.assertNotIn('2022100004', self.requests)
+            horses = pd.read_csv(out / f'{DATE}_全頭展開別順位.csv', dtype={'レースID': str})
+            main = horses.loc[horses['レースID'].eq('202608050510')].set_index('馬名')
+            self.assertEqual(main.loc['試験馬ア', 'M順位'], 1)
+            self.assertTrue(pd.isna(main.loc['試験馬ウ', 'M順位']))
+            self.assertIn('根拠不足', main.loc['試験馬ウ', 'M判定'])
+            self.assertEqual(main.loc['試験馬エ', '状態'], '取消・除外')
+            row = races.set_index('レースID').loc['202608050510']
+            self.assertEqual(row['比較対象'], '全クラス')
+            self.assertEqual(row['頭数'], 3)
+            self.assertIn('取消・除外あり', row['注意点'])
+            # 対象日以降の戦績（未来の戦）とそのペースは使わない。
+            self.assertNotIn('202699999999', self.requests)
+            debut = races.set_index('レースID').loc['202608050505']
+            self.assertTrue(str(debut['信頼度']).startswith('全展開での総合評価は保留'))
+            pace = pd.read_csv(Path(root) / 'work' / 'pace.csv', dtype=str)
+            self.assertIn('取得不可', set(pace['状態']))
+            meta = json.loads((out / f'{DATE}_条件と取得状況.json').read_text(encoding='utf-8'))
+            self.assertIn('的中率', meta['信頼度'])
+            self.assertTrue((out / f'{DATE}_芝レース分析.html').exists())
+            self.assertTrue((out / f'{DATE}_ラボ取得データ.zip').exists())
+
+    def test_rerun_requests_nothing_already_saved(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.run_batch(root)
+            first = len(self.requests)
+            self.assertEqual(self.run_batch(root), '完了')
+            self.assertEqual(len(self.requests), first)
+
+    def test_stale_entries_are_refetched_but_histories_reused(self):
+        import os
+        with tempfile.TemporaryDirectory() as root:
+            self.run_batch(root)
+            old = __import__('time').time() - 7 * 3600
+            for path in (Path(root) / 'work').rglob('*'):
+                if path.name.startswith('race_list') or path.parent.name == 'entries':
+                    os.utime(path, (old, old))
+            self.requests.clear()
+            self.run_batch(root)
+            self.assertEqual(sum('race_list_sub' in u for u in self.requests), 1)
+            self.assertEqual(sum('shutuba' in u for u in self.requests), 2)
+            self.assertFalse(any(u.startswith('2022') for u in self.requests))  # 戦績は再要求しない
+
+    def test_gate_stop_saves_progress_and_resumes(self):
+        from keiba_fetch_policy import BudgetExhausted
+        calls = {'n': 0}
+        original = self.fake_results
+        def flaky(hid, name):
+            calls['n'] += 1
+            if calls['n'] == 2:
+                raise BudgetExhausted(1)
+            return original(hid, name)
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(self, 'fake_results', flaky):
+                status = self.run_batch(root)
+            self.assertTrue(status.startswith('停止'))
+            log = pd.read_csv(Path(root) / 'work' / 'horses' / 'horse_log.csv', dtype=str)
+            self.assertEqual(int(log['状態'].eq('成功').sum()), 1)
+            self.assertEqual(self.run_batch(root), '完了')
+            log = pd.read_csv(Path(root) / 'work' / 'horses' / 'horse_log.csv', dtype=str)
+            self.assertEqual(int(log['状態'].eq('成功').sum()), 3)
+
+
+class ConfidenceRuleTests(unittest.TestCase):
+    def test_score_and_selection_rule(self):
+        conf = {'戦績確認率': 1.0, '順位表示率(最少)': 0.9, '平均項目充足率': 0.8, '近5走平均有効数': 4.0}
+        score = conf['戦績確認率'] * 25 + conf['順位表示率(最少)'] * 30 + conf['平均項目充足率'] * 30 + conf['近5走平均有効数'] / 5 * 15
+        self.assertAlmostEqual(score, 88.0)
+
+
+if __name__ == '__main__':
+    unittest.main()
