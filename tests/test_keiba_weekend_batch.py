@@ -12,7 +12,8 @@ import keiba_weekend_batch as wb
 DATE = '20261114'
 LIST = ('<ul>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050510">10R 試験S 15:00 芝1600m 4頭</a></li>'
-        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050505">5R 2歳新馬 芝1800m 2頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba_debut.html?race_id=202608050505&rf=race_list">5R 2歳新馬 芝1800m 2頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050511">11R 読めないS 15:40 芝2000m 9頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050509">9R 試験特別 ダ1800m 9頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050508">8R 障害S 障3000m 9頭</a></li></ul>')
 
@@ -57,8 +58,12 @@ class WeekendBatchTests(unittest.TestCase):
             return LIST
         if url.endswith('202608050510'):
             return entry_page('試験S', '３勝クラス', MAIN, cancel={'2022100004'})
-        if url.endswith('202608050505'):
-            return entry_page('2歳新馬', '2歳 新馬', DEBUT)
+        if 'shutuba_debut.html' in url and url.endswith('202608050505'):
+            # 新馬戦のページ構造が違っても、一覧の表記で条件を補う（見出し・コース欄なし）。
+            return entry_page('2歳新馬', '2歳 新馬', DEBUT).replace('<h1 class="RaceName">2歳新馬</h1>', '').replace(
+                '<div class="RaceData01">15:00発走 / 芝1600m 右 外</div>', '').replace('<div class="RaceData02"><span>5回</span><span>京都</span><span>2歳 新馬</span></div>', '')
+        if url.endswith('202608050511'):
+            return '<html><body>メンテナンス中</body></html>'
         raise AssertionError(url)
 
     def fake_results(self, hid, name):
@@ -86,7 +91,11 @@ class WeekendBatchTests(unittest.TestCase):
             out = Path(root) / 'out'
             races = pd.read_csv(out / f'{DATE}_全芝レース一覧.csv', dtype={'レースID': str})
             # ダート・障害は出走表を開かずに除外。
-            self.assertEqual(sorted(races['レースID']), ['202608050505', '202608050510'])
+            self.assertEqual(sorted(races['レースID']), ['202608050505', '202608050510', '202608050511'])
+            broken = races.set_index('レースID').loc['202608050511']
+            self.assertIn('出走表を読めず保留', broken['注意点'])
+            debut_row = races.set_index('レースID').loc['202608050505']
+            self.assertEqual((debut_row['コース'], debut_row['競馬場']), ('芝1800m', '京都'))
             self.assertFalse(any('202608050509' in u or '202608050508' in u for u in self.requests))
             # 新馬戦の出走馬は戦績を要求しない。
             self.assertFalse(any(u in ('2024100001', '2024100002') for u in self.requests))
@@ -126,7 +135,7 @@ class WeekendBatchTests(unittest.TestCase):
             self.run_batch(root)
             old = __import__('time').time() - 7 * 3600
             for path in (Path(root) / 'work').rglob('*'):
-                if path.name.startswith('race_list') or path.parent.name == 'entries':
+                if path.name.startswith('race_list') or (path.parent.name == 'entries' and path.suffix != '.error'):
                     os.utime(path, (old, old))
             self.requests.clear()
             self.run_batch(root)

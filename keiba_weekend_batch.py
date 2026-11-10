@@ -64,18 +64,41 @@ def parse_race_list(html, date):
             continue
         text = item.get_text(' ', strip=True)
         course = re.search(r'(芝|ダ|障)\s*(\d{3,4})m', text)
+        page = re.search(r'/race/(shutuba(?:_debut)?\.html)', link.get('href', ''))
+        name = re.match(r'\s*\d{1,2}R\s+(.+?)(?:\s+\d{1,2}:\d{2})?\s+(?:芝|ダ|障)', text)
         rows.append({'日付': f'{date[:4]}-{date[4:6]}-{date[6:]}', 'レースID': hit[1], '一覧表記': text,
-                     'コース': course[1] if course else '', '距離': int(course[2]) if course else pd.NA})
+                     'コース': course[1] if course else '', '距離': int(course[2]) if course else pd.NA,
+                     '一覧レース名': name[1] if name else '', '出走表ページ': page[1] if page else 'shutuba.html'})
     return pd.DataFrame(rows).drop_duplicates('レースID') if rows else pd.DataFrame(
-        columns=['日付', 'レースID', '一覧表記', 'コース', '距離'])
+        columns=['日付', 'レースID', '一覧表記', 'コース', '距離', '一覧レース名', '出走表ページ'])
 
 
 # ---------------------------------------------------------------- entries
-def parse_entry_page(html, race_id):
+def listed_metadata(race_id, listed):
+    """出走表から条件を読めない時だけ、一覧の明示表記（芝・距離・名称・開催日）と競馬場コードで補う。"""
+    from keiba_race_config import VENUES
+    name = str(listed.get('一覧レース名') or '')
+    meta = {'name': name, 'venue': VENUES.get(race_id[4:6], ''), 'surface': listed.get('コース', ''),
+            'distance': int(listed['距離']) if pd.notna(listed.get('距離')) else pd.NA, 'race_date': listed.get('日付', '')}
+    if re.search(r'新馬|未勝利|勝クラス', name):
+        meta['grade'] = '条件戦'
+    return meta
+
+
+def parse_entry_page(html, race_id, listed=None):
     from keiba_race_metadata import parse_metadata
     from keiba_v22_collect import entry_rows
     url = ENTRY_URL + race_id
-    meta = parse_metadata(html, url)
+    try:
+        meta = parse_metadata(html, url)
+        source = '出走表'
+    except ValueError:
+        if listed is None:
+            raise
+        meta, source = listed_metadata(race_id, listed), '一覧の表記'
+    if listed is not None:
+        for key, value in listed_metadata(race_id, listed).items():
+            meta.setdefault(key, value)
     soup = BeautifulSoup(html, 'html.parser')
     start = soup.select_one('.RaceData01')
     post = re.search(r'(\d{1,2}:\d{2})発走', start.get_text(' ', strip=True)) if start else None
@@ -101,7 +124,7 @@ def parse_entry_page(html, race_id):
     info = {'レースID': race_id, 'レース名': meta.get('name', ''), '発走': post[1] if post else '',
             '競馬場': meta.get('venue', ''), 'コース': meta.get('surface', ''), '距離': meta.get('distance', pd.NA),
             '開催日': meta.get('race_date', ''), '格': meta.get('grade') or '不明',
-            '取得元': url, '取得日時': now_text()}
+            '取得元': url, '条件の取得元': source, '取得日時': now_text()}
     return info, entries
 
 
@@ -318,7 +341,8 @@ def run(dates, work, out, races=None, report_only=False, cap=RUN_REQUEST_CAP):
             lists = []
             for date in dates:
                 path = work / f'race_list_{date}.csv'
-                if not fresh(path) and not report_only:
+                outdated = path.exists() and '出走表ページ' not in pd.read_csv(path, nrows=0).columns
+                if (outdated or not fresh(path)) and not report_only:
                     parse_race_list(fetch_text(LIST_URL + date), date).to_csv(path, index=False, encoding='utf-8-sig')
                 if path.exists():
                     lists.append(pd.read_csv(path, dtype={'レースID': str}))
@@ -330,9 +354,17 @@ def run(dates, work, out, races=None, report_only=False, cap=RUN_REQUEST_CAP):
             entry_dir.mkdir(exist_ok=True)
             for i, rid in enumerate(candidates['レースID'], 1):
                 write_status(work, 段階=f'出走表 {i}/{len(candidates)}')
-                if not fresh(entry_dir / f'{rid}.json') and not report_only:
-                    info, entries = parse_entry_page(fetch_text(ENTRY_URL + rid), rid)
-                    listed = candidates.loc[candidates['レースID'].eq(rid), '日付'].iloc[0]
+                if not (fresh(entry_dir / f'{rid}.json') or fresh(entry_dir / f'{rid}.error')) and not report_only:
+                    row = candidates.loc[candidates['レースID'].eq(rid)].iloc[0].to_dict()
+                    page = row.get('出走表ページ') if row.get('出走表ページ') in ('shutuba.html', 'shutuba_debut.html') else 'shutuba.html'
+                    try:
+                        info, entries = parse_entry_page(fetch_text(f'https://race.netkeiba.com/race/{page}?race_id={rid}'), rid, row)
+                    except ValueError as exc:
+                        # 1レースが読めなくても全体は止めない（保留として出力に残す）。
+                        (entry_dir / f'{rid}.error').write_text(str(exc)[:300], encoding='utf-8')
+                        continue
+                    (entry_dir / f'{rid}.error').unlink(missing_ok=True)
+                    listed = row['日付']
                     if not info['開催日']:
                         info['開催日'] = listed  # 一覧ページの開催日で補う（出走表に日付表記がない場合）
                     elif info['開催日'] != listed:
@@ -473,6 +505,19 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             for hid, r in ranked.iterrows():
                 top_rows.append({'レースID': rid, 'レース名': info['レース名'], '想定ペース': p, '順位': int(r['参考順位']),
                                  '馬番': numbers.get(hid), '馬名': r['馬名'], '参考点': r['総合参考点']})
+    seen = {r.get('レースID') for r in race_rows}
+    listed = pd.concat([pd.read_csv(f, dtype={'レースID': str}) for f in sorted(Path(work).glob('race_list_*.csv'))],
+                       ignore_index=True) if list(Path(work).glob('race_list_*.csv')) else pd.DataFrame(columns=['レースID'])
+    for err in sorted((Path(work) / 'entries').glob('*.error')):
+        rid = err.stem
+        if rid in seen:
+            continue
+        row = listed.loc[listed['レースID'].eq(rid)]
+        first = row.iloc[0] if len(row) else {}
+        race_rows.append({'日付': first.get('日付', ''), '競馬場': '', 'R': int(rid[-2:]), 'レース名': first.get('一覧レース名', ''),
+                          'レースID': rid, 'コース': f"芝{first.get('距離', '')}m", '信頼度': '保留（出走表を読めず）',
+                          '注意点': '出走表を読めず保留：' + err.read_text(encoding='utf-8')[:120],
+                          '_score': -1.0, '_valid': 0.0, '_ok': False})
     races = pd.DataFrame(race_rows)
     if not races.empty and '_score' in races:
         sel = races.loc[races['_ok'].fillna(False).astype(bool)].sort_values(['_score', '_valid', 'レースID'], ascending=[False, False, True]).head(3)
