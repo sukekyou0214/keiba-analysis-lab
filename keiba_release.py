@@ -15,13 +15,26 @@ MODULES=('keiba_fetch_policy','keiba_core','keiba_v22','keiba_v22_collect','keib
          'keiba_weekend_batch','keiba_weekend_ui')
 
 
+# RaceConfig presets must keep their class identity; this module reloads itself from app.py.
+NEVER_RELOAD=('keiba_release','keiba_race_config')
+
+
+def release_modules():
+    """Fixed order first, then any other loaded keiba_* module (new modules are covered too)."""
+    loaded=[n for n in sorted(sys.modules) if n.startswith('keiba_') and n not in NEVER_RELOAD and n not in MODULES]
+    return [n for n in MODULES]+loaded
+
+
 def prepare_release(version):
     global _KEY
     navigation=importlib.import_module('keiba_navigation')
     root=Path(__file__).resolve().parent
+    names=release_modules()
     fingerprints=[]
-    for name in MODULES:
+    for name in names:
         path=root/(name+'.py')
+        if not path.exists():
+            continue
         info=path.stat()
         fingerprints.append((name,info.st_mtime_ns,info.st_size))
     key=(version,tuple(fingerprints))
@@ -29,7 +42,7 @@ def prepare_release(version):
         if _KEY==key and getattr(navigation,'_loaded_app_version',None)==version:
             return navigation
         importlib.invalidate_caches()
-        for name in MODULES:
+        for name in names:
             module=sys.modules.get(name)
             if module is not None:
                 importlib.reload(module)

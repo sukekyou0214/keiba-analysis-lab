@@ -18,8 +18,14 @@ if _pending_bridge:
 if st.session_state.get('main_evidence_kind_v22')=='全頭参考順位':
     st.session_state['main_evidence_kind_v22']='今回条件・前走'
 APP_VERSION = '22.2'
-from keiba_release import prepare_release
-_navigation = prepare_release(APP_VERSION)
+import importlib as _importlib
+import keiba_release as _keiba_release
+# keiba_release reloads the other modules; reload it too when its own file changes (no restart on deploy).
+_release_sig = (Path(_keiba_release.__file__).stat().st_mtime_ns, Path(_keiba_release.__file__).stat().st_size)
+if getattr(_keiba_release, '_file_sig', None) != _release_sig:
+    _keiba_release = _importlib.reload(_keiba_release)
+    _keiba_release._file_sig = _release_sig
+_navigation = _keiba_release.prepare_release(APP_VERSION)
 from keiba_core import as_text_columns
 _keiba_start_t = time.perf_counter()
 st.set_page_config(page_title='競馬分析ラボ', page_icon='🏇', layout='wide')

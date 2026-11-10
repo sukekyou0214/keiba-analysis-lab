@@ -67,3 +67,19 @@ class NavigationTests(unittest.TestCase):
                 for detail in DETAILS:
                     app.radio(key='nav_detail_v22').set_value(detail).run()
                     self.assertEqual(len(app.exception),0,detail)
+
+
+class ReleaseModuleTests(unittest.TestCase):
+    def test_new_keiba_modules_are_covered_but_config_and_release_are_not(self):
+        import keiba_weekend_batch  # noqa: F401
+        from keiba_release import release_modules
+        names = release_modules()
+        self.assertIn('keiba_weekend_batch', names)
+        self.assertNotIn('keiba_release', names)
+        self.assertNotIn('keiba_race_config', names)
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_app_reloads_release_module_when_its_file_changes(self):
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / 'app.py').read_text(encoding='utf-8')
+        self.assertIn('_importlib.reload(_keiba_release)', source)
