@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import pandas as pd
 
 
-def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=True):
+def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=True, limited=None):
+    """limited: horse IDs whose history fetch was stopped by the source's refusals."""
     from keiba_v22 import rank_entries
     if context is None:
         return pd.DataFrame()
@@ -26,10 +27,16 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
         grades=data.get('レース格',pd.Series('',index=data.index))
         selected=data.loc[grades.isin(['G1','G2','G3'])].copy()
     result=rank_entries(pd.DataFrame(rows),selected,config=SimpleNamespace(**context),pace=pace)
-    if graded_only and not result.empty:
-        result.loc[result['判定'].eq('戦績未取得'),'判定']='対象の重賞戦績なし・保留'
     if result.empty:
         return result
+    known=set(data['馬ID'].dropna().astype(str).str.replace(r'\.0$','',regex=True)) if '馬ID' in data else set()
+    ids=result['馬ID'].astype(str)
+    no_history=~ids.isin(known)
+    if graded_only:
+        result.loc[result['判定'].eq('戦績未取得') & ~no_history,'判定']='対象の重賞戦績なし・保留'
+    limited={str(x) for x in (limited or [])}
+    result.loc[no_history,'判定']='戦績未取得（取得待ち）'
+    result.loc[no_history & ids.isin(limited),'判定']='戦績未取得（取得先の制限）'
     result['予定騎手'] = result['予定騎手'].replace(r'^\s*(?:[○〇◯*－—-]+|未定)?\s*$', pd.NA, regex=True)
     held = result['参考順位'].isna() & result['判定'].eq('順位保留・根拠不足')
     if held.any():
@@ -43,10 +50,10 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
 
 
 def fetch_current_metadata(context):
-    import requests
+    from keiba_fetch_policy import policy_get
     from keiba_v22_collect import parse_entries
     url='https://race.netkeiba.com/race/shutuba.html?race_id='+context['race_id']
-    response=requests.get(url,timeout=20,allow_redirects=False,headers={'User-Agent':'KeibaAnalysisLab/22'})
+    response=policy_get(url,timeout=20,allow_redirects=False,headers={'User-Agent':'KeibaAnalysisLab/22'})
     if 300 <= response.status_code < 400:
         raise ValueError('転送先へ自動アクセスせず停止しました')
     response.raise_for_status()
@@ -89,7 +96,12 @@ def render_main_ranking(renderer, data, horses, numbers, context):
     st.caption(('G1〜G3' if graded_only else '全クラス')+'の実績参考順位（研究中）。過去検証で有効性は確認できていません。')
     pace=st.radio('参考順位に使う想定ペース',['S','M','H'],index=1,horizontal=True,key='main_reference_pace_v22')
     try:
-        ranking=main_ranking(data,horses,context,metadata,pace,graded_only)
+        limited=set(st.session_state.get('fetch_unfetched_v38',{}).get(context['race_id'],{}))
+        from keiba_fetch_policy import POLICY
+        if POLICY.cooldown_until('db.netkeiba.com'):
+            # 戦績ページの取得先が停止中の間は、未取得の馬すべてが制限による未取得。
+            limited|={str(h) for h in horses}
+        ranking=main_ranking(data,horses,context,metadata,pace,graded_only,limited)
     except ValueError as exc:
         st.warning('参考順位を保留しました：'+str(exc))
         return
@@ -98,6 +110,10 @@ def render_main_ranking(renderer, data, horses, numbers, context):
         return
     ranked_count = ranking['参考順位'].notna().sum()
     st.caption(f'{pace}想定 · 順位表示 {ranked_count}/{len(ranking)}頭 · 保留 {len(ranking) - ranked_count}頭')
+    missing=ranking.loc[ranking['判定'].astype(str).str.startswith('戦績未取得（')]
+    if len(missing):
+        st.warning(f'戦績未取得の{len(missing)}頭（'+'、'.join(missing['馬名'].astype(str))+'）は順位計算から外して保留にしています。'
+                   '取得後に順位が入れ替わる可能性があります。')
     shown = display_horse_column(ranking, horses, numbers)
     course_runs = pd.to_numeric(ranking.get('対象場距離走数', pd.Series(index=ranking.index, dtype=float)), errors='coerce')
     shown['同場同距離の記録'] = course_runs.map(

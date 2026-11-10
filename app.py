@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 import requests
+from keiba_fetch_policy import policy_get
 import streamlit as st
 from bs4 import BeautifulSoup
 
@@ -582,7 +583,7 @@ def historical_field_ids_v195(rid):
     if not re.fullmatch(r'\d{12}', rid):
         raise ValueError('レースIDが不正です')
     url = f'https://race.netkeiba.com/race/result.html?race_id={rid}'
-    response = requests.get(url, headers=HEADERS, timeout=20)
+    response = policy_get(url, headers=HEADERS, timeout=20)
     response.raise_for_status()
     response.encoding = response.apparent_encoding
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -1166,7 +1167,7 @@ def get_saved_race_label(rid):
     year = rid[:4]
     fallback = f'{year}年のレース（{rid}）'
     try:
-        res = requests.get(
+        res = policy_get(
             f'https://race.netkeiba.com/race/shutuba.html?race_id={rid}',
             headers=HEADERS, timeout=8
         )
@@ -1269,7 +1270,7 @@ def display_horse_column(df, horses, numbers):
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_results(horse_id, horse_name):
     url = f'https://db.netkeiba.com/horse/result/{horse_id}/'
-    res = requests.get(url, headers=HEADERS, timeout=20)
+    res = policy_get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
     res.encoding = 'EUC-JP'
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -1332,7 +1333,7 @@ def get_race_agari(race_id):
     Missing / nonnumeric 3F times do not receive a rank.
     """
     url = f'https://race.netkeiba.com/race/result.html?race_id={race_id}'
-    res = requests.get(url, headers=HEADERS, timeout=20)
+    res = policy_get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -1399,23 +1400,23 @@ def add_recent_agari_ranks(data, max_per_horse=5):
     data['上がり順位'] = pd.to_numeric(data['上がり順位'], errors='coerce')
     work = data.sort_values('日付', ascending=False, kind='stable').groupby('馬名', sort=False).head(max_per_horse)
     work = work[work['上がり順位'].isna() & work['レースID'].astype(str).str.fullmatch(r'\d{12}')]
+    if '上がり取得状態' in work.columns:
+        # 結果表に上がりが無いと確認済みのレースは再要求しない。
+        work = work[~work['上がり取得状態'].fillna('').astype(str).eq('取得不可')]
     race_ids = work['レースID'].astype(str).drop_duplicates().tolist()
     if not race_ids:
         return data, 0, []
+    from keiba_main_integration import collect_by_race, mark_race_status, AGARI_UNAVAILABLE
     progress = st.progress(0)
     status = st.empty()
-    ranks_by_race = {}
-    errors = []
-    for i, rid in enumerate(race_ids, 1):
-        status.write(f'上がり順位を照合中：{i}/{len(race_ids)}レース')
-        try:
-            ranks_by_race[rid] = get_race_agari(rid)
-        except Exception as e:
-            errors.append(f'{rid}：{e}')
-        progress.progress(i / len(race_ids))
-        if i < len(race_ids):
-            time.sleep(0.5)
+    def show(i, total, rid):
+        status.write(f'上がり順位を照合中：{i}/{total}レース')
+        progress.progress(i / total)
+    ranks_by_race, failed, unavailable, unfetched = collect_by_race(race_ids, get_race_agari, AGARI_UNAVAILABLE, show)
     status.empty()
+    progress.empty()
+    errors = [f'{rid}：{msg}' for rid, msg in {**failed, **unavailable}.items()]
+    data = mark_race_status(data, list(unavailable), '上がり取得状態', '取得不可')
     for idx, row in work.iterrows():
         race_ranks = ranks_by_race.get(str(row['レースID']), {})
         rank = race_ranks.get(str(row['馬ID']))
@@ -1432,7 +1433,7 @@ def get_netkeiba_pace(race_id):
     if not re.fullmatch(r"\d{12}", str(race_id)):
         raise ValueError('レースIDの形式が不正')
     url = f'https://db.sp.netkeiba.com/race/{race_id}/'
-    res = requests.get(url, headers=HEADERS, timeout=18)
+    res = policy_get(url, headers=HEADERS, timeout=18)
     res.raise_for_status()
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -1625,7 +1626,7 @@ def get_lap_table_test_v1594(race_id):
     if not re.fullmatch(r'\d{12}', str(race_id)):
         raise ValueError('レースID不正')
     url = f'https://db.sp.netkeiba.com/race/{race_id}/'
-    response = requests.get(url, headers=HEADERS, timeout=18)
+    response = policy_get(url, headers=HEADERS, timeout=18)
     response.raise_for_status()
     response.encoding = response.apparent_encoding
     return parse_lap_html_v1591(response.text, race_id)
@@ -1737,7 +1738,7 @@ def get_lap_race_title(rid, sample):
                         else: race_day = vals.iloc[0]
     if not race_name:
         try:
-            res = requests.get('https://race.netkeiba.com/race/result.html?race_id=' + str(rid),
+            res = policy_get('https://race.netkeiba.com/race/result.html?race_id=' + str(rid),
                                headers=HEADERS, timeout=9)
             res.raise_for_status()
             res.encoding = res.apparent_encoding
@@ -1998,11 +1999,22 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
 
     # URL入力から1タップで、出走馬・過去成績・上がり順位まで取得する。
     # 保存済みの成績は再利用し、上がり順位がまだない場合は追加照合する。
+    from keiba_fetch_policy import POLICY, DEFAULT_BUDGET, format_time
+    _cooldown_v38 = POLICY.cooldown_until()
+    if _cooldown_v38:
+        st.warning(f'取得先の制限のため、{format_time(_cooldown_v38)} まで取得を停止中です。'
+                   '保存済みデータでの分析はそのまま使えます。自動では再開しません。')
+    _stop_note_v38 = st.session_state.get('fetch_stop_note_v38')
+    if _stop_note_v38 and _stop_note_v38.get('race_id') == race_id:
+        st.info(_stop_note_v38['text'])
     if st.button('出走馬・成績・上がり・S/M/Hを一括取得', type='primary',
-                 disabled=not race_id, width='stretch'):
+                 disabled=not race_id or bool(_cooldown_v38), width='stretch'):
         _fetch_t0_v2083 = time.perf_counter()
         _fetch_marks_v2083 = {}
         st.session_state.pop('fetch_fatal_v174', None)
+        st.session_state.pop('fetch_stop_note_v38', None)
+        _budget_cm_v38 = POLICY.budget(DEFAULT_BUDGET)
+        _budget_v38 = _budget_cm_v38.__enter__()
         transient_progress_v174 = st.empty()
         with transient_progress_v174.container():
             st.caption('取得中だけ進捗と処理結果を表示します。完了後は自動で閉じます。')
@@ -2033,7 +2045,7 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
                         st.session_state.auto_numbers = nums_now
                 _fetch_marks_v2083['出馬表・キャッシュ更新'] = time.perf_counter() - _fetch_t0_v2083
                 _fetch_stage_v2083 = time.perf_counter()
-                from keiba_main_integration import horses_without_history
+                from keiba_main_integration import horses_without_history, fetch_missing_histories
                 missing_horses = horses_without_history(horses_now, data_now)
                 if missing_horses:
                     from keiba_main_integration import fetch_missing_histories
@@ -2042,12 +2054,13 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
                     def show_progress(i, total, name):
                         status.write(f'② 未取得の過去成績を取得中：{name}（{i}/{total}）')
                         progress.progress(i / total)
-                    datasets, horse_errors, unfetched = fetch_missing_histories(missing_horses, get_results, progress=show_progress)
+                    datasets, horse_errors, unfetched = fetch_missing_histories(missing_horses, get_results, progress=show_progress, delay=0)
+                    st.session_state.setdefault('fetch_unfetched_v38', {})[race_id] = dict(unfetched)
                     status.empty()
                     progress.empty()
                     if unfetched:
-                        stop_note = (f'取得先が連続して応答を拒否したため、残り{len(unfetched)}頭の取得を停止しました。'
-                                     '取得済み分は保存します。時間を置いて同じボタンを押すと未取得馬だけ取得します。')
+                        stop_note = (f'残り{len(unfetched)}頭の戦績取得を今回は停止しました（取得先の制限または今回の上限）。'
+                                     '取得済み分は保存します。同じボタンを押すと未取得馬だけ取得します。')
                         st.session_state['fetch_issues_v174'].append(stop_note)
                         st.warning(stop_note)
                     if datasets:
@@ -2063,6 +2076,28 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
                         st.warning('取得できなかった馬：' + ' / '.join(horse_errors))
                 else:
                     st.info(f'② 保存済みの過去成績 {len(data_now)}走を再利用します')
+
+                # 保存済みの馬は、馬柱（1ページで全頭）で保存後の出走が確認できた馬だけ新しい走を追加する。
+                cached_before = [h for h in horses_now if h not in missing_horses]
+                if cached_before and data_now is not None and not data_now.empty:
+                    from keiba_main_integration import PAST_URL, parse_latest_runs, stale_horses, merge_new_runs
+                    try:
+                        past_res = policy_get(PAST_URL + race_id, headers=HEADERS, timeout=20)
+                        past_res.raise_for_status()
+                        past_res.encoding = past_res.apparent_encoding
+                        stale = stale_horses({h: horses_now[h] for h in cached_before}, data_now, parse_latest_runs(past_res.text))
+                    except Exception as e:
+                        stale = {}
+                        st.session_state['fetch_issues_v174'].append(f'保存後の出走確認を省略：{e}')
+                    if stale:
+                        st.caption(f'保存後に出走した{len(stale)}頭の新しい走を追加取得します')
+                        new_sets, stale_errors, stale_left = fetch_missing_histories(stale, get_results, delay=0)
+                        if new_sets:
+                            data_now = prepare(merge_new_runs(data_now, convert_auto(pd.concat(new_sets, ignore_index=True))))
+                            st.session_state.auto_df = data_now
+                            save_race_cache(race_id, horses_now, data_now)
+                        if stale_errors:
+                            st.session_state['fetch_issues_v174'].append('保存後の出走の追加取得失敗：' + ' / '.join(stale_errors))
 
                 _fetch_marks_v2083['過去成績の取得・保存'] = time.perf_counter() - _fetch_stage_v2083
                 _fetch_stage_v2083 = time.perf_counter()
@@ -2090,28 +2125,28 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
                     valid_pids = pids[pids.str.fullmatch(r'\d{12}')].drop_duplicates().tolist()
                     old_pace = pace_work['netkeibaペース'].fillna('').astype(str).str.strip() if 'netkeibaペース' in pace_work.columns else pd.Series('', index=pace_work.index)
                     acquired = set(pids[old_pace.isin(['スロー寄り','ミドル寄り','ハイ寄り'])])
+                    if 'ペース取得状態' in pace_work.columns:
+                        # ラップ欄が無いと確認済みのレース（地方・海外など）は再要求しない。
+                        acquired |= set(pids[pace_work['ペース取得状態'].fillna('').astype(str).eq('取得不可')])
                     pending_pids = [r for r in valid_pids if r not in acquired]
                     if pending_pids:
-                        st.caption(f'S/M/Hの未取得分 {len(pending_pids)}レースを追加取得中（10件ごと保存）')
+                        from keiba_main_integration import collect_by_race, mark_race_status, PACE_UNAVAILABLE
+                        st.caption(f'S/M/Hの未取得分 {len(pending_pids)}レースを追加取得中')
                         pace_progress = st.progress(0)
-                        new_paces, errors = {}, []
-                        for j, pr in enumerate(pending_pids, 1):
-                            try:
-                                new_paces[pr] = get_netkeiba_pace(pr)
-                            except Exception as ex:
-                                errors.append({'レースID':pr,'状態':'取得不可','理由':str(ex)[:180]})
-                            if j % 10 == 0 or j == len(pending_pids):
-                                if new_paces:
-                                    pace_work = apply_netkeiba_pace(pace_work, new_paces)
-                                    st.session_state.auto_df = pace_work
-                                    save_race_cache(race_id, horses_now, pace_work)
-                                    new_paces.clear()
-                                st.session_state['pace_v157_failed'] = errors.copy()
-                            pace_progress.progress(j/len(pending_pids))
-                            if j < len(pending_pids):
-                                time.sleep(0.35)
+                        new_paces, failed_pace, unavailable_pace, unfetched_pace = collect_by_race(
+                            pending_pids, get_netkeiba_pace, PACE_UNAVAILABLE,
+                            lambda j, total, _rid: pace_progress.progress(j / total))
+                        if new_paces:
+                            pace_work = apply_netkeiba_pace(pace_work, new_paces)
+                        pace_work = mark_race_status(pace_work, list(unavailable_pace), 'ペース取得状態', '取得不可',
+                                                     'ペース取得理由', unavailable_pace)
+                        st.session_state.auto_df = pace_work
+                        save_race_cache(race_id, horses_now, pace_work)
+                        errors = [{'レースID':rid,'状態':'取得不可' if rid in unavailable_pace else '再取得待ち','理由':msg}
+                                  for rid, msg in {**failed_pace, **unavailable_pace}.items()]
+                        st.session_state['pace_v157_failed'] = errors
                         pace_progress.empty()
-                        st.success(f'S/M/Hの差分取得完了：今回 {len(pending_pids)-len(errors)}/{len(pending_pids)} レース')
+                        st.success(f'S/M/Hの差分取得：今回 {len(new_paces)}/{len(pending_pids)} レース')
                         if errors:
                             st.session_state['fetch_issues_v174'].append(f'S/M/H取得不可：{len(errors)}レース')
                             st.warning(f'S/M/Hを取得できなかったレース：{len(errors)}件。管理・検証で確認できます。')
@@ -2122,6 +2157,20 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
                 st.session_state['fetch_fatal_v174'] = str(e)
                 st.error(f'まとめて取得できませんでした：{e}')
             finally:
+                _budget_cm_v38.__exit__(None, None, None)
+                from keiba_main_integration import horses_without_history
+                _remaining_v38 = horses_without_history(st.session_state.auto_horses, st.session_state.auto_df) if st.session_state.auto_horses else {}
+                _until_v38 = POLICY.cooldown_until()
+                if _until_v38:
+                    _text_v38 = (f'取得先が連続して応答を拒否したため停止しました。{format_time(_until_v38)} 以降に同じボタンで続きを取得できます。'
+                                 f'今回の要求：{_budget_v38.used}件。')
+                elif _budget_v38.used >= _budget_v38.limit:
+                    _text_v38 = f'今回の取得上限（{_budget_v38.limit}件）に達したため停止しました。もう一度押すと続きを取得します。'
+                else:
+                    _text_v38 = f'今回の要求：{_budget_v38.used}件。'
+                if _remaining_v38:
+                    _text_v38 += f' 戦績未取得：{len(_remaining_v38)}頭（' + '、'.join(list(_remaining_v38.values())[:8]) + ('…' if len(_remaining_v38) > 8 else '') + '）。'
+                st.session_state['fetch_stop_note_v38'] = {'race_id': race_id, 'text': _text_v38}
                 # 最後の成功・失敗にかかわらず、測定値を残す（通信や待機時間込み）。
                 st.session_state['last_fetch_profile_v2083'] = {
                     'race_id': race_id,
@@ -2148,30 +2197,28 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
             pending = [rid for rid in valid_ids if rid not in confirmed_ids]
             st.write(f'対象：**{len(valid_ids)}レース** ／ netkeiba判定取得済み：**{len(valid_ids)-len(pending)}** ／ 未取得：**{len(pending)}**')
             st.caption('レース単位で集計するため、同じレースに複数の出走馬がいても1回だけアクセスします。')
-            if st.button('未取得レースのS/M/Hをまとめて取得', disabled=not pending, type='primary', width='stretch'):
+            if 'ペース取得状態' in source_df.columns:
+                unavailable_ids = set(ids[source_df['ペース取得状態'].fillna('').astype(str).eq('取得不可')])
+                pending = [rid for rid in pending if rid not in unavailable_ids]
+            from keiba_fetch_policy import POLICY, DEFAULT_BUDGET, format_time
+            pace_cooldown = POLICY.cooldown_until()
+            if pace_cooldown:
+                st.warning(f'取得先の制限のため {format_time(pace_cooldown)} まで取得を停止中です（自動では再開しません）。')
+            if st.button('未取得レースのS/M/Hをまとめて取得', disabled=not pending or bool(pace_cooldown), type='primary', width='stretch'):
+                from keiba_main_integration import collect_by_race, mark_race_status, PACE_UNAVAILABLE
                 working = st.session_state.auto_df.copy()
-                success, failed = {}, []
                 progress = st.progress(0)
-                status = st.empty()
-                for i, rid in enumerate(pending, 1):
-                    status.caption(f'取得中：{i}/{len(pending)}レース｜成功 {len(success)}件・取得不可 {len(failed)}件')
-                    try:
-                        success[rid] = get_netkeiba_pace(rid)
-                    except Exception as e:
-                        failed.append({'レースID': rid, '状態': '取得不可', '理由': str(e)[:180],
-                                       '結果ページ': f'https://db.sp.netkeiba.com/race/{rid}/'})
-                    if i % 10 == 0 or i == len(pending):
-                        if success:
-                            working = apply_netkeiba_pace(working, success)
-                            st.session_state.auto_df = working
-                            save_race_cache(st.session_state.auto_race_id, st.session_state.auto_horses, working)
-                            success.clear()
-                        st.session_state['pace_v157_failed'] = failed.copy()
-                    progress.progress(i / len(pending))
-                    if i < len(pending):
-                        time.sleep(0.35)
+                with POLICY.budget(DEFAULT_BUDGET):
+                    success, failed_map, unavailable_map, _ = collect_by_race(
+                        pending, get_netkeiba_pace, PACE_UNAVAILABLE, lambda i, total, _rid: progress.progress(i / total))
+                if success:
+                    working = apply_netkeiba_pace(working, success)
+                working = mark_race_status(working, list(unavailable_map), 'ペース取得状態', '取得不可', 'ペース取得理由', unavailable_map)
+                save_race_cache(st.session_state.auto_race_id, st.session_state.auto_horses, working)
+                failed = [{'レースID': rid, '状態': '取得不可' if rid in unavailable_map else '再取得待ち', '理由': msg,
+                           '結果ページ': f'https://db.sp.netkeiba.com/race/{rid}/'}
+                          for rid, msg in {**failed_map, **unavailable_map}.items()]
                 progress.empty()
-                status.empty()
                 st.session_state.auto_df = working
                 st.session_state['pace_v157_failed'] = failed
                 received = int(working['netkeibaペース'].fillna('').astype(str).isin(['スロー寄り', 'ミドル寄り', 'ハイ寄り']).groupby(working['レースID'].fillna('').astype(str)).any().sum())
@@ -2307,6 +2354,9 @@ section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked)
 
 if selected_page208 == '🧰 管理・検証':
     st.caption('管理・検証（オプション）：本番用の品質確認と開発中の実験を分離しています。')
+    from keiba_fetch_status_ui import render_fetch_status
+    render_fetch_status(st.session_state.get('auto_race_id', ''), st.session_state.get('auto_horses', {}),
+                        st.session_state.get('auto_numbers', {}), st.session_state.get('auto_df'))
     with st.expander('研究用ページ（オプション）',expanded=False):
         st.page_link('pages/2_過去レース相性_Ver21.py',label='過去レース相性・取得検証')
         st.page_link('pages/1_過去10年分析.py',label='過去10年の研究ページ')

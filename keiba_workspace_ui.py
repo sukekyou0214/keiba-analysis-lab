@@ -4,6 +4,7 @@ def render_workspace(selected_section=None,embedded=False):
     import time
     import pandas as pd
     import requests
+    from keiba_fetch_policy import policy_get
     import streamlit as st
     from keiba_v22 import (ELIZABETH,ENTRY_URL,Store,scope_key,validate_scope,historical_features,pattern_tables,rank_entries)
     from keiba_v22_collect import parse_entries,collect_remaining
@@ -126,7 +127,7 @@ def render_workspace(selected_section=None,embedded=False):
         store.save(scope,tables);st.session_state[historical_key]=tables
 
     def fetch_entries():
-        r=requests.get(config.entry_url,timeout=20,headers={'User-Agent':'KeibaAnalysisLab/22'})
+        r=policy_get(config.entry_url,timeout=20,headers={'User-Agent':'KeibaAnalysisLab/22'})
         r.raise_for_status();r.encoding=r.apparent_encoding or r.encoding
         return parse_entries(r.text,source=config.entry_url,expected_name=config.name)
 

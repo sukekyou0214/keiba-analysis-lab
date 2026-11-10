@@ -20,11 +20,16 @@ def fetch_missing_histories(missing, loader, sleeper=None, progress=lambda *args
     import time
     import requests
     sleeper=sleeper or time.sleep
+    from keiba_fetch_policy import PolicyStop
     items=list(missing.items());datasets=[];errors=[];refusals=0
     for i,(horse_id,name) in enumerate(items,1):
         progress(i,len(items),name)
         try:
             datasets.append(loader(horse_id,name));refusals=0
+        except PolicyStop as exc:
+            # The shared gate is closed (cooldown) or this operation's budget is used up.
+            errors.append(f'{name}：{exc}')
+            return datasets,errors,dict(items[i-1:])
         except requests.RequestException as exc:
             errors.append(f'{name}：{exc}');refusals+=1
             if refusals>=max_refusals:
@@ -33,6 +38,98 @@ def fetch_missing_histories(missing, loader, sleeper=None, progress=lambda *args
             errors.append(f'{name}：{exc}')
         if i<len(items):sleeper(delay)
     return datasets,errors,{}
+
+
+PAST_URL='https://race.netkeiba.com/race/shutuba_past.html?race_id='
+
+
+def parse_latest_runs(html):
+    """馬柱ページから各馬の最新出走日だけを読む（馬ID -> Timestamp）。日付が読めない馬は含めない。"""
+    import re
+    from bs4 import BeautifulSoup
+    from keiba_v22_collect import entry_rows
+    soup=BeautifulSoup(html,'html.parser');latest={}
+    for tr in entry_rows(soup):
+        link=tr.select_one('a[href*="/horse/"]')
+        hit=re.search(r'/horse/(\d{10})',link.get('href','')) if link else None
+        if not hit:continue
+        dates=[]
+        for cell in tr.select('td.Past'):
+            m=re.search(r'(20\d{2})\.(\d{1,2})\.(\d{1,2})',cell.get_text(' ',strip=True))
+            if m:dates.append(pd.Timestamp(int(m[1]),int(m[2]),int(m[3])))
+        if dates:latest[hit[1]]=max(dates)
+    return latest
+
+
+def stale_horses(horses,data,latest):
+    """保存済み戦績より後の出走が馬柱で確認できた馬だけを返す。未保存の馬は対象外（別途取得）。"""
+    if not isinstance(data,pd.DataFrame) or data.empty or '馬ID' not in data or '日付' not in data:return {}
+    ids=data['馬ID'].astype(str).str.replace(r'\.0$','',regex=True)
+    saved=pd.to_datetime(data['日付'],errors='coerce').groupby(ids).max()
+    out={}
+    for hid,name in horses.items():
+        hid=str(hid)
+        if hid in saved.index and hid in latest and pd.notna(saved[hid]) and latest[hid]>saved[hid]:
+            out[hid]=name
+    return out
+
+
+def merge_new_runs(data,fresh):
+    """保存済みの行（S/M/H・上がり順位などの補完済み列を含む）は残し、新しい出走だけを追加する。"""
+    if data is None or data.empty:return fresh
+    def keys(frame):
+        hid=frame['馬ID'].astype(str).str.replace(r'\.0$','',regex=True)
+        rid=frame.get('レースID',pd.Series('',index=frame.index)).fillna('').astype(str).str.replace(r'\.0$','',regex=True)
+        day=pd.to_datetime(frame['日付'],errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+        return hid+'|'+rid.where(rid.str.fullmatch(r'\d{12}'),'d:'+day)
+    new=fresh.loc[~keys(fresh).isin(set(keys(data)))]
+    return pd.concat([data,new],ignore_index=True)
+
+
+# Page-content results that will not change on a later request (e.g. no lap section).
+PACE_UNAVAILABLE=('ラップタイム欄が見つかりません','ラップ欄にS/M/Hの明示表記が見つかりません','S/M/Hの明示判定を確認できません')
+AGARI_UNAVAILABLE=('結果テーブルが見つかりません','馬名・後3Fの列が見つかりません','後3Fの数値を2頭以上取得できません')
+
+
+def collect_by_race(race_ids, loader, permanent=(), progress=lambda *args:None):
+    """Fetch one value per race through the shared gate.
+
+    Returns (results, errors, unavailable, unfetched):
+    - results: race_id -> value
+    - errors: race_id -> message for transient failures (retried next time)
+    - unavailable: race_id -> message for page-content results listed in `permanent`
+    - unfetched: race IDs not requested because the gate stopped this operation
+    """
+    from keiba_fetch_policy import PolicyStop
+    race_ids=list(race_ids);results={};errors={};unavailable={}
+    for i,rid in enumerate(race_ids,1):
+        progress(i,len(race_ids),rid)
+        try:
+            results[rid]=loader(rid)
+        except PolicyStop as exc:
+            errors[rid]=str(exc)[:180]
+            return results,errors,unavailable,race_ids[i-1:]
+        except Exception as exc:
+            message=str(exc)[:180]
+            if isinstance(exc,ValueError) and message in permanent:unavailable[rid]=message
+            else:errors[rid]=message
+    return results,errors,unavailable,[]
+
+
+def mark_race_status(data,race_ids,column,label,reason_column=None,reasons=None):
+    """Store a per-race status (e.g. 取得不可) on every row of those races without touching results."""
+    from keiba_core import as_text_columns
+    out=data.copy()
+    if not race_ids:return out
+    for c in [column]+([reason_column] if reason_column else []):
+        if c not in out.columns:out[c]=''
+    as_text_columns(out,[column]+([reason_column] if reason_column else []))
+    ids=out['レースID'].fillna('').astype(str).str.replace(r'\.0$','',regex=True)
+    for rid in race_ids:
+        mask=ids.eq(str(rid))
+        out.loc[mask,column]=label
+        if reason_column and reasons:out.loc[mask,reason_column]=reasons.get(rid,'')
+    return out
 
 
 def prepare_main_bridge(config,current):

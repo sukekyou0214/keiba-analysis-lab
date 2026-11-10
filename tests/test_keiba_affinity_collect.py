@@ -8,6 +8,22 @@ from keiba_affinity_collect import (
 )
 
 
+from unittest.mock import patch as _policy_patch
+from keiba_fetch_policy import FetchPolicy as _FetchPolicy
+_policy_patcher = None
+
+
+def setUpModule():
+    """Mocked transports must not touch the shared gate state or wait between requests."""
+    global _policy_patcher
+    _policy_patcher = _policy_patch('keiba_fetch_policy.POLICY', _FetchPolicy(sleeper=lambda _: None))
+    _policy_patcher.start()
+
+
+def tearDownModule():
+    _policy_patcher.stop()
+
+
 def special_html():
     return ('<h2>過去のレース結果</h2><table>'
             '<tr><td>2025/11/02</td><td><a href="/race/202505041111/">天皇賞</a></td><td>東京</td><td>芝2000</td><td>8</td></tr>'

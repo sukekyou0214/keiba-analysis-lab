@@ -4,6 +4,23 @@ from unittest.mock import Mock, patch
 from keiba_core import get_horses
 
 
+from unittest.mock import patch as _policy_patch
+from keiba_fetch_policy import FetchPolicy as _FetchPolicy
+_policy_patcher = None
+
+
+def setUpModule():
+    """Mocked transports must not touch the shared gate state or wait between requests."""
+    global _policy_patcher
+    _policy_patcher = _policy_patch('keiba_fetch_policy.POLICY', _FetchPolicy(sleeper=lambda _: None))
+    _policy_patcher.start()
+
+
+def tearDownModule():
+    _policy_patcher.stop()
+
+
+
 class EntryParserTests(unittest.TestCase):
     def test_entry_rows_exclude_related_links_and_use_horse_number(self):
         html = """
