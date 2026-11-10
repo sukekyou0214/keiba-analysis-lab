@@ -8,10 +8,10 @@ _LOCK=RLock()
 _KEY=None
 
 # Keep the RaceConfig class and its existing preset instances stable.
-MODULES=('keiba_core','keiba_v22','keiba_v22_collect','keiba_race_metadata',
+MODULES=('keiba_fetch_policy','keiba_core','keiba_v22','keiba_v22_collect','keiba_race_metadata',
          'keiba_diagnosis_evidence','keiba_main_conditions','keiba_main_laps',
          'keiba_main_backup','keiba_main_integration','keiba_main_patterns',
-         'keiba_main_ranking','keiba_reference_replay','keiba_workspace_ui','keiba_navigation')
+         'keiba_main_ranking','keiba_reference_replay','keiba_workspace_ui','keiba_navigation','keiba_fetch_status_ui')
 
 
 def prepare_release(version):

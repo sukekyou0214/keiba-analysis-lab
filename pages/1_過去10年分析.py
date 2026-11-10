@@ -373,7 +373,8 @@ HEADERS = {
 
 
 def _request_soup(session, url):
-    response = session.get(url, headers=HEADERS, timeout=18)
+    from keiba_fetch_policy import policy_get
+    response = policy_get(url, transport=session.get, headers=HEADERS, timeout=18)
     response.raise_for_status()
     response.encoding = response.apparent_encoding or response.encoding
     return BeautifulSoup(response.text, "html.parser")
@@ -494,7 +495,6 @@ def fetch_history_auto(start_year, end_year, status_callback=None):
                 logs.append({"対象": label, "年": year, "状況": "成功", "詳細": f"{len(records)}頭 / {race_id}"})
             except Exception as exc:
                 logs.append({"対象": label, "年": year, "状況": "失敗", "詳細": str(exc)[:180]})
-            time.sleep(0.35)
         if status_callback is not None:
             status_callback(idx, len(targets), label, year)
     return pd.DataFrame(output["秋天"], columns=DATA_COLS + ["馬番"]), pd.DataFrame(

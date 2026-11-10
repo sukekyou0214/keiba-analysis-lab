@@ -5,6 +5,23 @@ from unittest.mock import Mock, patch
 from keiba_v22_collect import parse_entries
 
 
+from unittest.mock import patch as _policy_patch
+from keiba_fetch_policy import FetchPolicy as _FetchPolicy
+_policy_patcher = None
+
+
+def setUpModule():
+    """Mocked transports must not touch the shared gate state or wait between requests."""
+    global _policy_patcher
+    _policy_patcher = _policy_patch('keiba_fetch_policy.POLICY', _FetchPolicy(sleeper=lambda _: None))
+    _policy_patcher.start()
+
+
+def tearDownModule():
+    _policy_patcher.stop()
+
+
+
 def main_row(row_id, number, horse_id, name, jockey):
     return (f'<tr class="HorseList" id="tr_{row_id}"><td class="Waku1 Txt_C">1</td>'
             f'<td class="Umaban1 Txt_C">{number}</td>'

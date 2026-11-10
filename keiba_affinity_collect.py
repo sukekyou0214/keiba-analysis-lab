@@ -178,7 +178,8 @@ def fetch_target_history(special_url: str, first_year: int, last_year: int,
     s = session or requests.Session()
 
     def fetch(url):
-        response = s.get(url, headers=UA, timeout=20)
+        from keiba_fetch_policy import policy_get
+        response = policy_get(url, transport=s.get, headers=UA, timeout=20)
         response.raise_for_status()
         response.encoding = response.apparent_encoding or response.encoding
         return response.text

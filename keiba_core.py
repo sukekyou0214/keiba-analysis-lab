@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 import requests
+from keiba_fetch_policy import policy_get
 import streamlit as st
 from bs4 import BeautifulSoup
 
@@ -17,7 +18,7 @@ VENUES = ['札幌', '函館', '福島', '新潟', '東京', '中山', '中京', 
 METRICS = ['勝率(%)', '連対率(%)', '複勝率(%)', '平均着順', '平均4角', '平均上がり', '上がり最速率(%)', '上がり3位以内率(%)', '平均上がり順位', '前方率(%)', '差し追込率(%)']
 NUMERIC = ['距離_m', '着順_数値', '上がり3F_秒', '4角順位', '上がり順位', '頭数', '前半3F', '後半3F', '前後半3F差']
 # CSV復元で全欠損になると数値型で読まれる文字列列。判定の書込前にobject型へ揃える。
-TEXT_STATUS_COLUMNS = ['netkeibaペース', 'ペース取得状態', 'ペース取得理由']
+TEXT_STATUS_COLUMNS = ['netkeibaペース', 'ペース取得状態', 'ペース取得理由', '上がり取得状態']
 
 
 def as_text_columns(data, columns=TEXT_STATUS_COLUMNS):
@@ -404,7 +405,7 @@ def historical_field_ids_v195(rid):
     if not re.fullmatch(r'\d{12}', rid):
         raise ValueError('レースIDが不正です')
     url = f'https://race.netkeiba.com/race/result.html?race_id={rid}'
-    response = requests.get(url, headers=HEADERS, timeout=20)
+    response = policy_get(url, headers=HEADERS, timeout=20)
     response.raise_for_status()
     response.encoding = response.apparent_encoding
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -988,7 +989,7 @@ def get_saved_race_label(rid):
     year = rid[:4]
     fallback = f'{year}年のレース（{rid}）'
     try:
-        res = requests.get(
+        res = policy_get(
             f'https://race.netkeiba.com/race/shutuba.html?race_id={rid}',
             headers=HEADERS, timeout=8
         )
@@ -1064,7 +1065,7 @@ def horse_name_candidate(a):
 def get_horses(race_id):
     """馬名は正式表記の最良候補を採用し、同じ馬IDの後続短縮リンクで上書きしない。"""
     url = f'https://race.netkeiba.com/race/shutuba.html?race_id={race_id}'
-    res = requests.get(url, headers=HEADERS, timeout=20)
+    res = policy_get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -1132,7 +1133,7 @@ def display_horse_column(df, horses, numbers):
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_results(horse_id, horse_name):
     url = f'https://db.netkeiba.com/horse/result/{horse_id}/'
-    res = requests.get(url, headers=HEADERS, timeout=20)
+    res = policy_get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
     res.encoding = 'EUC-JP'
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -1195,7 +1196,7 @@ def get_race_agari(race_id):
     Missing / nonnumeric 3F times do not receive a rank.
     """
     url = f'https://race.netkeiba.com/race/result.html?race_id={race_id}'
-    res = requests.get(url, headers=HEADERS, timeout=20)
+    res = policy_get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -1295,7 +1296,7 @@ def get_netkeiba_pace(race_id):
     if not re.fullmatch(r"\d{12}", str(race_id)):
         raise ValueError('レースIDの形式が不正')
     url = f'https://db.sp.netkeiba.com/race/{race_id}/'
-    res = requests.get(url, headers=HEADERS, timeout=18)
+    res = policy_get(url, headers=HEADERS, timeout=18)
     res.raise_for_status()
     res.encoding = res.apparent_encoding
     soup = BeautifulSoup(res.text, 'html.parser')
@@ -1488,7 +1489,7 @@ def get_lap_table_test_v1594(race_id):
     if not re.fullmatch(r'\d{12}', str(race_id)):
         raise ValueError('レースID不正')
     url = f'https://db.sp.netkeiba.com/race/{race_id}/'
-    response = requests.get(url, headers=HEADERS, timeout=18)
+    response = policy_get(url, headers=HEADERS, timeout=18)
     response.raise_for_status()
     response.encoding = response.apparent_encoding
     return parse_lap_html_v1591(response.text, race_id)
@@ -1600,7 +1601,7 @@ def get_lap_race_title(rid, sample):
                         else: race_day = vals.iloc[0]
     if not race_name:
         try:
-            res = requests.get('https://race.netkeiba.com/race/result.html?race_id=' + str(rid),
+            res = policy_get('https://race.netkeiba.com/race/result.html?race_id=' + str(rid),
                                headers=HEADERS, timeout=9)
             res.raise_for_status()
             res.encoding = res.apparent_encoding

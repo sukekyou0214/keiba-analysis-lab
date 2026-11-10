@@ -67,9 +67,9 @@ def parse_metadata(html,url):
 
 
 def fetch_metadata(url):
-    import requests
+    from keiba_fetch_policy import policy_get
     validate_entry_url(url)
-    r=requests.get(url,timeout=20,allow_redirects=False,headers={'User-Agent':'KeibaAnalysisLab/22'})
+    r=policy_get(url,timeout=20,allow_redirects=False,headers={'User-Agent':'KeibaAnalysisLab/22'})
     if 300<=r.status_code<400:raise ValueError('転送先へ自動アクセスせず停止しました。URLを確認してください')
     r.raise_for_status();r.encoding=r.apparent_encoding or r.encoding
     return parse_metadata(r.text,url)
