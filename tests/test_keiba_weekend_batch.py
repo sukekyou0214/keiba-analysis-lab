@@ -16,7 +16,9 @@ LIST = ('<ul>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050511">11R 読めないS 15:40 芝2000m 9頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba_debut.html?race_id=202608050506">6R 2歳新馬 芝1600m 12頭</a></li>'
         '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050509">9R 試験特別 ダ1800m 9頭</a></li>'
-        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050508">8R 障害S 障3000m 9頭</a></li></ul>')
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050508">8R 障害S 障3000m 9頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050504">4R 3歳以上障害未勝利 芝2750m 9頭</a></li>'
+        '<li class="RaceList_DataItem"><a href="../race/shutuba.html?race_id=202608050502">2R 2歳未勝利 芝1600m 16頭</a></li></ul>')
 
 
 def entry_page(name, data2, horses, cancel=()):
@@ -65,6 +67,9 @@ class WeekendBatchTests(unittest.TestCase):
                 '<div class="RaceData01">15:00発走 / 芝1600m 右 外</div>', '').replace('<div class="RaceData02"><span>5回</span><span>京都</span><span>2歳 新馬</span></div>', '')
         if url.endswith('202608050511'):
             return '<html><body>メンテナンス中</body></html>'
+        if url.endswith('202608050502'):
+            # 確定前は一部の馬だけ公開される（一覧16頭に対して3頭）。
+            return entry_page('2歳未勝利', '2歳 未勝利', MAIN[:3])
         if url.endswith('202608050506'):
             return '<h1 class="RaceName">2歳新馬</h1><p>新馬戦想定はスーパープレミアムコース登録でご覧になれます。</p>'
         raise AssertionError(url)
@@ -94,13 +99,14 @@ class WeekendBatchTests(unittest.TestCase):
             out = Path(root) / 'out'
             races = pd.read_csv(out / f'{DATE}_全芝レース一覧.csv', dtype={'レースID': str})
             # ダート・障害は出走表を開かずに除外。
-            self.assertEqual(sorted(races['レースID']), ['202608050505', '202608050506', '202608050510', '202608050511'])
+            self.assertEqual(sorted(races['レースID']), ['202608050502', '202608050505', '202608050506', '202608050510', '202608050511'])
             self.assertIn('出走表は未発表', races.set_index('レースID').loc['202608050506', '注意点'])
             broken = races.set_index('レースID').loc['202608050511']
             self.assertIn('出走表を読めず保留', broken['注意点'])
             debut_row = races.set_index('レースID').loc['202608050505']
             self.assertEqual((debut_row['コース'], debut_row['競馬場']), ('芝1800m', '京都'))
-            self.assertFalse(any('202608050509' in u or '202608050508' in u for u in self.requests))
+            self.assertFalse(any(rid in u for u in self.requests for rid in ('202608050509', '202608050508', '202608050504')))
+            self.assertIn('一部のみ公開', races.set_index('レースID').loc['202608050502', '注意点'])
             # 新馬戦の出走馬は戦績を要求しない。
             self.assertFalse(any(u in ('2024100001', '2024100002') for u in self.requests))
             # 取消馬の戦績も要求しない。
