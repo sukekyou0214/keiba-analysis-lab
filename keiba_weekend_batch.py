@@ -66,8 +66,9 @@ def parse_race_list(html, date):
         course = re.search(r'(芝|ダ|障)\s*(\d{3,4})m', text)
         page = re.search(r'/race/(shutuba(?:_debut)?\.html)', link.get('href', ''))
         name = re.match(r'\s*\d{1,2}R\s+(.+?)(?:\s+\d{1,2}:\d{2})?\s+(?:芝|ダ|障)', text)
+        surface = '障' if '障害' in text else (course[1] if course else '')
         rows.append({'日付': f'{date[:4]}-{date[4:6]}-{date[6:]}', 'レースID': hit[1], '一覧表記': text,
-                     'コース': course[1] if course else '', '距離': int(course[2]) if course else pd.NA,
+                     'コース': surface, '距離': int(course[2]) if course else pd.NA,
                      '一覧レース名': name[1] if name else '', '出走表ページ': page[1] if page else 'shutuba.html'})
     return pd.DataFrame(rows).drop_duplicates('レースID') if rows else pd.DataFrame(
         columns=['日付', 'レースID', '一覧表記', 'コース', '距離', '一覧レース名', '出走表ページ'])
@@ -83,6 +84,11 @@ def listed_metadata(race_id, listed):
     if re.search(r'新馬|未勝利|勝クラス', name):
         meta['grade'] = '条件戦'
     return meta
+
+
+def listed_horses(listed):
+    hit = re.search(r'(\d+)頭', str((listed or {}).get('一覧表記', '')))
+    return int(hit[1]) if hit else None
 
 
 def parse_entry_page(html, race_id, listed=None):
@@ -123,6 +129,9 @@ def parse_entry_page(html, race_id, listed=None):
         raise ValueError(f'{race_id}: 出走表は未発表（新馬戦の想定は会員向けページのため取得しません）')
     if entries.empty or entries['馬ID'].duplicated().any():
         raise ValueError(f'{race_id}: 出走馬の件数または重複に問題があります')
+    listed_count = listed_horses(listed)
+    if listed_count and len(entries) < listed_count:
+        raise ValueError(f'{race_id}: 出走表は一部のみ公開（一覧{listed_count}頭中{len(entries)}頭）。確定後に取り直します')
     info = {'レースID': race_id, 'レース名': meta.get('name', ''), '発走': post[1] if post else '',
             '競馬場': meta.get('venue', ''), 'コース': meta.get('surface', ''), '距離': meta.get('distance', pd.NA),
             '開催日': meta.get('race_date', ''), '格': meta.get('grade') or '不明',
@@ -377,7 +386,7 @@ def run(dates, work, out, races=None, report_only=False, cap=RUN_REQUEST_CAP):
             for rid in candidates['レースID']:
                 if (entry_dir / f'{rid}.json').exists():
                     info = json.loads((entry_dir / f'{rid}.json').read_text(encoding='utf-8'))
-                    if info.get('コース') != '芝':
+                    if info.get('コース') != '芝' or '障害' in str(info.get('レース名', '')):
                         continue  # 一覧と出走表の両方で芝のみ（障害・ダートを除外）
                     infos.append(info)
                     frames.append(pd.read_csv(entry_dir / f'{rid}.csv', dtype={'馬ID': str, 'レースID': str}))
@@ -588,9 +597,16 @@ def weekend_races(root, today=None):
     rows = []
     for info_path in sorted(Path(root).glob('**/work/entries/*.json')):
         info = json.loads(info_path.read_text(encoding='utf-8'))
-        if info.get('コース') != '芝' or str(info.get('開催日', '')) < today:
+        if info.get('コース') != '芝' or '障害' in str(info.get('レース名', '')) or str(info.get('開催日', '')) < today:
             continue
         entries = pd.read_csv(info_path.with_suffix('.csv'), dtype={'馬ID': str, 'レースID': str})
+        work = info_path.parents[1]
+        listed = [pd.read_csv(f, dtype={'レースID': str}) for f in work.glob('race_list_*.csv')]
+        listed = pd.concat(listed, ignore_index=True) if listed else pd.DataFrame(columns=['レースID'])
+        row = listed.loc[listed['レースID'].eq(info['レースID'])]
+        count = listed_horses(row.iloc[0].to_dict()) if len(row) else None
+        if count and len(entries) < count:
+            continue  # 一部のみ公開の出走表で保存されたもの（確定後に取り直す）
         rows.append({**info, '作業フォルダ': str(info_path.parents[1]),
                      '頭数': int(entries['状態'].eq('出走予定').sum()),
                      '更新日時': datetime.fromtimestamp(info_path.stat().st_mtime, JST).strftime('%m/%d %H:%M')})
