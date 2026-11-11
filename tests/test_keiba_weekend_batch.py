@@ -201,6 +201,17 @@ class OpenInMainTests(unittest.TestCase):
         self.assertEqual((first['上がり順位'], first['netkeibaペース']), (2.0, 'スロー寄り'))
 
 
+class PickerTextTests(unittest.TestCase):
+    def test_empty_picker_explains_how_to_refetch(self):
+        from streamlit.testing.v1 import AppTest
+        with tempfile.TemporaryDirectory() as root:
+            script = ("import keiba_weekend_ui as ui\nfrom pathlib import Path\nui.ROOT=Path(%r)\n"
+                      "ui.render_weekend_picker(lambda *a, **k: '選択しない')" % root)
+            app = AppTest.from_string(script).run()
+            self.assertEqual(len(app.exception), 0)
+            self.assertTrue(any('まだ取得していません' in c.value for c in app.caption))
+
+
 class ConfidenceRuleTests(unittest.TestCase):
     def test_score_and_selection_rule(self):
         conf = {'戦績確認率': 1.0, '順位表示率(最少)': 0.9, '平均項目充足率': 0.8, '近5走平均有効数': 4.0}
