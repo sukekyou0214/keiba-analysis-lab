@@ -1952,6 +1952,8 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
         if st.button('保存済みレースを開く', disabled=cached_choice == '選択しない', width='stretch'):
             st.session_state.race_input_v141 = cached_choice
             st.rerun()
+    from keiba_weekend_ui import render_weekend_picker
+    render_weekend_picker(tap_choice)
     race_input = st.text_input('netkeiba出馬表URL または12桁のレースID', key='race_input_v141', placeholder='例：202605041111')
     race_id = parse_race_id(race_input) if race_input.strip() else ''
     if race_id:
@@ -1982,6 +1984,8 @@ with st.expander('📂 レース選択・データ取得（変更するときだ
             restored = load_race_cache(race_id)
             if restored is not None:
                 st.session_state.auto_horses, st.session_state.auto_df = restored
+                # 今週末の一括取得から開いた場合は、その時点の馬番を先に使う（出馬表が読めれば下で更新）。
+                st.session_state.auto_numbers = dict(st.session_state.get('weekend_numbers_v44', {}).get(race_id, {}))
                 # 保存済み成績には馬番が含まれないため、出馬表の馬番だけを再照合する。
                 # 出馬表取得が失敗しても保存済み成績と診断はそのまま利用する。
                 try:

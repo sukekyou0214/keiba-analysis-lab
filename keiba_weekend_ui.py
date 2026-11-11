@@ -59,3 +59,42 @@ def render_weekend_batch():
                     'application/zip' if path.suffix == '.zip' else 'application/json'
                 st.download_button(path.name, data=path.read_bytes(), file_name=path.name, mime=mime,
                                    key='weekend_dl_' + path.name, width='stretch')
+
+
+def render_weekend_picker(tap_choice):
+    """「レースを選ぶ」：今週末の一括取得済み芝レースを、通信なしで本体の保存データとして開く。"""
+    import streamlit as st
+    import keiba_weekend_batch as wb
+    races = wb.weekend_races(ROOT)
+    if races.empty:
+        return
+    labels = {r['レースID']: wb.race_label(r) for _, r in races.iterrows()}
+    choice = tap_choice('今週末の芝レース', ['選択しない'] + list(labels), 'weekend_race_choice_v44',
+                        format_func=lambda rid: labels.get(rid, rid))
+    if st.button('このレースを開く', disabled=choice == '選択しない', key='weekend_race_open_v44', width='stretch'):
+        open_weekend_race(races.set_index('レースID').loc[choice], choice)
+        st.rerun()
+    st.caption(f'一括取得済み：{len(races)}レース（取得時点の出走表・戦績・S/M/H。開くときは再取得しません）')
+
+
+def open_weekend_race(row, race_id):
+    import streamlit as st
+    import keiba_weekend_batch as wb
+    from keiba_core import load_race_cache, save_race_cache, prepare
+    from keiba_main_conditions import checked_context
+    from keiba_v22 import Store
+    info, horses, numbers, data, metadata, missing = wb.race_bundle(row['作業フォルダ'], race_id)
+    restored = load_race_cache(race_id)
+    merged = wb.merge_into_saved(restored[1] if restored else None, data)
+    if merged is not None and not merged.empty:
+        save_race_cache(race_id, horses, prepare(merged))
+    context = checked_context(race_id, {'race_date': info['開催日'], 'venue': info['競馬場'], 'surface': info['コース'],
+                                        'distance': info['距離'], 'name': info['レース名'],
+                                        'grade': info.get('格'), 'source': '出走表から取得（一括取得）'})
+    if context:
+        st.session_state['main_target_context'] = context
+    Store().save('main-entry-metadata-' + race_id, {'targets': metadata})
+    st.session_state['weekend_numbers_v44'] = {race_id: numbers}
+    st.session_state['weekend_missing_v44'] = {race_id: missing}
+    st.session_state.race_input_v141 = race_id
+    st.session_state.auto_race_id = ''  # 次の描画で保存データから復元させる

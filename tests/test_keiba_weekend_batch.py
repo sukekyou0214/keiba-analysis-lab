@@ -167,6 +167,40 @@ class WeekendBatchTests(unittest.TestCase):
             self.assertEqual(int(log['状態'].eq('成功').sum()), 3)
 
 
+class OpenInMainTests(unittest.TestCase):
+    def setUp(self):
+        self.batch = WeekendBatchTests('test_end_to_end_outputs_and_rules')
+        self.batch.setUp()
+        self.addCleanup(self.batch.policy.stop)
+
+    def test_weekend_races_list_and_bundle_without_requests(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.batch.run_batch(root)
+            before = len(self.batch.requests)
+            races = wb.weekend_races(root, today='2026-11-14')
+            self.assertIn('202608050510', set(races['レースID']))
+            self.assertTrue(wb.weekend_races(root, today='2026-11-16').empty)  # 終わった週は出さない
+            row = races.set_index('レースID').loc['202608050510']
+            self.assertEqual(wb.race_label({**row.to_dict(), 'レースID': '202608050510'}), '11/14(土) 京都10R 試験S 芝1600m・3頭')
+            info, horses, numbers, data, metadata, missing = wb.race_bundle(row['作業フォルダ'], '202608050510')
+            self.assertEqual(set(horses), {'2022100001', '2022100002', '2022100003'})  # 取消馬は除外
+            self.assertEqual(numbers['2022100001'], 1)
+            self.assertIn('ハイ寄り', set(data['netkeibaペース'].dropna()))
+            self.assertEqual(missing, [])
+            self.assertEqual(metadata['取得元'].iloc[0], wb.ENTRY_URL + '202608050510')
+            self.assertEqual(len(self.batch.requests), before)
+
+    def test_merge_keeps_saved_enrichment(self):
+        existing = pd.DataFrame([{'馬ID': '2020000001', 'レースID': '202601010101', '日付': '2026-10-01', '上がり順位': 2.0,
+                                  'netkeibaペース': ''}])
+        fresh = pd.DataFrame([{'馬ID': '2020000001', 'レースID': '202601010101', '日付': '2026-10-01', 'netkeibaペース': 'スロー寄り'},
+                              {'馬ID': '2020000002', 'レースID': '202601010102', '日付': '2026-09-01', 'netkeibaペース': 'ハイ寄り'}])
+        merged = wb.merge_into_saved(existing, fresh)
+        self.assertEqual(len(merged), 2)
+        first = merged.loc[merged['馬ID'].eq('2020000001')].iloc[0]
+        self.assertEqual((first['上がり順位'], first['netkeibaペース']), (2.0, 'スロー寄り'))
+
+
 class ConfidenceRuleTests(unittest.TestCase):
     def test_score_and_selection_rule(self):
         conf = {'戦績確認率': 1.0, '順位表示率(最少)': 0.9, '平均項目充足率': 0.8, '近5走平均有効数': 4.0}
