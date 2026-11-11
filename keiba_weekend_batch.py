@@ -579,3 +579,64 @@ th{{background:var(--head);position:sticky;top:0}}</style></head><body>
 
 if __name__ == '__main__':
     sys.exit(main())
+
+
+# ---------------------------------------------------------------- open in the main screen
+def weekend_races(root, today=None):
+    """一括取得済みの芝レース（対象日が今日以降）。本体の「レースを選ぶ」から開く候補。"""
+    today = today or datetime.now(JST).strftime('%Y-%m-%d')
+    rows = []
+    for info_path in sorted(Path(root).glob('**/work/entries/*.json')):
+        info = json.loads(info_path.read_text(encoding='utf-8'))
+        if info.get('コース') != '芝' or str(info.get('開催日', '')) < today:
+            continue
+        entries = pd.read_csv(info_path.with_suffix('.csv'), dtype={'馬ID': str, 'レースID': str})
+        rows.append({**info, '作業フォルダ': str(info_path.parents[1]),
+                     '頭数': int(entries['状態'].eq('出走予定').sum()),
+                     '更新日時': datetime.fromtimestamp(info_path.stat().st_mtime, JST).strftime('%m/%d %H:%M')})
+    if not rows:
+        return pd.DataFrame()
+    races = pd.DataFrame(rows).sort_values(['開催日', '発走', '競馬場', 'レースID'])
+    return races.drop_duplicates('レースID', keep='last')
+
+
+def race_label(row):
+    day = datetime.strptime(row['開催日'], '%Y-%m-%d')
+    week = '月火水木金土日'[day.weekday()]
+    return (f"{day.month}/{day.day}({week}) {row['競馬場']}{int(row['レースID'][-2:])}R {row['レース名']} "
+            f"芝{row['距離']}m・{row['頭数']}頭")
+
+
+def race_bundle(work, race_id):
+    """保存済みの出走表・戦績・S/M/Hから、本体で使う馬・馬番・戦績・予定情報を組み立てる（通信なし）。"""
+    from keiba_core import apply_netkeiba_pace
+    work = Path(work)
+    info = json.loads((work / 'entries' / f'{race_id}.json').read_text(encoding='utf-8'))
+    entries = pd.read_csv(work / 'entries' / f'{race_id}.csv', dtype={'馬ID': str, 'レースID': str})
+    active = entries.loc[entries['状態'].eq('出走予定')]
+    horses = dict(zip(active['馬ID'], active['馬名']))
+    numbers = {h: int(n) for h, n in zip(active['馬ID'], active['馬番']) if pd.notna(n)}
+    cache = HistoryCache(work / 'horses')
+    data = race_history(active, cache)
+    paces = pd.read_csv(work / 'pace.csv', dtype=str) if (work / 'pace.csv').exists() else pd.DataFrame(columns=['レースID', '状態'])
+    known = paces.loc[paces['状態'].eq('成功')]
+    if not data.empty and len(known):
+        data = apply_netkeiba_pace(data, dict(zip(known['レースID'], known['netkeibaペース'])))
+    metadata = pd.DataFrame({'馬ID': active['馬ID'], '馬名': active['馬名'],
+                             '予定騎手': active['騎手'].replace(r'^\s*(?:[○〇◯]+)?\s*$', pd.NA, regex=True),
+                             '想定人気': float('nan'), '情報区分': '出走表（一括取得時点）',
+                             '取得元': ENTRY_URL + race_id, '確認日時': info.get('取得日時', '')})
+    missing = [name for hid, name in horses.items() if cache.status(hid) not in ('成功', '戦績なし確認')]
+    return info, horses, numbers, data, metadata, missing
+
+
+def merge_into_saved(existing, fresh):
+    """本体に保存済みの戦績（上がり順位など補完済み）を残し、新しい走とS/M/Hの不足分だけ足す。"""
+    from keiba_main_integration import merge_new_runs, merge_saved_enrichment
+    if existing is None or existing.empty:
+        return fresh
+    if fresh is None or fresh.empty:
+        return existing
+    merged = merge_new_runs(existing, fresh)
+    merged, _ = merge_saved_enrichment(merged, fresh)
+    return merged
