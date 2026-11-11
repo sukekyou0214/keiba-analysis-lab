@@ -66,7 +66,16 @@ def render_weekend_picker(tap_choice):
     import streamlit as st
     import keiba_weekend_batch as wb
     races = wb.weekend_races(ROOT)
+    work, _, _ = folders(list(upcoming_weekend()))
+    running = wb.is_running(work)
+    if running:
+        status = wb.read_status(work)
+        st.info(f"今週末の芝レースを取得中です（{status.get('段階', '準備中')}・更新 {status.get('更新日時', '—')}）。"
+                '終わるまで、開いたレースの戦績・S/M/Hは揃っていない場合があります。')
     if races.empty:
+        if not running:
+            st.caption('今週末の芝レース：まだ取得していません。サーバーが再起動すると保存データは消えます。'
+                       '管理・検証の「週末の全芝レース一括分析」で取り直せます（約1時間）。')
         return
     labels = {r['レースID']: wb.race_label(r) for _, r in races.iterrows()}
     choice = tap_choice('今週末の芝レース', ['選択しない'] + list(labels), 'weekend_race_choice_v44',
