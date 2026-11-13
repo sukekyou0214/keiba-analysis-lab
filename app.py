@@ -1278,7 +1278,8 @@ def get_results(horse_id, horse_name):
     url = f'https://db.netkeiba.com/horse/result/{horse_id}/'
     res = policy_get(url, headers=HEADERS, timeout=20)
     res.raise_for_status()
-    res.encoding = 'EUC-JP'
+    from keiba_fetch_policy import page_encoding
+    res.encoding = page_encoding(res)  # 宣言どおりに読む（EUC-JP→UTF-8の変更に追従）
     soup = BeautifulSoup(res.text, 'html.parser')
     table = soup.select_one('table.db_h_race_results')
     if table is None:

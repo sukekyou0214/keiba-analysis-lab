@@ -218,3 +218,20 @@ POLICY = FetchPolicy(state_path=STATE_PATH)
 
 def policy_get(url, **kwargs):
     return POLICY.get(url, **kwargs)
+
+
+def page_encoding(response, default='utf-8'):
+    """ページ自身の宣言（<meta charset> → Content-Type）で文字コードを決める。決め打ちしない。
+
+    netkeibaの馬成績ページは EUC-JP から UTF-8 に変わったことがある（2026-11）。
+    """
+    import re
+    head = response.content[:4096]
+    hit = re.search(rb'<meta[^>]+charset=["\']?([A-Za-z0-9_\-]+)', head, re.I)
+    if hit:
+        return hit.group(1).decode('ascii').lower()
+    content_type = response.headers.get('Content-Type', '') if hasattr(response, 'headers') else ''
+    hit = re.search(r'charset=([A-Za-z0-9_\-]+)', content_type, re.I)
+    if hit:
+        return hit.group(1).lower()
+    return getattr(response, 'apparent_encoding', None) or default
