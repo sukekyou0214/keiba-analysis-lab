@@ -330,9 +330,27 @@ RUN_REQUEST_CAP = 2500  # 1回の実行で送る要求の上限（間隔・拒�
 FRESH_HOURS = 6  # 出走表・一覧はこれより古ければ取り直す（確定・馬番・取消の反映）。戦績とS/M/Hは再利用。
 
 
+NUMBER_RECHECK_HOURS = 0.5  # 馬番が空欄のまま保存した出走表は30分で取り直す（枠順の発表に追従）
+
+
 def fresh(path, hours=FRESH_HOURS):
     import time
     return path.exists() and time.time() - path.stat().st_mtime < hours * 3600
+
+
+def entries_fresh(entry_dir, race_id):
+    """保存済み出走表を再利用してよいか。馬番が未確定なら短い間隔で取り直す。"""
+    info, table = entry_dir / f'{race_id}.json', entry_dir / f'{race_id}.csv'
+    if not fresh(info):
+        return False
+    try:
+        entries = pd.read_csv(table, dtype={'馬ID': str})
+        active = entries.loc[entries['状態'].eq('出走予定')]
+        if active['馬番'].isna().any():
+            return fresh(info, NUMBER_RECHECK_HOURS)
+    except (OSError, ValueError, KeyError):
+        return False
+    return True
 
 
 def write_status(work, **fields):
@@ -376,7 +394,7 @@ def run(dates, work, out, races=None, report_only=False, cap=RUN_REQUEST_CAP):
             entry_dir.mkdir(exist_ok=True)
             for i, rid in enumerate(candidates['レースID'], 1):
                 write_status(work, 段階=f'出走表 {i}/{len(candidates)}')
-                if not (fresh(entry_dir / f'{rid}.json') or fresh(entry_dir / f'{rid}.error')) and not report_only:
+                if not (entries_fresh(entry_dir, rid) or fresh(entry_dir / f'{rid}.error')) and not report_only:
                     row = candidates.loc[candidates['レースID'].eq(rid)].iloc[0].to_dict()
                     page = row.get('出走表ページ') if row.get('出走表ページ') in ('shutuba.html', 'shutuba_debut.html') else 'shutuba.html'
                     try:

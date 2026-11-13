@@ -164,6 +164,23 @@ class WeekendBatchTests(unittest.TestCase):
             self.assertEqual(sum('shutuba' in u for u in self.requests), 2)
             self.assertFalse(any(u.startswith('2022') for u in self.requests))  # 戦績は再要求しない
 
+    def test_entries_without_numbers_are_rechecked_after_30_minutes(self):
+        import os
+        with tempfile.TemporaryDirectory() as root:
+            self.run_batch(root)
+            entry_dir = Path(root) / 'work' / 'entries'
+            table = pd.read_csv(entry_dir / '202608050510.csv', dtype=str)
+            table['馬番'] = pd.NA  # 枠順の発表前に保存した状態
+            table.to_csv(entry_dir / '202608050510.csv', index=False, encoding='utf-8-sig')
+            self.requests.clear()
+            self.run_batch(root)
+            self.assertFalse(any('202608050510' in u for u in self.requests))  # 30分以内は取り直さない
+            old = __import__('time').time() - 31 * 60
+            os.utime(entry_dir / '202608050510.json', (old, old))
+            self.run_batch(root)
+            self.assertEqual(sum(u.endswith('202608050510') for u in self.requests), 1)
+            self.assertEqual(pd.read_csv(entry_dir / '202608050510.csv', dtype=str)['馬番'].iloc[0], '1')
+
     def test_gate_stop_saves_progress_and_resumes(self):
         from keiba_fetch_policy import BudgetExhausted
         calls = {'n': 0}
