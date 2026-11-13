@@ -3,8 +3,15 @@ from types import SimpleNamespace
 import pandas as pd
 
 
-def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=True, limited=None):
-    """limited: horse IDs whose history fetch was stopped by the source's refusals."""
+MODES={'common':'全馬共通（芝の近10走）','graded':'重賞実績（G1〜G3）','all':'全クラス'}
+COMPARE_LABEL={'common':'全馬共通（芝の近10走）','graded':'G1〜G3','all':'全クラス'}  # 出力の「比較対象」列（従来の値を維持）
+
+
+def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=True, limited=None, mode=None):
+    """limited: horse IDs whose history fetch was stopped by the source's refusals.
+    mode: 'common'（全馬共通） / 'graded' / 'all'. 省略時は graded_only に従う（従来どおり）。"""
+    mode=mode or ('graded' if graded_only else 'all')
+    graded_only=mode=='graded'
     from keiba_v22 import rank_entries
     if context is None:
         return pd.DataFrame()
@@ -26,7 +33,11 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
     if graded_only:
         grades=data.get('レース格',pd.Series('',index=data.index))
         selected=data.loc[grades.isin(['G1','G2','G3'])].copy()
-    result=rank_entries(pd.DataFrame(rows),selected,config=SimpleNamespace(**context),pace=pace)
+    if mode=='common':
+        from keiba_common_ranking import common_rank
+        result=common_rank(pd.DataFrame(rows),data,SimpleNamespace(**context),pace=pace)
+    else:
+        result=rank_entries(pd.DataFrame(rows),selected,config=SimpleNamespace(**context),pace=pace)
     if result.empty:
         return result
     known=set(data['馬ID'].dropna().astype(str).str.replace(r'\.0$','',regex=True)) if '馬ID' in data else set()
@@ -45,7 +56,7 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
         result.loc[held & short & ~sparse, '判定'] = '根拠不足（有効成績3走未満）'
         result.loc[held & ~short & sparse, '判定'] = '根拠不足（充足率60%未満）'
         result.loc[held & short & sparse, '判定'] = '根拠不足（有効走数・充足率）'
-    result['比較対象']='G1〜G3' if graded_only else '全クラス'
+    result['比較対象']=COMPARE_LABEL[mode]
     return result
 
 
@@ -88,12 +99,13 @@ def render_main_ranking(renderer, data, horses, numbers, context):
                 st.caption('予定情報の確認日時：'+(checked.strftime('%Y/%m/%d %H:%M') if pd.notna(checked) else '未確認'))
             if set(metadata['馬ID'].astype(str)) != {str(x) for x in horses}:
                 st.info('出走表と本体の対象馬が異なります。参考順位は本体で読込済みの馬が対象です。')
-        # 出走表で条件戦と確認できた時だけ全クラス比較を既定にする。不明時は従来どおりG1〜G3。
-        graded_default=context.get('grade')!='条件戦'
-        graded_only=st.checkbox('重賞実績で比較する（G1〜G3）',value=graded_default,
-                                key='main_reference_graded_v22_'+context['race_id'])
-        st.caption('比較対象：'+('G1〜G3の取得済み実績。クラス間の混在を抑えますが、G1とG3の難易度差は未補正です。' if graded_only else '全クラスの取得済み実績。未勝利・条件戦の好成績も含まれるため、重賞向けの能力順位には使えません。'))
-    st.caption(('G1〜G3' if graded_only else '全クラス')+'の実績参考順位（研究中）。過去検証で有効性は確認できていません。')
+    from keiba_common_ranking import DESCRIPTION
+    mode=st.radio('比較方法',list(MODES),format_func=MODES.get,horizontal=True,
+                  key='main_reference_mode_v47_'+context['race_id'])
+    graded_only=mode=='graded'
+    st.caption({'common':DESCRIPTION,
+                'graded':'重賞実績：G1〜G3の取得済み実績だけで比較。重賞経験が少ない馬は保留になります。G1とG3の難易度差は未補正。過去検証で有効性は未確認。',
+                'all':'全クラス：取得済みの全実績で比較。未勝利・条件戦の好成績も含みます。充足率60%未満・有効3走未満は保留。過去検証で有効性は未確認。'}[mode])
     pace=st.radio('参考順位に使う想定ペース',['S','M','H'],index=1,horizontal=True,key='main_reference_pace_v22')
     try:
         limited=set(st.session_state.get('fetch_unfetched_v38',{}).get(context['race_id'],{}))
@@ -101,7 +113,7 @@ def render_main_ranking(renderer, data, horses, numbers, context):
         if POLICY.cooldown_until('db.netkeiba.com'):
             # 戦績ページの取得先が停止中の間は、未取得の馬すべてが制限による未取得。
             limited|={str(h) for h in horses}
-        ranking=main_ranking(data,horses,context,metadata,pace,graded_only,limited)
+        ranking=main_ranking(data,horses,context,metadata,pace,graded_only,limited,mode=mode)
     except ValueError as exc:
         st.warning('参考順位を保留しました：'+str(exc))
         return
@@ -121,11 +133,16 @@ def render_main_ranking(renderer, data, horses, numbers, context):
     ).to_numpy()
     renderer(shown,['馬名','参考順位','総合参考点','同場同距離の記録','評価項目充足率','予定騎手','想定人気','判定'],
              {'馬名':'馬番＋正式馬名','参考順位':'実績参考順位','総合参考点':'参考点','評価項目充足率':'項目充足率(%)','予定騎手':'予定騎手','想定人気':'想定人気','判定':'根拠の状態'})
-    st.caption(f'同場同距離の記録は、対象日前の{context["venue"]}{context["surface"]}{context["distance"]}mを選択中のクラスで集計。')
+    if mode=='common':
+        st.caption(f'同場同距離の記録は、窓（芝の直近10走）のうち{context["venue"]}芝{context["distance"]}m±400mの走数。'
+                   '項目充足率は、5項目のうち実際の経験がある項目の割合（順位の保留には使いません）。')
+    else:
+        st.caption(f'同場同距離の記録は、対象日前の{context["venue"]}{context["surface"]}{context["distance"]}mを選択中のクラスで集計。')
     jockey_count = ranking['予定騎手'].fillna('').astype(str).str.strip().ne('').sum()
     popularity_count = pd.to_numeric(ranking['想定人気'], errors='coerce').notna().sum()
     st.caption(f'出走表の予定情報 · 予定騎手 {jockey_count}/{len(ranking)}頭 · 想定人気 {popularity_count}/{len(ranking)}頭')
-    st.caption('着順の頭数補正40%、同場同距離20%、同距離15%、同場10%、想定ペース別15%で仮集計。欠損項目を除いて重みを再配分します。近5走の有効成績3走以上・項目充足率60%以上で順位を付けます。')
+    if mode!='common':
+        st.caption('着順の頭数補正40%、同場同距離20%、同距離15%、同場10%、想定ペース別15%で仮集計。欠損項目を除いて重みを再配分します。近5走の有効成績3走以上・項目充足率60%以上で順位を付けます。')
     st.caption('参考点は実績の比較用です。レース格・相手関係・時計の補正を含まず、総合能力・勝率・期待値の評価は未検証です。')
     candidates=ranking.loc[ranking['妙味'].str.startswith('中穴候補',na=False)]
     st.write('中穴の参考候補：'+('、'.join(candidates['馬名']) if len(candidates) else '保留（条件を満たす馬、または想定人気の確認が不足）'))
@@ -133,7 +150,7 @@ def render_main_ranking(renderer, data, horses, numbers, context):
     with st.expander('参考順位の根拠を見る',expanded=False):
         name=st.selectbox('根拠を確認する馬',ranking['馬名'].tolist(),key='main_reference_horse_v22')
         row=ranking.loc[ranking['馬名'].eq(name)].iloc[0]
-        if context['surface'] == '芝':
+        if context['surface'] == '芝' and mode != 'common':
             distance_evidence = []
             for distance in (1800, 2000, 2200, 2400):
                 runs = row.get(f'{distance}m走数', pd.NA)
@@ -145,8 +162,11 @@ def render_main_ranking(renderer, data, horses, numbers, context):
                 distance_evidence.append(f'{distance}m {value}')
             st.caption('芝の距離別実績（対象日前・選択中のクラス）')
             st.write(' · '.join(distance_evidence))
-        for label in ['近5走有効数','近5走着順参考点','対象場距離走数','対象場距離複勝率','対象距離走数','対象距離複勝率','対象場走数','対象場複勝率',pace+'走数',pace+'複勝率','予定騎手','想定人気','妙味']:
+        common_labels=['窓内走数','有効走数','着順点','格','格走数','重賞走数','窓内3着内率','同場距離帯走数','同場距離帯','距離帯走数','距離帯','同場走数','同場','想定ペース走数','想定ペース']
+        for label in (common_labels+['予定騎手']) if mode=='common' else ['近5走有効数','近5走着順参考点','対象場距離走数','対象場距離複勝率','対象距離走数','対象距離複勝率','対象場走数','対象場複勝率',pace+'走数',pace+'複勝率','予定騎手','想定人気','妙味']:
             value=row.get(label,pd.NA)
+            if isinstance(value,float) and pd.notna(value):
+                value=round(value,1)
             st.write(label+'：'+('未確認' if pd.isna(value) else str(value)))
         mine=data.loc[data['馬ID'].astype(str).eq(str(row['馬ID']))].copy()
         if graded_only:

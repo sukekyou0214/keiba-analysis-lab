@@ -268,16 +268,16 @@ def rank_race(info, entries, history, paces):
     if not data.empty and len(known):
         data = apply_netkeiba_pace(data, dict(zip(known['レースID'], known['netkeibaペース'])))
     meta = active.rename(columns={'騎手': '予定騎手'}).assign(取得元=ENTRY_URL + info['レースID'], 想定人気=float('nan'))
-    per_pace = {}
+    per_pace, common = {}, {}
+    empty = pd.DataFrame({'馬ID': list(horses), '馬名': list(horses.values()), '参考順位': pd.NA,
+                          '総合参考点': float('nan'), '評価項目充足率': float('nan'), '近5走有効数': float('nan'),
+                          '判定': '戦績なし（新馬など）'})
     for pace in 'SMH':
-        if data.empty:
-            r = pd.DataFrame({'馬ID': list(horses), '馬名': list(horses.values()), '参考順位': pd.NA,
-                              '総合参考点': float('nan'), '評価項目充足率': float('nan'), '近5走有効数': float('nan'),
-                              '判定': '戦績なし（新馬など）'})
-        else:
-            r = main_ranking(data, horses, context, meta, pace, graded_only=graded)
+        r = empty if data.empty else main_ranking(data, horses, context, meta, pace, graded_only=graded)
         per_pace[pace] = r.set_index('馬ID')
-    return context, graded, per_pace
+        c = empty if data.empty else main_ranking(data, horses, context, meta, pace, mode='common')
+        common[pace] = c.set_index('馬ID')
+    return context, graded, per_pace, common
 
 
 def confidence(entries, cache, per_pace):
@@ -462,7 +462,7 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
         ent = entries_all.loc[entries_all['レースID'].eq(rid)]
         history = race_history(ent.loc[ent['状態'].eq('出走予定')], cache)
         try:
-            context, graded, per_pace = rank_race(info, ent, history, paces)
+            context, graded, per_pace, common = rank_race(info, ent, history, paces)
         except ValueError as exc:
             race_rows.append({**info, '注意点': f'参考順位を保留：{exc}'})
             continue
@@ -487,6 +487,7 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             **{f'{p}順位表示': int(per_pace[p]['参考順位'].notna().sum()) for p in 'SMH'},
             **{f'{p}上位3': top_names(per_pace[p], ent, 3) for p in 'SMH'},
             **{f'{p}上位5': top_names(per_pace[p], ent, 5) for p in 'SMH'},
+            **{f'全馬共通{p}上位5': top_names(common[p], ent, 5) for p in 'SMH'},
             '戦績確認率(%)': round(conf['戦績確認率'] * 100, 1), '順位表示率最少(%)': round(conf['順位表示率(最少)'] * 100, 1),
             '平均項目充足率(%)': round(conf['平均項目充足率'] * 100, 1), '近5走平均有効数': round(conf['近5走平均有効数'], 2),
             '信頼度点': round(conf['信頼度点'], 1), '信頼度': conf['信頼度'], '_score': conf['信頼度点'],
@@ -504,6 +505,14 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
                 row[f'{p}参考点'] = r['総合参考点'] if r is not None else pd.NA
                 row[f'{p}充足率(%)'] = r['評価項目充足率'] if r is not None else pd.NA
                 row[f'{p}判定'] = r['判定'] if r is not None else '取消・除外'
+            for p in 'SMH':
+                r = common[p].loc[hid] if hid in common[p].index else None
+                row[f'全馬共通{p}順位'] = r['参考順位'] if r is not None else pd.NA
+                row[f'全馬共通{p}参考点'] = r['総合参考点'] if r is not None else pd.NA
+            r = common['M'].loc[hid] if hid in common['M'].index else None
+            for col in ('着順点', '格', '重賞走数', '有効走数'):
+                row[f'全馬共通_{col}'] = r.get(col, pd.NA) if r is not None else pd.NA
+            row['全馬共通判定'] = r['判定'] if r is not None else '取消・除外'
             r = per_pace['M'].loc[hid] if hid in per_pace['M'].index else None
             row['近5走有効数'] = r['近5走有効数'] if r is not None else pd.NA
             row['比較対象'] = 'G1〜G3' if graded else '全クラス'
@@ -551,6 +560,7 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             '比較': '条件戦・オープンは全クラス、G1〜G3は重賞実績で比較。対象日以降の戦績は使わない。',
             'S/M/H': 'netkeibaのラップ欄に明示された判定のみ。直近芝5走（重賞は直近重賞5走も）を照合。補完しない。',
             '参考点': '着順の頭数補正40%、同場同距離20%、同距離15%、同場10%、想定ペース別15%。近5走有効3走以上・充足率60%以上で順位。',
+            '全馬共通': __import__('keiba_common_ranking').DESCRIPTION,
             '信頼度': SCORE_RULE, '取得先の状況': POLICY.snapshot()}
     (out / f'{stamp}_条件と取得状況.json').write_text(json.dumps(meta, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
     write_html(out / f'{stamp}_芝レース分析.html', races, sel, meta)
@@ -568,7 +578,7 @@ def write_html(path, races, sel, meta):
         head = ''.join(f'<th>{escape(c)}</th>' for c in cols)
         body = ''.join('<tr>' + ''.join(f'<td>{escape(str(r.get(c, "")))}</td>' for c in cols) + '</tr>' for _, r in frame.iterrows())
         return f'<div class="w"><table><tr>{head}</tr>{body}</table></div>'
-    cols = ['日付', '発走', '競馬場', 'R', 'レース名', 'コース', '比較対象', '頭数', 'S上位3', 'M上位3', 'H上位3', '信頼度点', '信頼度', '注意点']
+    cols = ['日付', '発走', '競馬場', 'R', 'レース名', 'コース', '比較対象', '頭数', 'S上位3', 'M上位3', 'H上位3', '全馬共通M上位5', '信頼度点', '信頼度', '注意点']
     html = f'''<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>芝レース分析</title><style>
 :root{{--bg:#fff;--fg:#1a1a1a;--mute:#666;--line:#ddd;--head:#f3f3f3}}
