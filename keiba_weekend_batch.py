@@ -197,12 +197,23 @@ def fetch_histories(entries, cache, races):
 
 
 def race_history(entries, cache):
+    """出走馬の保存済み戦績を1頭ずつ変換する。形式が違う1頭でレース全体を止めない。"""
     from keiba_core import convert_auto, prepare
-    frames = [cache.load(h) for h in entries['馬ID'].drop_duplicates()]
-    frames = [f for f in frames if not f.empty]
+    frames = []
+    for hid in entries['馬ID'].drop_duplicates():
+        raw = cache.load(hid)
+        if raw.empty:
+            continue
+        try:
+            frames.append(convert_auto(raw))
+        except ValueError as exc:
+            # 例：成績表の列構成が違う（地方・海外のみ等）。推測で埋めず、この馬を未取得扱いにする。
+            name = entries.loc[entries['馬ID'].eq(hid), '馬名'].iloc[0]
+            if cache.status(hid) != '取得不可':
+                cache.record(hid, name, '取得不可', '表の形式違い：' + str(exc)[:150])
     if not frames:
         return pd.DataFrame()
-    return prepare(convert_auto(pd.concat(frames, ignore_index=True)))
+    return prepare(pd.concat(frames, ignore_index=True))
 
 
 # ---------------------------------------------------------------- pace

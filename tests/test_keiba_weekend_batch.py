@@ -76,6 +76,8 @@ class WeekendBatchTests(unittest.TestCase):
 
     def fake_results(self, hid, name):
         self.requests.append(hid)
+        if hid == '2022100002' and getattr(self, 'odd_table', False):
+            return pd.DataFrame([{'日付': '2026/10/01', 'レース名': '海外', '馬名': name, '馬ID': hid}])  # 列が足りない表
         if hid == '2022100003':
             return raw_history(hid, name, [2])  # 有効1走のみ → 保留
         return raw_history(hid, name, [1, 2, 3, 4, 5] if hid.endswith('1') else [5, 4, 6, 3, 8])
@@ -131,6 +133,15 @@ class WeekendBatchTests(unittest.TestCase):
             self.assertIn('的中率', meta['信頼度'])
             self.assertTrue((out / f'{DATE}_芝レース分析.html').exists())
             self.assertTrue((out / f'{DATE}_ラボ取得データ.zip').exists())
+
+    def test_one_odd_history_table_does_not_stop_the_run(self):
+        self.odd_table = True
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(self.run_batch(root), '完了')
+            horses = pd.read_csv(Path(root) / 'out' / f'{DATE}_全頭展開別順位.csv', dtype={'レースID': str})
+            main = horses.loc[horses['レースID'].eq('202608050510')].set_index('馬名')
+            self.assertEqual(main.loc['試験馬イ', '戦績取得'], '取得不可')
+            self.assertEqual(main.loc['試験馬ア', 'M順位'], 1)
 
     def test_rerun_requests_nothing_already_saved(self):
         with tempfile.TemporaryDirectory() as root:
