@@ -199,6 +199,33 @@ def main(argv=None):
     s = per_race.groupby(['期間', 'モデル', '距離帯'], observed=True).apply(summarize, include_groups=False).reset_index()
     layers.append(s.rename(columns={'距離帯': '層'}).assign(層の種類='距離帯'))
     pd.concat(layers, ignore_index=True).to_csv(out / 'layers.csv', index=False, encoding='utf-8-sig')
+    # 展開予測（ルール方式）：inner でしきい値を選び、outer で一致率を見る（公表S/M/Hとの一致）。
+    import keiba_pace_v1 as pv
+    published = data.bt.pace.loc[data.bt.pace['状態'].eq('成功')].set_index('レースID')['公表ペース'].map(pv.LABELS)
+    prows = []
+    for rid in data.races.index:
+        if rid not in published.index or data.debut(rid):
+            continue
+        info = data.races.loc[rid]
+        res, _ = pv.predict_pace(data.bt.field(rid), data.by_horse, info['開催日'], pv.PaceParams())
+        prows.append({'レースID': rid, '期間': info['期間'], '公表': published[rid], '先行圧力': res['先行圧力'],
+                      '保留': res['独自判定'] is None})
+    pace = pd.DataFrame(prows)
+    if len(pace):
+        tr = pace.loc[pace['期間'].eq('inner') & ~pace['保留']]
+        acc, low, high = pv.choose_thresholds(tr['先行圧力'].to_numpy(), tr['公表'].to_numpy())
+        majority = tr['公表'].mode().iloc[0]
+        pace['独自判定'] = np.where(pace['保留'], None, np.where(pace['先行圧力'] >= high, 'H', np.where(pace['先行圧力'] <= low, 'S', 'M')))
+        pace.to_csv(out / 'pace_predictions.csv', index=False, encoding='utf-8-sig')
+        prow = []
+        for name, g in pace.groupby('期間'):
+            judged = g.loc[~g['保留']]
+            prow.append({'期間': name, 'レース数': len(g), '判定数': len(judged),
+                         '一致率': float((judged['独自判定'] == judged['公表']).mean()) if len(judged) else np.nan,
+                         '最多判定の一致率': float((g['公表'] == majority).mean()), '最多判定': majority,
+                         '分布': g['公表'].value_counts().to_dict()})
+        pd.DataFrame(prow).to_csv(out / 'pace_summary.csv', index=False, encoding='utf-8-sig')
+        log['展開しきい値'] = {'low': low, 'high': high, 'inner一致率': acc, '最多判定': majority}
     from keiba_registry import code_version
     log['コード版'] = code_version()
     (out / 'run_log.json').write_text(json.dumps(log, ensure_ascii=False, indent=1, default=str), encoding='utf-8')

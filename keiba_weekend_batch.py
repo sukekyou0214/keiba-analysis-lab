@@ -519,6 +519,7 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             **{f'全馬共通{p}上位5': top_names(common[p], ent, 5) for p in 'SMH'},
             '戦績確認率(%)': round(conf['戦績確認率'] * 100, 1), '順位表示率最少(%)': round(conf['順位表示率(最少)'] * 100, 1),
             '平均項目充足率(%)': round(conf['平均項目充足率'] * 100, 1), '近5走平均有効数': round(conf['近5走平均有効数'], 2),
+            'データ充足度点': round(conf['信頼度点'], 1), 'データ充足度': conf['信頼度'],
             '信頼度点': round(conf['信頼度点'], 1), '信頼度': conf['信頼度'], '_score': conf['信頼度点'],
             '_valid': conf['近5走平均有効数'], '_ok': conf['戦績確認率'] >= 1 and conf['順位表示率(最少)'] >= .8 and conf['平均項目充足率'] >= .7,
             '注意点': '・'.join(notes) or '—'})
@@ -590,7 +591,8 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             'S/M/H': 'netkeibaのラップ欄に明示された判定のみ。直近芝5走（重賞は直近重賞5走も）を照合。補完しない。',
             '参考点': '着順の頭数補正40%、同場同距離20%、同距離15%、同場10%、想定ペース別15%。近5走有効3走以上・充足率60%以上で順位。',
             '全馬共通': __import__('keiba_common_ranking').DESCRIPTION,
-            '信頼度': SCORE_RULE, '取得先の状況': POLICY.snapshot()}
+            '信頼度': SCORE_RULE, 'データ充足度': '旧名「信頼度」。データがどれだけそろっているかの指標で、的中の確からしさではない'
+            '（2026-11-14・15の検証で、90点以上の6レースは首位勝利0/6）。', '取得先の状況': POLICY.snapshot()}
     (out / f'{stamp}_条件と取得状況.json').write_text(json.dumps(meta, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
     write_html(out / f'{stamp}_芝レース分析.html', races, sel, meta)
     with zipfile.ZipFile(out / f'{stamp}_ラボ取得データ.zip', 'w', zipfile.ZIP_DEFLATED) as z:
@@ -607,7 +609,7 @@ def write_html(path, races, sel, meta):
         head = ''.join(f'<th>{escape(c)}</th>' for c in cols)
         body = ''.join('<tr>' + ''.join(f'<td>{escape(str(r.get(c, "")))}</td>' for c in cols) + '</tr>' for _, r in frame.iterrows())
         return f'<div class="w"><table><tr>{head}</tr>{body}</table></div>'
-    cols = ['日付', '発走', '競馬場', 'R', 'レース名', 'コース', '比較対象', '頭数', 'S上位3', 'M上位3', 'H上位3', '全馬共通M上位5', '信頼度点', '信頼度', '注意点']
+    cols = ['日付', '発走', '競馬場', 'R', 'レース名', 'コース', '比較対象', '頭数', 'S上位3', 'M上位3', 'H上位3', '全馬共通M上位5', 'データ充足度点', 'データ充足度', '注意点']
     html = f'''<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>芝レース分析</title><style>
 :root{{--bg:#fff;--fg:#1a1a1a;--mute:#666;--line:#ddd;--head:#f3f3f3}}
@@ -617,10 +619,10 @@ h1{{font-size:20px}}h2{{font-size:17px;margin-top:24px}}p,li{{color:var(--mute)}
 .w{{overflow-x:auto}}table{{border-collapse:collapse;min-width:100%}}td,th{{border:1px solid var(--line);padding:6px 8px;vertical-align:top;white-space:nowrap}}
 th{{background:var(--head);position:sticky;top:0}}</style></head><body>
 <h1>芝レース分析（ラボ参考順位）</h1><p>作成：{escape(meta['作成日時'])}／状態：{escape(meta['状態'])}</p>
-<h2>データ信頼度 上位3レース</h2>{table(sel, ['データ信頼度順'] + cols)}
+<h2>おすすめレース</h2><p>根拠が不足しているため、おすすめのレースは選んでいません。データ充足度は的中の確からしさではありません。</p>
 <h2>全芝レース</h2>{table(races, cols)}
-<h2>条件</h2><ul>{''.join(f'<li>{escape(k)}：{escape(str(v))}</li>' for k, v in meta.items() if k in ('比較', 'S/M/H', '参考点', '信頼度'))}</ul>
-<p>参考点・信頼度は実績とデータ充足の比較用で、勝率・期待値・的中率は検証していません。当日の馬場・取消・オッズは反映していません。</p>
+<h2>条件</h2><ul>{''.join(f'<li>{escape(k)}：{escape(str(v))}</li>' for k, v in meta.items() if k in ('比較', 'S/M/H', '参考点', 'データ充足度'))}</ul>
+<p>参考点・データ充足度は実績とデータの量の比較用で、勝率・期待値・的中率は検証していません。当日の馬場・取消・オッズは反映していません。</p>
 </body></html>'''
     path.write_text(html, encoding='utf-8')
 

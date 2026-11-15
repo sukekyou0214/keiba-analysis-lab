@@ -60,6 +60,30 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
     return result
 
 
+def rank_stability(data, horses, context, metadata, mode, limited=None):
+    """S/M/Hで首位が変わるか、首位と2位の点差。どちらも当たりやすさを示すものではない。"""
+    tops, gaps = {}, {}
+    for pace in 'SMH':
+        try:
+            r = main_ranking(data, horses, context, metadata, pace, mode=mode, limited=limited)
+        except ValueError:
+            return ''
+        ranked = r.loc[r['参考順位'].notna()].sort_values(['参考順位', '馬名'])
+        if ranked.empty:
+            tops[pace] = '保留'
+            continue
+        tops[pace] = str(ranked.iloc[0]['馬名'])
+        if len(ranked) > 1:
+            gaps[pace] = float(ranked.iloc[0]['総合参考点']) - float(ranked.iloc[1]['総合参考点'])
+    same = len(set(tops.values())) == 1
+    text = '順位の安定性：首位 S ' + tops['S'] + '／M ' + tops['M'] + '／H ' + tops['H'] + ('（S/M/Hで同じ）' if same else '（想定ペースで変わる）')
+    if gaps:
+        text += '。首位と2位の点差 ' + '・'.join(f'{k} {v:.1f}' for k, v in gaps.items())
+    if all(v == tops['M'] for v in tops.values()) and gaps and max(gaps.values()) - min(gaps.values()) < 1e-9:
+        text += '。S/M/Hで差がない＝展開差を評価できていない可能性'
+    return text + '（点差・安定性は当たりやすさを示すものではありません）'
+
+
 def fetch_current_metadata(context):
     from keiba_fetch_policy import policy_get
     from keiba_v22_collect import parse_entries
@@ -122,6 +146,11 @@ def render_main_ranking(renderer, data, horses, numbers, context):
         return
     ranked_count = ranking['参考順位'].notna().sum()
     st.caption(f'{pace}想定 · 順位表示 {ranked_count}/{len(ranking)}頭 · 保留 {len(ranking) - ranked_count}頭')
+    stability = rank_stability(data, horses, context, metadata, mode, limited)
+    if stability:
+        st.caption(stability)
+    from keiba_validation_status import status_text
+    st.caption(status_text(mode))
     missing=ranking.loc[ranking['判定'].astype(str).str.startswith('戦績未取得（')]
     if len(missing):
         st.warning(f'戦績未取得の{len(missing)}頭（'+'、'.join(missing['馬名'].astype(str))+'）は順位計算から外して保留にしています。'
