@@ -135,7 +135,8 @@ def parse_entry_page(html, race_id, listed=None):
     info = {'レースID': race_id, 'レース名': meta.get('name', ''), '発走': post[1] if post else '',
             '競馬場': meta.get('venue', ''), 'コース': meta.get('surface', ''), '距離': meta.get('distance', pd.NA),
             '開催日': meta.get('race_date', ''), '格': meta.get('grade') or '不明',
-            '取得元': url, '条件の取得元': source, '取得日時': now_text()}
+            '取得元': url, '条件の取得元': source, '取得日時': now_text(),
+            '条件欄2': soup.select_one('.RaceData02').get_text(' ', strip=True) if soup.select_one('.RaceData02') else ''}
     return info, entries
 
 
@@ -496,6 +497,15 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             race_rows.append({**info, '注意点': f'参考順位を保留：{exc}'})
             continue
         conf = confidence(ent, cache, per_pace)
+        try:
+            from keiba_model_data import normalize_history
+            from keiba_shadow import save_weekend_records
+            raws = [cache.load(h) for h in ent['馬ID'].drop_duplicates()]
+            raws = [r for r in raws if not r.empty]
+            norm = normalize_history(pd.concat(raws, ignore_index=True)) if raws else pd.DataFrame()
+            save_weekend_records(work, info, ent, per_pace, common, norm)
+        except Exception as exc:  # noqa: BLE001 - 記録の保存失敗で集計を止めない（注意点に残す）
+            info['記録の保存'] = f'失敗：{type(exc).__name__}: {str(exc)[:120]}'
         wanted = pace_targets(history, info['開催日'], graded)
         got = paces.loc[paces['レースID'].isin(wanted)]
         notes = []
@@ -697,3 +707,25 @@ def merge_into_saved(existing, fresh):
     merged = merge_new_runs(existing, fresh)
     merged, _ = merge_saved_enrichment(merged, fresh)
     return merged
+
+
+def collect_and_compare(work, out):
+    """レース後の結果取得と照合（開催日が今日以前のレースのみ）。照合表を出力フォルダへ書く。"""
+    from keiba_shadow import collect_results, comparison_table
+    work, out = Path(work), Path(out)
+    today = datetime.now(JST).strftime('%Y-%m-%d')
+    ids = []
+    for path in sorted((work / 'entries').glob('*.json')):
+        info = json.loads(path.read_text(encoding='utf-8'))
+        if str(info.get('開催日', '9999')) <= today and info.get('コース') == '芝':
+            ids.append(info['レースID'])
+    write_status(work, 照合='結果を取得中')
+    try:
+        saved, errors = collect_results(work, ids, fetch_text)
+        per_race, summary = comparison_table(work)
+        stamp = work.parent.name
+        per_race.to_csv(out / f'{stamp}_結果照合_レース別.csv', index=False, encoding='utf-8-sig')
+        summary.to_csv(out / f'{stamp}_結果照合_モデル別.csv', index=False, encoding='utf-8-sig')
+        write_status(work, 照合=f'完了：結果{len(saved)}件を新たに保存、取得できず{len(errors)}件')
+    except Exception as exc:  # noqa: BLE001
+        write_status(work, 照合=f'停止：{type(exc).__name__}: {str(exc)[:150]}')

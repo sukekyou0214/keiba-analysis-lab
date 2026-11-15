@@ -147,3 +147,31 @@ def rank_race(features, beta, params, debut_race=False):
     few = pd.to_numeric(features['芝有効走数'], errors='coerce').between(1, 2)
     out['判定'] = np.where(flag, '推定（芝の比較可能な実績なし）', np.where(few, '暫定（芝の有効1〜2走）', '基準モデル'))
     return out
+
+
+# ---------------------------------------------------------------- 学習済み設定（影の予測用）
+def save_artifact(path, params, beta, extra=None):
+    """学習済みの設定を保存する（係数・基準率・標準化の値だけ。生データは含めない）。"""
+    import json
+    from pathlib import Path
+    data = {'model_version': MODEL_VERSION, 'feature_version': FEATURE_VERSION, 'features': list(params.features),
+            'window': params.window, 'half_life': params.half_life, 'shrink_k': params.shrink_k, 'band': params.band,
+            'l2': params.l2, 'priors': params.priors, 'beta': [float(b) for b in beta], **(extra or {})}
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
+    return data
+
+
+def load_artifact(path):
+    import json
+    from pathlib import Path
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    params = Params(features=tuple(data['features']), window=data['window'], half_life=data['half_life'],
+                    shrink_k=data['shrink_k'], band=data['band'], l2=data['l2'], priors=data['priors'])
+    return params, np.array(data['beta'], float), data
+
+
+def artifact_version(data):
+    import hashlib
+    import json
+    digest = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()[:10]
+    return f"{data['model_version']}-{digest}"

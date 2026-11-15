@@ -72,8 +72,8 @@ class LocalStore:
 
 
 def save_prediction(store, race_id, ranking, *, target_time, source, model_version, feature_version,
-                    data_version, input_frame=None, created_at=None, code=None, extra=None):
-    """予想を保存する。同じレース×モデル版は1回だけ。"""
+                    data_version, input_frame=None, created_at=None, code=None, extra=None, revision=0):
+    """予想を保存する。同じレース×モデル版×改訂番号は1回だけ（上書きしない）。"""
     created = created_at or datetime.now(JST).isoformat(timespec='seconds')
     table = ranking.reindex(columns=PRED_COLUMNS).copy()
     table['馬ID'] = table['馬ID'].astype(str)
@@ -84,7 +84,7 @@ def save_prediction(store, race_id, ranking, *, target_time, source, model_versi
             '取得元': source, 'コード版': code or code_version(), 'データ版': data_version,
             '特徴量版': feature_version, 'モデル版': model_version,
             '入力ハッシュ': frame_hash(input_frame), '予想sha256': sha256_bytes(csv), **(extra or {})}
-    base = f'predictions/{model_version}/{race_id}'
+    base = f'predictions/{model_version}/{race_id}' + (f'_r{revision}' if revision else '')
     store.write_new(base + '.csv', csv)
     store.write_new(base + '.json', json.dumps(meta, ensure_ascii=False, indent=1).encode('utf-8'))
     return meta
@@ -121,17 +121,35 @@ def load_result(store, race_id):
     return json.loads(meta), pd.read_csv(io.BytesIO(data), dtype={'馬ID': str, 'レースID': str})
 
 
+def _ts(text):
+    try:
+        ts = pd.Timestamp(text)
+        return ts.tz_localize(JST) if ts.tzinfo is None else ts
+    except (TypeError, ValueError):
+        return pd.NaT
+
+
 def compare(store, model_version):
-    """保存済みの予想と結果を馬IDで照合する。事前保存（作成日時 < 確定日時）かを列で示す。"""
-    rows = []
+    """保存済みの予想と結果を馬IDで照合する。
+    同じレースに複数の版（出走馬の変更で保存した改訂）がある場合は、発走前に作られた最後の版を使う。
+    事前保存＝予想の作成日時が対象日時（発走時刻）より前。"""
+    rows, latest = [], {}
     for rel in store.list(f'predictions/{model_version}'):
-        race_id = Path(rel).stem
-        meta, pred = load_prediction(store, model_version, race_id)
+        key = Path(rel).stem
+        meta = json.loads(store.read(rel))
+        race_id = meta['レースID']
+        before_post = _ts(meta['作成日時']) < _ts(meta['対象日時'])
+        current = latest.get(race_id)
+        if current is None or (before_post and (not current[2] or meta['作成日時'] > current[1])):
+            latest[race_id] = (key, meta['作成日時'], before_post)
+    for race_id, (key, _, before_post) in sorted(latest.items()):
+        meta, pred = load_prediction(store, model_version, key)
         rmeta, result = load_result(store, race_id)
         if result is None:
             continue
         merged = pred.merge(result[['馬ID', '状態', '着順']], on='馬ID', how='left', validate='one_to_one')
-        merged['事前保存'] = str(meta['作成日時']) < str(rmeta['確定日時'])
+        merged['事前保存'] = bool(before_post)
+        merged['予想作成日時'] = meta['作成日時']
         merged['モデル版'] = model_version
         rows.append(merged)
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()

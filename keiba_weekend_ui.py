@@ -51,6 +51,15 @@ def render_weekend_batch():
                 st.caption('　'.join(f'{k}：{v}' for k, v in details.items()))
             if status.get('結果'):
                 st.caption('結果：' + str(status['結果']))
+            if status.get('照合'):
+                st.caption('結果照合：' + str(status['照合']))
+        if status and not running:
+            if st.button('レース後：結果を取得して照合', key='weekend_results_v54', width='stretch',
+                         help='保存済みの予想（主予測・影の予測）を結果と照合します。結果ページを1レース1回だけ取得します。'):
+                import threading
+                threading.Thread(target=wb.collect_and_compare, args=(work, out), daemon=True,
+                                 name='keiba-weekend-results:' + str(work)).start()
+                st.info('結果の取得と照合を開始しました。「状況を更新」で確認できます。')
         files = sorted(out.glob('*')) if out.exists() else []
         if files and not running:
             st.caption('出力（取得データは私的利用の範囲で扱い、再配布しないでください）')
