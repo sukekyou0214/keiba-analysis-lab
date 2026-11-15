@@ -90,5 +90,5 @@ class StabilityAndStatusTests(unittest.TestCase):
         self.assertIn('当たりやすさを示すものではありません', text)
         self.assertIn('過去検証', status_text('common'))
         self.assertIn('未使用期間での検証：未実施', status_text('x', {'モデル': {'x': {'名称': 'X', '検証': []}}}))
-        self.assertIn('採用保留', status_text('v1'))
+        self.assertIn('影の予測', status_text('v1'))
         self.assertEqual(status_text('none', {}), '検証状況：記録なし')
