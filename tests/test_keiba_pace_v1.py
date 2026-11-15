@@ -57,7 +57,11 @@ class DescribeTests(unittest.TestCase):
                              '頭数': 12, '着順_数値': 3})
         data = pd.DataFrame(rows)
         horses = {f'20200000{h:02d}': str(h) for h in range(8)}
-        text = pv.describe(data, horses, '2026-11-15')
+        with tempfile.TemporaryDirectory() as root:
+            low_path = Path(root) / 'p.json'
+            low_path.write_text(json.dumps({'low': 1.5, 'high': 3.0}))
+            with patch('keiba_pace_v1.PARAMS_PATH', low_path):
+                text = pv.describe(data, horses, '2026-11-15')
         self.assertIn('想定展開（暫定）：ハイ寄り', text)
         self.assertIn('発走直後の位置とは限りません', text)
         self.assertIn('判定保留', pv.describe(data.iloc[:0], horses, '2026-11-15'))
