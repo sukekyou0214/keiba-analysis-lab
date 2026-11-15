@@ -88,3 +88,25 @@ class RevisionTests(unittest.TestCase):
             # 改訂（取消の反映）は今の時刻で作られ、対象日時より後なので事前保存ではない → 発走前の初版で照合する
             self.assertEqual(merged.set_index('馬ID').loc['1000000001', '順位'], 1)
             self.assertTrue(merged['事前保存'].all())
+
+
+class DebutShadowTests(unittest.TestCase):
+    def test_debut_race_saved_as_held_even_with_empty_history(self):
+        import keiba_shadow as sh
+        with tempfile.TemporaryDirectory() as root:
+            artifact = ShadowTests.artifact(None, root)
+            info = {'レースID': '202608050305', '開催日': '2026-11-15', '発走': '12:00', 'レース名': '2歳新馬',
+                    '取得元': '試験'}
+            entries = pd.DataFrame({'馬ID': ['2024100001', '2024100002'], '馬名': ['ア', 'イ'], '馬番': [1, 2],
+                                    '状態': ['出走予定', '出走予定']})
+            table = pd.DataFrame({'参考順位': [pd.NA, pd.NA], '総合参考点': [np.nan, np.nan]},
+                                 index=pd.Index(entries['馬ID'], name='馬ID'))
+            with patch('keiba_shadow.ARTIFACT', artifact):
+                saved = sh.save_weekend_records(Path(root) / 'work', info, entries, {'M': table}, {'M': table},
+                                                pd.DataFrame())
+            self.assertIn('shadow-v1', saved)
+            files = list((Path(root) / 'work' / 'records' / 'predictions').glob('shadow-*/202608050305.csv'))
+            self.assertEqual(len(files), 1)
+            pred = pd.read_csv(files[0])
+            self.assertTrue(pred['順位'].isna().all())
+            self.assertTrue(pred['判定'].str.contains('判定不可').all())

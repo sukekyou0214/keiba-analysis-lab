@@ -89,8 +89,11 @@ def save_weekend_records(work, info, entries, per_pace, common, history_frame=No
         version = v1.artifact_version(data)
         active = entries.loc[entries['状態'].eq('出走予定')]
         race_info = {**info, 'クラス': info.get('クラス') or _class_of(info)}
-        feats = v1.build_features(active, history_frame, race_info, params)
         debut = '新馬' in str(info.get('レース名', ''))
+        if debut:  # 新馬戦は戦績がないので特徴量を作らず「判定不可」として保存する（照合では捕捉失敗に数える）
+            feats = pd.DataFrame({'レースID': race_id, '馬ID': active['馬ID'].astype(str).to_numpy()})
+        else:
+            feats = v1.build_features(active, history_frame, race_info, params)
         ranking = v1.rank_race(feats, beta, params, debut_race=debut)
         ranking['馬番'] = ranking['馬ID'].map(numbers)
         ranking['馬名'] = ranking['馬ID'].map(names)
