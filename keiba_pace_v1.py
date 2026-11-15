@@ -76,3 +76,44 @@ def choose_thresholds(pressures, published):
             if best is None or acc > best[0] + 1e-12:
                 best = (acc, float(low), float(high))
     return best
+
+
+def from_prepared(data):
+    """本体の保存データ（prepare 済み）を、位置取りの計算に必要な形へ。
+    本体データは取消・除外と中止を区別できない（着順が数値でない走）ので、着順が数値の走だけを使う。"""
+    if data is None or data.empty:
+        return pd.DataFrame(columns=['馬ID', '日付', '状態', '通過_原文', '頭数'])
+    d = pd.DataFrame({'馬ID': data['馬ID'].astype(str), '日付': pd.to_datetime(data['日付'], errors='coerce'),
+                      '通過_原文': data.get('通過順', pd.Series('', index=data.index)).fillna('').astype(str),
+                      '頭数': pd.to_numeric(data['頭数'], errors='coerce')})
+    d['状態'] = pd.to_numeric(data['着順_数値'], errors='coerce').notna().map({True: '完走', False: '不明'})
+    return d.sort_values(['馬ID', '日付'], ascending=[True, False])
+
+
+STATUS_NOTE = '展開予測（ルール方式v1）は検証中のため暫定です。'
+
+
+def describe(data, horses, race_date, status_note=None):
+    """主画面用：想定展開の暫定判定と根拠。判定できない場合は保留。"""
+    h = from_prepared(data)
+    by = {k: g for k, g in h.groupby('馬ID')}
+    field = pd.DataFrame({'馬ID': [str(x) for x in horses]})
+    res, _ = predict_pace(field, by, race_date, load_params())
+    names = {'S': 'スロー寄り', 'M': 'ミドル寄り', 'H': 'ハイ寄り'}
+    head = f"想定展開（暫定）：{names[res['独自判定']]}" if res['独自判定'] else '想定展開：判定保留'
+    return f"{head}。{res['根拠']}。{status_note or STATUS_NOTE}最初に記録されたコーナーの位置を目安にしており、発走直後の位置とは限りません。"
+
+
+PARAMS_PATH = __import__('pathlib').Path(__file__).resolve().parent / 'models' / 'pace_v1.json'
+
+
+def load_params(path=None):
+    """inner期間で選んだしきい値（models/pace_v1.json）。無ければ既定値（未検証）。"""
+    import json
+    from pathlib import Path
+    path = Path(path or PARAMS_PATH)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return PaceParams(low=float(data['low']), high=float(data['high']))
+    except (OSError, ValueError, KeyError):
+        return PaceParams()

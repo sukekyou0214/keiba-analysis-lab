@@ -139,3 +139,31 @@ def first_corner(passing):
     """通過順の最初の値（最初に記録されたコーナー）。発走直後の位置とは限らない。"""
     hit = re.match(r'\s*(\d+)', zen2han(passing))
     return int(hit.group(1)) if hit else None
+
+
+def from_prepared(data):
+    """本体の保存データ（prepare 済み）を共通形式へ。
+    本体データは取消・除外と中止を区別できない（着順が数値でない走）ため、それらの状態は「不明」とし、
+    出走数・窓には数えない（その旨を画面で示す）。"""
+    if data is None or data.empty:
+        return pd.DataFrame()
+    d = pd.DataFrame(index=data.index)
+    d['馬ID'] = data['馬ID'].astype(str)
+    d['レースID'] = data.get('レースID', pd.Series('', index=data.index)).astype(str)
+    d['日付'] = pd.to_datetime(data['日付'], errors='coerce')
+    d['競馬場'] = data.get('競馬場', pd.Series('', index=data.index)).astype(str)
+    d['JRA'] = d['競馬場'].isin(JRA_VENUES)
+    d['コース'] = data.get('コース', pd.Series('不明', index=data.index)).fillna('不明').replace({'ダート': 'ダ'})
+    d['距離'] = pd.to_numeric(data.get('距離_m'), errors='coerce')
+    d['馬場'] = data.get('馬場状態', pd.Series(None, index=data.index)).map(going_key)
+    d['頭数'] = pd.to_numeric(data.get('頭数'), errors='coerce')
+    d['着順'] = pd.to_numeric(data.get('着順_数値'), errors='coerce')
+    d['状態'] = d['着順'].notna().map({True: '完走', False: '不明'})
+    d['着差'] = pd.to_numeric(data.get('着差'), errors='coerce')
+    d['通過_原文'] = data.get('通過順', pd.Series('', index=data.index)).fillna('').astype(str)
+    d['レース名'] = data.get('レース名', pd.Series('', index=data.index)).astype(str)
+    grade = data.get('レース格', pd.Series('', index=data.index)).astype(str)
+    d['クラス'] = [classify_class(n, '', g) if j else None for n, g, j in zip(d['レース名'], grade, d['JRA'])]
+    d['クラス'] = d['クラス'].fillna('不明')
+    d = d.loc[d['日付'].notna()]
+    return d.sort_values(['馬ID', '日付'], ascending=[True, False])

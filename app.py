@@ -2910,6 +2910,13 @@ if selected_page208 == '🐎 各馬の特徴':
                 st.caption(f"対象 {rec205.get('対象走数','—')}走／ラップ {rec205.get('ラップ確認走数','—')}走")
         else:
             st.info('先に出走馬の成績を取得してください。')
+        try:
+            from keiba_evidence_panel import render_evidence
+            from keiba_main_conditions import main_context
+            render_evidence(analysis_df, st.session_state.get('auto_horses', {}), st.session_state.get('auto_numbers', {}),
+                            main_context(str(st.session_state.get('auto_race_id', '')), st.session_state))
+        except Exception as exc:  # noqa: BLE001 - 裏付け表が出せなくても詳細分析は止めない
+            st.caption(f'データの裏付け：表示を保留（{type(exc).__name__}）')
 
 if selected_page208 == '🧰 管理・検証':
     with tab_quality172:
