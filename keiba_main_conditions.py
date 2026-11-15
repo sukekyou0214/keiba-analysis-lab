@@ -47,6 +47,13 @@ def render_condition_context():
     context = main_context(rid, st.session_state)
     if context:
         st.caption(f"今回の条件：{context['name']} · {context['race_date']} · {context['venue']}{context['surface']}{context['distance']}m（{context['source']}）")
+        try:
+            from keiba_pace_v1 import describe
+            from keiba_validation_status import load_status
+            note = load_status().get('展開予測')
+            st.caption(describe(st.session_state['auto_df'], st.session_state.get('auto_horses', {}), context['race_date'], note))
+        except Exception as exc:  # noqa: BLE001 - 想定展開が出せなくても主画面は止めない
+            st.caption(f'想定展開：判定保留（{type(exc).__name__}）')
     else:
         st.caption('今回条件の比較には、対象出走表の開催日・競馬場・コース・距離が必要です。')
         if st.button('出走表から開催条件を確認', key='main_read_condition_context'):

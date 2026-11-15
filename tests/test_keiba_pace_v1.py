@@ -43,3 +43,27 @@ class PaceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DescribeTests(unittest.TestCase):
+    def test_describe_from_prepared_and_hold(self):
+        import tempfile, json
+        from pathlib import Path
+        from unittest.mock import patch
+        rows = []
+        for h in range(8):
+            for i in range(3):
+                rows.append({'馬ID': f'20200000{h:02d}', '日付': f'2026-{10 - i:02d}-01', '通過順': '1-1-1' if h < 4 else '10-10',
+                             '頭数': 12, '着順_数値': 3})
+        data = pd.DataFrame(rows)
+        horses = {f'20200000{h:02d}': str(h) for h in range(8)}
+        text = pv.describe(data, horses, '2026-11-15')
+        self.assertIn('想定展開（暫定）：ハイ寄り', text)
+        self.assertIn('発走直後の位置とは限りません', text)
+        self.assertIn('判定保留', pv.describe(data.iloc[:0], horses, '2026-11-15'))
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'p.json'
+            path.write_text(json.dumps({'low': 0.5, 'high': 9.0}))
+            self.assertEqual((pv.load_params(path).low, pv.load_params(path).high), (0.5, 9.0))
+            with patch('keiba_pace_v1.PARAMS_PATH', path):
+                self.assertIn('ミドル寄り', pv.describe(data, horses, '2026-11-15'))
