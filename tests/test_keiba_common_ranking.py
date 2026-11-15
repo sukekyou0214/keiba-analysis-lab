@@ -76,3 +76,17 @@ class MainRankingModeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StabilityAndStatusTests(unittest.TestCase):
+    def test_stability_text_and_validation_status(self):
+        from keiba_main_ranking import rank_stability
+        from keiba_validation_status import status_text
+        d = CommonRankingTests().frame()
+        context = {'race_id': '202608050411', 'race_date': '2026-11-15', 'venue': '京都', 'surface': '芝',
+                   'distance': 2200, 'name': '試験', 'source': '試験', 'grade': 'G1'}
+        text = rank_stability(d, {'2020000001': 'A', '2020000002': 'B'}, context, None, 'common')
+        self.assertIn('首位 S A／M A／H A', text)
+        self.assertIn('当たりやすさを示すものではありません', text)
+        self.assertIn('未使用期間', status_text('common'))
+        self.assertEqual(status_text('none', {}), '検証状況：記録なし')
