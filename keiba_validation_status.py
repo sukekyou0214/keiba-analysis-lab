@@ -18,5 +18,8 @@ def status_text(mode, status=None):
     if not model:
         return '検証状況：記録なし'
     parts = [f"{v['区分']} {v['期間']} {v['レース数']}R：上位3で勝ち馬 {v['上位3勝ち馬']}" for v in model.get('検証', [])]
-    parts.append('未使用期間での検証：' + str(model.get('未使用期間', '未実施')))
+    if model.get('補足'):
+        parts.append(str(model['補足']))
+    else:
+        parts.append('未使用期間での検証：' + str(model.get('未使用期間', '未実施')))
     return '検証状況（' + model.get('名称', mode) + '）：' + ' ／ '.join(parts)

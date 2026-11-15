@@ -169,6 +169,10 @@ def main(argv=None):
     beta = fit_v1(data, inner, final, cache)
     log['選択'] = {'特徴量': list(chosen), '半減期': final.half_life, 'k': final.shrink_k, '距離帯': final.band,
                  '係数（標準化後）': dict(zip(final.features, map(float, beta))), '基準率': final.priors.get('top3')}
+    # 影の予測用：inner で学習し outer で評価した、そのままの設定を保存（生データは含めない）。
+    artifact = v1.save_artifact(out / 'v1.json', final, beta,
+                                {'学習期間': 'inner 2026-09-12〜2026-10-12', '採用状態': '影の予測（主予測ではない）'})
+    log['v1成果物'] = v1.artifact_version(artifact)
 
     # 比較：旧・全馬共通・v1 を同じレースで
     results = []
@@ -223,9 +227,13 @@ def main(argv=None):
             prow.append({'期間': name, 'レース数': len(g), '判定数': len(judged),
                          '一致率': float((judged['独自判定'] == judged['公表']).mean()) if len(judged) else np.nan,
                          '最多判定の一致率': float((g['公表'] == majority).mean()), '最多判定': majority,
-                         '分布': g['公表'].value_counts().to_dict()})
+                         '分布': g['公表'].value_counts().to_dict(),
+                         '予測分布': judged['独自判定'].value_counts().to_dict()})
         pd.DataFrame(prow).to_csv(out / 'pace_summary.csv', index=False, encoding='utf-8-sig')
         log['展開しきい値'] = {'low': low, 'high': high, 'inner一致率': acc, '最多判定': majority}
+        (out / 'pace_v1.json').write_text(json.dumps({'low': low, 'high': high, '版': pv.PACE_VERSION,
+                                                     '学習期間': 'inner 2026-09-12〜2026-10-12'}, ensure_ascii=False, indent=1),
+                                          encoding='utf-8')
     from keiba_registry import code_version
     log['コード版'] = code_version()
     (out / 'run_log.json').write_text(json.dumps(log, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
