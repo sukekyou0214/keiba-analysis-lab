@@ -17,6 +17,7 @@ from keiba_registry import LocalStore, RecordExists, compare, frame_hash, save_p
 
 JST = timezone(timedelta(hours=9))
 ARTIFACT = Path(__file__).resolve().parent / 'models' / 'v1.json'
+REPO_RECORDS = Path(__file__).resolve().parent / 'records' / 'predictions'
 
 
 def _now():
@@ -106,6 +107,42 @@ def save_weekend_records(work, info, entries, per_pace, common, history_frame=No
 def _class_of(info):
     from keiba_model_data import classify_class
     return classify_class(info.get('レース名', ''), info.get('一覧表記', ''), info.get('格', '')) or '不明'
+
+
+def repo_records_for(dates, root=None):
+    """リポジトリの records/predictions にある、指定日（YYYYMMDD）の予想記録（json）の一覧。
+    サーバー再起動で作業フォルダが消えても、結果前にリポジトリへ保存した予想で照合できるようにする。"""
+    import json
+    root = Path(root or REPO_RECORDS)
+    wanted = {f'{d[:4]}-{d[4:6]}-{d[6:]}' for d in dates}
+    out = []
+    for path in sorted(root.glob('*/*.json')) if root.exists() else []:
+        try:
+            meta = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if str(meta.get('対象日時', ''))[:10] in wanted:
+            out.append(path)
+    return out
+
+
+def restore_from_repo(work, dates, root=None):
+    """作業フォルダに無い予想記録を、リポジトリの記録から戻す（内容はそのまま、上書きしない）。戻したレースIDを返す。"""
+    import json
+    store = LocalStore(Path(work) / 'records')
+    restored = set()
+    for meta_path in repo_records_for(dates, root):
+        csv_path = meta_path.with_suffix('.csv')
+        if not csv_path.exists():
+            continue
+        rel = f'predictions/{meta_path.parent.name}/{meta_path.stem}'
+        for suffix, path in (('.json', meta_path), ('.csv', csv_path)):
+            try:
+                store.write_new(rel + suffix, path.read_bytes())
+            except RecordExists:
+                pass
+        restored.add(json.loads(meta_path.read_text(encoding='utf-8'))['レースID'])
+    return sorted(restored)
 
 
 def collect_results(work, race_ids, fetch_text):

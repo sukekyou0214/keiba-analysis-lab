@@ -711,14 +711,20 @@ def merge_into_saved(existing, fresh):
 
 def collect_and_compare(work, out):
     """レース後の結果取得と照合（開催日が今日以前のレースのみ）。照合表を出力フォルダへ書く。"""
-    from keiba_shadow import collect_results, comparison_table
+    from keiba_shadow import collect_results, comparison_table, restore_from_repo
     work, out = Path(work), Path(out)
+    work.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     today = datetime.now(JST).strftime('%Y-%m-%d')
     ids = []
     for path in sorted((work / 'entries').glob('*.json')):
         info = json.loads(path.read_text(encoding='utf-8'))
         if str(info.get('開催日', '9999')) <= today and info.get('コース') == '芝':
             ids.append(info['レースID'])
+    # サーバー再起動で作業フォルダが消えた場合も、リポジトリに結果前保存した予想で照合する
+    dates = [d for d in work.parent.name.split('_') if len(d) == 8 and d.isdigit()]
+    past = [d for d in dates if f'{d[:4]}-{d[4:6]}-{d[6:]}' <= today]
+    ids = sorted(set(ids) | set(restore_from_repo(work, past)))
     write_status(work, 照合='結果を取得中')
     try:
         saved, errors = collect_results(work, ids, fetch_text)

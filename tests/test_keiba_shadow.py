@@ -110,3 +110,68 @@ class DebutShadowTests(unittest.TestCase):
             pred = pd.read_csv(files[0])
             self.assertTrue(pred['順位'].isna().all())
             self.assertTrue(pred['判定'].str.contains('判定不可').all())
+
+
+class RestartRecoveryTests(unittest.TestCase):
+    def test_upcoming_weekend_keeps_this_weekend_on_sunday(self):
+        from datetime import date
+        from keiba_weekend_ui import upcoming_weekend
+        self.assertEqual(upcoming_weekend(date(2026, 11, 20)), (date(2026, 11, 21), date(2026, 11, 22)))
+        self.assertEqual(upcoming_weekend(date(2026, 11, 21)), (date(2026, 11, 21), date(2026, 11, 22)))
+        self.assertEqual(upcoming_weekend(date(2026, 11, 22)), (date(2026, 11, 21), date(2026, 11, 22)))
+        self.assertEqual(upcoming_weekend(date(2026, 11, 23)), (date(2026, 11, 28), date(2026, 11, 29)))
+
+    def repo(self, root):
+        from keiba_registry import LocalStore, save_prediction
+        store = LocalStore(Path(root) / 'repo')
+        ranking = pd.DataFrame({'レースID': '202608050510', '馬ID': ['2022100001', '2022100002', '2022100003'],
+                                '馬番': [1, 2, 3], '馬名': ['ア', 'イ', 'ウ'], '順位': [1, 2, 3], '点数': [3.0, 2.0, 1.0],
+                                '判定': '試験'})
+        save_prediction(store, '202608050510', ranking, target_time='2026-11-14T15:40:00+09:00', source='試験',
+                        model_version='common-M@test', feature_version='frozen', data_version='data-v1',
+                        created_at='2026-11-13T21:00:00+09:00', code='test')
+        save_prediction(store, '202608050611', ranking.assign(レースID='202608050611'),
+                        target_time='2026-11-21T15:40:00+09:00', source='試験', model_version='common-M@test',
+                        feature_version='frozen', data_version='data-v1', created_at='2026-11-20T21:00:00+09:00',
+                        code='test')
+        return Path(root) / 'repo' / 'predictions'
+
+    def test_restore_selects_dates_and_does_not_overwrite(self):
+        import keiba_shadow as sh
+        with tempfile.TemporaryDirectory() as root:
+            repo = self.repo(root)
+            self.assertEqual(len(sh.repo_records_for(['20261114'], repo)), 1)
+            self.assertEqual(sh.restore_from_repo(Path(root) / 'work', ['20261114'], repo), ['202608050510'])
+            self.assertEqual(sh.restore_from_repo(Path(root) / 'work', ['20261114'], repo), ['202608050510'])
+            saved = list((Path(root) / 'work' / 'records' / 'predictions').rglob('*.csv'))
+            self.assertEqual([p.name for p in saved], ['202608050510.csv'])
+
+    def test_compare_after_restart_uses_repo_records(self):
+        with tempfile.TemporaryDirectory() as root:
+            repo = self.repo(root)
+            work = Path(root) / 'weekend' / '20261114' / 'work'
+            out = Path(root) / 'weekend' / '20261114' / 'out'
+            with patch('keiba_shadow.REPO_RECORDS', repo), \
+                 patch.object(wb, 'fetch_text', lambda url, encoding=None: result_html()):
+                wb.collect_and_compare(work, out)
+            per = pd.read_csv(out / '20261114_結果照合_レース別.csv', dtype={'レースID': str})
+            self.assertEqual(list(per['レースID']), ['202608050510'])
+            self.assertTrue(bool(per['事前保存'].iloc[0]))
+            self.assertEqual(int(per['上位3勝ち馬'].iloc[0]), 1)
+            self.assertIn('完了', json.loads((work / 'status.json').read_text(encoding='utf-8'))['照合'])
+
+    def test_archive_comparisons(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('archive_records', Path(__file__).resolve().parents[1] / 'scripts' / 'archive_records.py')
+        ar = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ar)
+        with tempfile.TemporaryDirectory() as root:
+            src = Path(root) / 'out'
+            src.mkdir()
+            (src / 'x_結果照合_レース別.csv').write_text('a\n1\n', encoding='utf-8')
+            (src / 'x_全頭展開別順位.csv').write_text('raw\n', encoding='utf-8')
+            with patch.object(ar, 'ROOT', Path(root) / 'records'):
+                self.assertEqual(ar.comparisons_from_weekend_zip(src, 'w1'), 1)
+                self.assertEqual(ar.comparisons_from_weekend_zip(src, 'w1'), 0)
+            self.assertEqual([p.name for p in (Path(root) / 'records' / 'comparisons' / 'w1').iterdir()],
+                             ['x_結果照合_レース別.csv'])
