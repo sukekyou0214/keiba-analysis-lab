@@ -92,6 +92,9 @@ def render_weekend_picker(tap_choice):
     labels = {r['レースID']: wb.race_label(r) for _, r in races.iterrows()}
     choice = tap_choice('今週末の芝レース', ['選択しない'] + list(labels), 'weekend_race_choice_v44',
                         format_func=lambda rid: labels.get(rid, rid))
+    if choice != '選択しない':
+        import keiba_debut_reference
+        keiba_debut_reference.render(races.set_index('レースID').loc[choice, '作業フォルダ'], choice)
     if st.button('このレースを開く', disabled=choice == '選択しない', key='weekend_race_open_v44', width='stretch'):
         open_weekend_race(races.set_index('レースID').loc[choice], choice)
         st.rerun()
