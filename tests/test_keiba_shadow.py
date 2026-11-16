@@ -38,7 +38,7 @@ class ShadowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             with patch('keiba_shadow.ARTIFACT', self.artifact(root)), \
                  patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'), \
-                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'):
+                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'), patch('keiba_shadow.ARTIFACT_V5', Path(root) / 'none.json'):
                 self.batch.run_batch(root)
                 records = Path(root) / 'work' / 'records' / 'predictions'
                 models = sorted(p.name for p in records.iterdir())
@@ -104,7 +104,7 @@ class DebutShadowTests(unittest.TestCase):
             table = pd.DataFrame({'参考順位': [pd.NA, pd.NA], '総合参考点': [np.nan, np.nan]},
                                  index=pd.Index(entries['馬ID'], name='馬ID'))
             with patch('keiba_shadow.ARTIFACT', artifact), patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'), \
-                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'):
+                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'), patch('keiba_shadow.ARTIFACT_V5', Path(root) / 'none.json'):
                 saved = sh.save_weekend_records(Path(root) / 'work', info, entries, {'M': table}, {'M': table},
                                                 pd.DataFrame())
             self.assertIn('shadow-v1', saved)
@@ -200,7 +200,7 @@ class V2ShadowTests(unittest.TestCase):
             batch.setUp()
             self.addCleanup(batch.policy.stop)
             with patch('keiba_shadow.ARTIFACT', ShadowTests.artifact(None, root)), patch('keiba_shadow.ARTIFACT_V2', v2), \
-                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'), \
+                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'), patch('keiba_shadow.ARTIFACT_V5', Path(root) / 'none.json'), \
                  patch('keiba_shadow.common_without_pace', side_effect=lambda info, active, raw: {}) as common:
                 batch.run_batch(root)
             records = Path(root) / 'work' / 'records' / 'predictions'
@@ -244,7 +244,8 @@ class V3DebutTests(unittest.TestCase):
             table = pd.DataFrame({'参考順位': [pd.NA, pd.NA], '総合参考点': [np.nan, np.nan]},
                                  index=pd.Index(entries['馬ID'], name='馬ID'))
             with patch('keiba_shadow.ARTIFACT', Path(root) / 'none.json'), \
-                 patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'), patch('keiba_shadow.ARTIFACT_V3', v3):
+                 patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'), patch('keiba_shadow.ARTIFACT_V3', v3), \
+                 patch('keiba_shadow.ARTIFACT_V5', Path(root) / 'none.json'):
                 saved = sh.save_weekend_records(Path(root) / 'work', info, entries, {'M': table}, {'M': table},
                                                 pd.DataFrame(), pd.DataFrame(), pool)
             self.assertIn('shadow-v3', saved)

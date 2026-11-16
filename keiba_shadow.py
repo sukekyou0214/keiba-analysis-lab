@@ -19,6 +19,7 @@ JST = timezone(timedelta(hours=9))
 ARTIFACT = Path(__file__).resolve().parent / 'models' / 'v1.json'
 ARTIFACT_V2 = Path(__file__).resolve().parent / 'models' / 'v2.json'
 ARTIFACT_V3 = Path(__file__).resolve().parent / 'models' / 'v3.json'
+ARTIFACT_V5 = Path(__file__).resolve().parent / 'models' / 'v5.json'
 REPO_RECORDS = Path(__file__).resolve().parent / 'records' / 'predictions'
 
 
@@ -86,7 +87,7 @@ def save_weekend_records(work, info, entries, per_pace, common, history_frame=No
         ranking['馬名'] = ranking['馬ID'].map(names)
         if _save(store, race_id, f'{label}@{code}', ranking, info, entries, DATA_VERSION, 'frozen'):
             saved.append(label)
-    for path, label in ((ARTIFACT, 'shadow-v1'), (ARTIFACT_V2, 'shadow-v2'), (ARTIFACT_V3, 'shadow-v3')):
+    for path, label in ((ARTIFACT, 'shadow-v1'), (ARTIFACT_V2, 'shadow-v2'), (ARTIFACT_V3, 'shadow-v3'), (ARTIFACT_V5, 'shadow-v5')):
         if not path.exists() or history_frame is None:
             continue
         ranking, version, feature_version = _shadow_ranking(path, info, entries, history_frame, raw_frame, pool_frame)

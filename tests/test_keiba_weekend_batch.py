@@ -25,6 +25,7 @@ def entry_page(name, data2, horses, cancel=()):
     rows = ''.join(
         f'<tr class="HorseList{" Cancel" if hid in cancel else ""}" id="tr_{i}"><td class="Umaban{i} Txt_C">{i}</td>'
         f'<td class="HorseInfo"><span class="HorseName"><a href="https://db.netkeiba.com/horse/{hid}" title="{hname}">{hname}</a></span></td>'
+        f'<td class="Barei Txt_C">{"牝" if i % 2 else "牡"}3</td><td class="Txt_C">{55 + i}.0</td>'
         f'<td class="Jockey"><a>騎手{i}</a></td></tr>' for i, (hid, hname) in enumerate(horses, 1))
     return (f'<h1 class="RaceName">{name}</h1><div class="RaceData01">15:00発走 / 芝1600m 右 外</div>'
             f'<div class="RaceData02"><span>5回</span><span>京都</span><span>{data2}</span></div>'
@@ -255,3 +256,10 @@ class ConfidenceRuleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class EntryExtraColumnsTests(unittest.TestCase):
+    def test_sex_age_and_weight_are_parsed(self):
+        _, e = wb.parse_entry_page(entry_page('試験S', '3歳以上３勝クラス', MAIN), '202608050511')
+        self.assertEqual(list(e['性齢'])[:2], ['牝3', '牡3'])
+        self.assertEqual(list(e['斤量'])[:2], [56.0, 57.0])
