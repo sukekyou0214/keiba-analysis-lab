@@ -120,9 +120,14 @@ def parse_entry_page(html, race_id, listed=None):
         classes = ' '.join(tr.get('class') or [])
         text = tr.get_text(' ', strip=True)
         cancelled = 'Cancel' in classes or bool(re.search(r'取消|除外', text))
+        barei = tr.select_one('td.Barei, td[class*="Barei"]')
+        weight_cell = barei.find_next_sibling('td') if barei else None
+        weight = re.fullmatch(r'\d{2}(?:\.\d)?', weight_cell.get_text(strip=True)) if weight_cell else None
         rows.append({'レースID': race_id, '馬ID': hit[1], '馬名': link.get('title') or link.get_text(strip=True),
                      '馬番': int(number) if number.isdecimal() else pd.NA,
                      '騎手': jockey.get_text(' ', strip=True) if jockey else pd.NA,
+                     '性齢': barei.get_text(strip=True) if barei else pd.NA,
+                     '斤量': float(weight[0]) if weight else pd.NA,
                      '状態': '取消・除外' if cancelled else '出走予定'})
     entries = pd.DataFrame(rows)
     if entries.empty and '新馬戦想定' in html:

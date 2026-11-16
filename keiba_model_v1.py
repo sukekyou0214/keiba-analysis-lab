@@ -44,6 +44,13 @@ def horse_rows(history, cutoff, info, params):
         out['最終出走日'] = started['日付'].max()
         out['休養日数'] = (pd.Timestamp(cutoff) - out['最終出走日']).days
         out['直近ダート数'] = int(started.head(5)['コース'].eq('ダ').sum())
+        recent = started.head(5)
+        if '人気' in recent:  # 近走人気：過去5走の人気（頭数で補正、1に近いほど人気）。その時点で分かっている情報
+            pop = pd.to_numeric(recent['人気'], errors='coerce')
+            field = pd.to_numeric(recent['頭数'], errors='coerce')
+            share = (1 - (pop - 1) / (field - 1)).where(field.gt(1)).dropna()
+            if len(share):
+                out['近走人気'] = float(share.clip(0, 1).mean())
     turf = started.loc[started['コース'].eq('芝')]
     if len(turf):
         out['最終芝出走日'] = turf['日付'].max()
