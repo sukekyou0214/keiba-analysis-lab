@@ -37,7 +37,8 @@ class ShadowTests(unittest.TestCase):
     def test_records_saved_once_revised_on_scratch_and_compared(self):
         with tempfile.TemporaryDirectory() as root:
             with patch('keiba_shadow.ARTIFACT', self.artifact(root)), \
-                 patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'):
+                 patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'), \
+                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'):
                 self.batch.run_batch(root)
                 records = Path(root) / 'work' / 'records' / 'predictions'
                 models = sorted(p.name for p in records.iterdir())
@@ -102,7 +103,8 @@ class DebutShadowTests(unittest.TestCase):
                                     '状態': ['出走予定', '出走予定']})
             table = pd.DataFrame({'参考順位': [pd.NA, pd.NA], '総合参考点': [np.nan, np.nan]},
                                  index=pd.Index(entries['馬ID'], name='馬ID'))
-            with patch('keiba_shadow.ARTIFACT', artifact), patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'):
+            with patch('keiba_shadow.ARTIFACT', artifact), patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'), \
+                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'):
                 saved = sh.save_weekend_records(Path(root) / 'work', info, entries, {'M': table}, {'M': table},
                                                 pd.DataFrame())
             self.assertIn('shadow-v1', saved)
@@ -198,8 +200,54 @@ class V2ShadowTests(unittest.TestCase):
             batch.setUp()
             self.addCleanup(batch.policy.stop)
             with patch('keiba_shadow.ARTIFACT', ShadowTests.artifact(None, root)), patch('keiba_shadow.ARTIFACT_V2', v2), \
+                 patch('keiba_shadow.ARTIFACT_V3', Path(root) / 'none.json'), \
                  patch('keiba_shadow.common_without_pace', side_effect=lambda info, active, raw: {}) as common:
                 batch.run_batch(root)
             records = Path(root) / 'work' / 'records' / 'predictions'
             self.assertTrue(any(p.name.startswith('shadow-v2-') for p in records.iterdir()))
             self.assertTrue(common.called)
+
+
+class V3DebutTests(unittest.TestCase):
+    def test_jockey_points_match_and_shrink(self):
+        import keiba_jockey as kj
+        self.assertEqual(kj.match('▲和田陽', ['和田陽希', '和田竜二']), '和田陽希')
+        self.assertEqual(kj.match('Ｃデムーロ', ['C.デムーロ', 'M.デムーロ']), 'C.デムーロ')
+        self.assertIsNone(kj.match('原', ['原優介', '菅原明良']))
+        raw = pd.DataFrame({'馬ID': ['h1'] * 4 + ['h2'] * 4, '日付': ['2026/10/01', '2026/10/08', '2026/10/15', '2025/01/01'] * 2,
+                            '騎手': ['甲山太郎'] * 4 + ['乙川次郎'] * 4, 'レースID': [f'r{i}' for i in range(8)],
+                            '着 順': ['1', '2', '3', '1', '9', '8', '取', '1'], '距離': ['芝1600', 'ダ1200', '芝2000', '芝1600'] * 2})
+        rides = kj.rides(raw)
+        self.assertEqual(len(rides), 7)  # 取消は数えない
+        points, overall = kj.jockey_points(rides, '2026-11-01')  # 365日より前の騎乗は数えない
+        self.assertAlmostEqual(overall, 3 / 5)
+        self.assertGreater(points['甲山太郎'], overall)
+        self.assertLess(points['乙川次郎'], overall)
+        field = pd.DataFrame({'馬ID': ['x', 'y', 'z'], '騎手': ['乙川', '甲山', '不明']})
+        r = kj.debut_ranking(field, rides, '2026-11-01', 'R1')
+        self.assertEqual(list(r.sort_values('順位')['馬ID']), ['y', 'z', 'x'])
+        self.assertIn('対応できず', r.set_index('馬ID').loc['z', '判定'])
+
+    def test_v3_ranks_debut_race_with_jockey_points(self):
+        import keiba_model_v1 as v1
+        import keiba_shadow as sh
+        with tempfile.TemporaryDirectory() as root:
+            p = v1.Params(features=('着順',))
+            p.priors = {'top3': 0.2, 'median': {'着順': 0.5}, 'mean': {'着順': 0.5}, 'std': {'着順': 0.3}}
+            v3 = Path(root) / 'v3.json'
+            v1.save_artifact(v3, p, np.array([1.0]), {'model_version': 'v3', '種類': 'rank_average', '新馬戦': 'jockey-v1'})
+            info = {'レースID': '202608050305', '開催日': '2026-11-15', '発走': '12:00', 'レース名': '2歳新馬', '取得元': '試験'}
+            entries = pd.DataFrame({'馬ID': ['2024100001', '2024100002'], '馬名': ['ア', 'イ'], '馬番': [1, 2],
+                                    '騎手': ['乙川', '甲山'], '状態': ['出走予定', '出走予定']})
+            pool = pd.DataFrame({'馬ID': ['h1', 'h2'], '日付': ['2026/10/01', '2026/10/01'], '騎手': ['甲山太郎', '乙川次郎'],
+                                 'レースID': ['a', 'b'], '着 順': ['1', '10'], '距離': ['芝1600', '芝1600']})
+            table = pd.DataFrame({'参考順位': [pd.NA, pd.NA], '総合参考点': [np.nan, np.nan]},
+                                 index=pd.Index(entries['馬ID'], name='馬ID'))
+            with patch('keiba_shadow.ARTIFACT', Path(root) / 'none.json'), \
+                 patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'), patch('keiba_shadow.ARTIFACT_V3', v3):
+                saved = sh.save_weekend_records(Path(root) / 'work', info, entries, {'M': table}, {'M': table},
+                                                pd.DataFrame(), pd.DataFrame(), pool)
+            self.assertIn('shadow-v3', saved)
+            f = list((Path(root) / 'work' / 'records' / 'predictions').glob('shadow-v3-*/202608050305.csv'))[0]
+            pred = pd.read_csv(f, dtype={'馬ID': str}).set_index('馬ID')
+            self.assertEqual(int(pred.loc['2024100002', '順位']), 1)

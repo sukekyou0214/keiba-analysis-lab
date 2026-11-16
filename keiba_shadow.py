@@ -18,6 +18,7 @@ from keiba_registry import LocalStore, RecordExists, compare, frame_hash, save_p
 JST = timezone(timedelta(hours=9))
 ARTIFACT = Path(__file__).resolve().parent / 'models' / 'v1.json'
 ARTIFACT_V2 = Path(__file__).resolve().parent / 'models' / 'v2.json'
+ARTIFACT_V3 = Path(__file__).resolve().parent / 'models' / 'v3.json'
 REPO_RECORDS = Path(__file__).resolve().parent / 'records' / 'predictions'
 
 
@@ -65,7 +66,7 @@ def _save(store, race_id, model, ranking, info, entries, data_version, feature_v
     return None
 
 
-def save_weekend_records(work, info, entries, per_pace, common, history_frame=None, raw_frame=None):
+def save_weekend_records(work, info, entries, per_pace, common, history_frame=None, raw_frame=None, pool_frame=None):
     """1レース分の予想を保存（旧方式M・全馬共通M・v1影の予測）。保存した版の名前を返す。"""
     from keiba_model_data import DATA_VERSION
     from keiba_registry import code_version
@@ -85,10 +86,10 @@ def save_weekend_records(work, info, entries, per_pace, common, history_frame=No
         ranking['馬名'] = ranking['馬ID'].map(names)
         if _save(store, race_id, f'{label}@{code}', ranking, info, entries, DATA_VERSION, 'frozen'):
             saved.append(label)
-    for path, label in ((ARTIFACT, 'shadow-v1'), (ARTIFACT_V2, 'shadow-v2')):
+    for path, label in ((ARTIFACT, 'shadow-v1'), (ARTIFACT_V2, 'shadow-v2'), (ARTIFACT_V3, 'shadow-v3')):
         if not path.exists() or history_frame is None:
             continue
-        ranking, version, feature_version = _shadow_ranking(path, info, entries, history_frame, raw_frame)
+        ranking, version, feature_version = _shadow_ranking(path, info, entries, history_frame, raw_frame, pool_frame)
         ranking['馬番'] = ranking['馬ID'].map(numbers)
         ranking['馬名'] = ranking['馬ID'].map(names)
         if _save(store, race_id, f'shadow-{version}', ranking, info, entries, DATA_VERSION, feature_version,
@@ -97,8 +98,9 @@ def save_weekend_records(work, info, entries, per_pace, common, history_frame=No
     return saved
 
 
-def _shadow_ranking(path, info, entries, history_frame, raw_frame):
-    """影の予測1つ分の順位。v2（種類 rank_average）は全馬共通（ペース項目なし）の順位と平均する。"""
+def _shadow_ranking(path, info, entries, history_frame, raw_frame, pool_frame=None):
+    """影の予測1つ分の順位。v2（種類 rank_average）は全馬共通（ペース項目なし）の順位と平均する。
+    v3（新馬戦 jockey-v1）は、新馬戦だけ騎手点（この週末の出走馬の戦績から数える）で並べる。"""
     import keiba_model_v1 as v1
     params, beta, data = v1.load_artifact(path)
     version = v1.artifact_version(data)
@@ -106,6 +108,10 @@ def _shadow_ranking(path, info, entries, history_frame, raw_frame):
     active = entries.loc[entries['状態'].eq('出走予定')]
     race_info = {**info, 'クラス': info.get('クラス') or _class_of(info)}
     debut = '新馬' in str(info.get('レース名', ''))
+    if debut and data.get('新馬戦') == 'jockey-v1':
+        import keiba_jockey as kj
+        field = active[['馬ID', '騎手']] if '騎手' in active else active[['馬ID']].assign(騎手='')
+        return kj.debut_ranking(field, kj.rides(pool_frame), info['開催日'], race_id), version, kj.VERSION
     if debut:  # 新馬戦は戦績がないので特徴量を作らず「判定不可」として保存する（照合では捕捉失敗に数える）
         feats = pd.DataFrame({'レースID': race_id, '馬ID': active['馬ID'].astype(str).to_numpy()})
         return v1.rank_race(feats, beta, params, debut_race=True), version, v1.FEATURE_VERSION
