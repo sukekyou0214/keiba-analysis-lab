@@ -36,7 +36,8 @@ class ShadowTests(unittest.TestCase):
 
     def test_records_saved_once_revised_on_scratch_and_compared(self):
         with tempfile.TemporaryDirectory() as root:
-            with patch('keiba_shadow.ARTIFACT', self.artifact(root)):
+            with patch('keiba_shadow.ARTIFACT', self.artifact(root)), \
+                 patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'):
                 self.batch.run_batch(root)
                 records = Path(root) / 'work' / 'records' / 'predictions'
                 models = sorted(p.name for p in records.iterdir())
@@ -101,7 +102,7 @@ class DebutShadowTests(unittest.TestCase):
                                     '状態': ['出走予定', '出走予定']})
             table = pd.DataFrame({'参考順位': [pd.NA, pd.NA], '総合参考点': [np.nan, np.nan]},
                                  index=pd.Index(entries['馬ID'], name='馬ID'))
-            with patch('keiba_shadow.ARTIFACT', artifact):
+            with patch('keiba_shadow.ARTIFACT', artifact), patch('keiba_shadow.ARTIFACT_V2', Path(root) / 'none.json'):
                 saved = sh.save_weekend_records(Path(root) / 'work', info, entries, {'M': table}, {'M': table},
                                                 pd.DataFrame())
             self.assertIn('shadow-v1', saved)
@@ -175,3 +176,30 @@ class RestartRecoveryTests(unittest.TestCase):
                 self.assertEqual(ar.comparisons_from_weekend_zip(src, 'w1'), 0)
             self.assertEqual([p.name for p in (Path(root) / 'records' / 'comparisons' / 'w1').iterdir()],
                              ['x_結果照合_レース別.csv'])
+
+
+class V2ShadowTests(unittest.TestCase):
+    def test_rank_average_fills_missing_common_and_breaks_ties(self):
+        import keiba_model_v1 as v1
+        r = pd.DataFrame({'馬ID': ['a', 'b', 'c', 'd'], '順位': [1, 2, 3, 4], '点数': [4.0, 3.0, 2.0, 1.0]})
+        out = v1.rank_average(r, np.array([3, 1, np.nan, 2]))
+        # 平均: a=2, b=1.5, c=3（共通なし→v1で補う）, d=3 → b,a,c,d（c と d は点数で c が先）
+        self.assertEqual(list(out.sort_values('順位')['馬ID']), ['b', 'a', 'c', 'd'])
+
+    def test_v2_artifact_saves_rank_average_shadow(self):
+        import keiba_model_v1 as v1
+        with tempfile.TemporaryDirectory() as root:
+            p = v1.Params(features=('着順', '芝実績なし'))
+            p.priors = {'top3': 0.2, 'median': {'着順': 0.5, '芝実績なし': 0.0}, 'mean': {'着順': 0.5, '芝実績なし': 0.0},
+                        'std': {'着順': 0.3, '芝実績なし': 1.0}}
+            v2 = Path(root) / 'v2.json'
+            v1.save_artifact(v2, p, np.array([1.0, -0.5]), {'model_version': 'v2', '種類': 'rank_average'})
+            batch = wbt.WeekendBatchTests('test_end_to_end_outputs_and_rules')
+            batch.setUp()
+            self.addCleanup(batch.policy.stop)
+            with patch('keiba_shadow.ARTIFACT', ShadowTests.artifact(None, root)), patch('keiba_shadow.ARTIFACT_V2', v2), \
+                 patch('keiba_shadow.common_without_pace', side_effect=lambda info, active, raw: {}) as common:
+                batch.run_batch(root)
+            records = Path(root) / 'work' / 'records' / 'predictions'
+            self.assertTrue(any(p.name.startswith('shadow-v2-') for p in records.iterdir()))
+            self.assertTrue(common.called)

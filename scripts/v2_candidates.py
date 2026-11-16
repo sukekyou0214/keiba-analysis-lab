@@ -92,14 +92,7 @@ def predict(season, ids, params, beta, kind='logit'):
 
 
 def rank_average(ranking, common_rank):
-    """全馬共通（ペース項目なし）と v1 の順位の平均。共通の順位がない馬は v1 の順位で補う。同点は v1 の点数。"""
-    r = ranking.copy()
-    v1_rank = pd.to_numeric(r['順位'], errors='coerce').to_numpy(float)
-    c = np.where(np.isnan(common_rank.astype(float)), v1_rank, common_rank.astype(float))
-    r['平均順位'] = (v1_rank + c) / 2
-    order = r.sort_values(['平均順位', '点数', '馬ID'], ascending=[True, False, True]).index
-    r['順位'] = pd.Series(range(1, len(r) + 1), index=order).reindex(r.index).astype('Int64')
-    return r
+    return v1.rank_average(ranking, common_rank)
 
 
 def evaluate(season, ids, pred):

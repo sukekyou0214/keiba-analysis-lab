@@ -150,6 +150,19 @@ def rank_race(features, beta, params, debut_race=False):
 
 
 # ---------------------------------------------------------------- 学習済み設定（影の予測用）
+def rank_average(ranking, common_rank):
+    """v2（C2）：全馬共通（ペース項目なし）と v1 の順位の平均で並べ直す。共通の順位がない馬は v1 の順位で補う。
+    同点は v1 の点数、さらに馬ID（再現可能）。"""
+    r = ranking.copy()
+    v1_rank = pd.to_numeric(r['順位'], errors='coerce').to_numpy(float)
+    common = pd.to_numeric(pd.Series(common_rank, index=r.index), errors='coerce').to_numpy(float)
+    filled = np.where(np.isnan(common), v1_rank, common)
+    r['平均順位'] = (v1_rank + filled) / 2
+    order = r.sort_values(['平均順位', '点数', '馬ID'], ascending=[True, False, True]).index
+    r['順位'] = pd.Series(range(1, len(r) + 1), index=order).reindex(r.index).astype('Int64')
+    return r
+
+
 def save_artifact(path, params, beta, extra=None):
     """学習済みの設定を保存する（係数・基準率・標準化の値だけ。生データは含めない）。"""
     import json

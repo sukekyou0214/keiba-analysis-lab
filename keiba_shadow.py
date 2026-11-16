@@ -17,6 +17,7 @@ from keiba_registry import LocalStore, RecordExists, compare, frame_hash, save_p
 
 JST = timezone(timedelta(hours=9))
 ARTIFACT = Path(__file__).resolve().parent / 'models' / 'v1.json'
+ARTIFACT_V2 = Path(__file__).resolve().parent / 'models' / 'v2.json'
 REPO_RECORDS = Path(__file__).resolve().parent / 'records' / 'predictions'
 
 
@@ -64,7 +65,7 @@ def _save(store, race_id, model, ranking, info, entries, data_version, feature_v
     return None
 
 
-def save_weekend_records(work, info, entries, per_pace, common, history_frame=None):
+def save_weekend_records(work, info, entries, per_pace, common, history_frame=None, raw_frame=None):
     """1レース分の予想を保存（旧方式M・全馬共通M・v1影の予測）。保存した版の名前を返す。"""
     from keiba_model_data import DATA_VERSION
     from keiba_registry import code_version
@@ -84,24 +85,50 @@ def save_weekend_records(work, info, entries, per_pace, common, history_frame=No
         ranking['馬名'] = ranking['馬ID'].map(names)
         if _save(store, race_id, f'{label}@{code}', ranking, info, entries, DATA_VERSION, 'frozen'):
             saved.append(label)
-    if ARTIFACT.exists() and history_frame is not None:
-        import keiba_model_v1 as v1
-        params, beta, data = v1.load_artifact(ARTIFACT)
-        version = v1.artifact_version(data)
-        active = entries.loc[entries['状態'].eq('出走予定')]
-        race_info = {**info, 'クラス': info.get('クラス') or _class_of(info)}
-        debut = '新馬' in str(info.get('レース名', ''))
-        if debut:  # 新馬戦は戦績がないので特徴量を作らず「判定不可」として保存する（照合では捕捉失敗に数える）
-            feats = pd.DataFrame({'レースID': race_id, '馬ID': active['馬ID'].astype(str).to_numpy()})
-        else:
-            feats = v1.build_features(active, history_frame, race_info, params)
-        ranking = v1.rank_race(feats, beta, params, debut_race=debut)
+    for path, label in ((ARTIFACT, 'shadow-v1'), (ARTIFACT_V2, 'shadow-v2')):
+        if not path.exists() or history_frame is None:
+            continue
+        ranking, version, feature_version = _shadow_ranking(path, info, entries, history_frame, raw_frame)
         ranking['馬番'] = ranking['馬ID'].map(numbers)
         ranking['馬名'] = ranking['馬ID'].map(names)
-        if _save(store, race_id, f'shadow-{version}', ranking, info, entries, DATA_VERSION, v1.FEATURE_VERSION,
+        if _save(store, race_id, f'shadow-{version}', ranking, info, entries, DATA_VERSION, feature_version,
                  {'影の予測': True}):
-            saved.append('shadow-v1')
+            saved.append(label)
     return saved
+
+
+def _shadow_ranking(path, info, entries, history_frame, raw_frame):
+    """影の予測1つ分の順位。v2（種類 rank_average）は全馬共通（ペース項目なし）の順位と平均する。"""
+    import keiba_model_v1 as v1
+    params, beta, data = v1.load_artifact(path)
+    version = v1.artifact_version(data)
+    race_id = info['レースID']
+    active = entries.loc[entries['状態'].eq('出走予定')]
+    race_info = {**info, 'クラス': info.get('クラス') or _class_of(info)}
+    debut = '新馬' in str(info.get('レース名', ''))
+    if debut:  # 新馬戦は戦績がないので特徴量を作らず「判定不可」として保存する（照合では捕捉失敗に数える）
+        feats = pd.DataFrame({'レースID': race_id, '馬ID': active['馬ID'].astype(str).to_numpy()})
+        return v1.rank_race(feats, beta, params, debut_race=True), version, v1.FEATURE_VERSION
+    feats = v1.build_features(active, history_frame, race_info, params)
+    ranking = v1.rank_race(feats, beta, params)
+    if data.get('種類') == 'rank_average':
+        common = common_without_pace(race_info, active, raw_frame)
+        ranking = v1.rank_average(ranking, ranking['馬ID'].map(common).to_numpy())
+    return ranking, version, v1.FEATURE_VERSION
+
+
+def common_without_pace(info, active, raw_frame):
+    """過去検証と同じ「想定ペース項目なし」の全馬共通の順位（馬ID→順位）。戦績が無ければ空。"""
+    from types import SimpleNamespace
+    from keiba_eval import frozen_rank
+    if raw_frame is None or raw_frame.empty:
+        return {}
+    field = active[['馬ID', '馬名']].assign(馬ID=active['馬ID'].astype(str))
+    raw = raw_frame.assign(馬ID=raw_frame['馬ID'].astype(str))
+    bt = SimpleNamespace(raw=raw, field=lambda rid: field)
+    r = frozen_rank(bt, {'レースID': info['レースID'], '開催日': info['開催日'], '競馬場': info['競馬場'],
+                         '距離': info['距離'], 'レース名': info.get('レース名', ''), 'クラス': info['クラス']}, 'common')
+    return dict(zip(r['馬ID'].astype(str), pd.to_numeric(r['順位'], errors='coerce')))
 
 
 def _class_of(info):
