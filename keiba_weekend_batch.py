@@ -487,6 +487,10 @@ def main(argv=None):
 
 def report(infos, entries_all, cache, paces, out, work, status, dates):
     race_rows, horse_rows, top_rows = [], [], []
+    # 新馬戦の騎手点（v3 影の予測）は、この週末の出走馬すべての戦績から数える
+    pool = [cache.load(h) for h in entries_all['馬ID'].drop_duplicates()]
+    pool = [r for r in pool if not r.empty]
+    pool_frame = pd.concat(pool, ignore_index=True) if pool else pd.DataFrame()
     for info in infos:
         rid = info['レースID']
         ent = entries_all.loc[entries_all['レースID'].eq(rid)]
@@ -504,7 +508,7 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             raws = [r for r in raws if not r.empty]
             raw_all = pd.concat(raws, ignore_index=True) if raws else pd.DataFrame()
             norm = normalize_history(raw_all) if raws else pd.DataFrame()
-            save_weekend_records(work, info, ent, per_pace, common, norm, raw_all)
+            save_weekend_records(work, info, ent, per_pace, common, norm, raw_all, pool_frame)
         except Exception as exc:  # noqa: BLE001 - 記録の保存失敗で集計を止めない（注意点に残す）
             info['記録の保存'] = f'失敗：{type(exc).__name__}: {str(exc)[:120]}'
         wanted = pace_targets(history, info['開催日'], graded)
