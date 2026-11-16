@@ -3,6 +3,7 @@
 使い方:
   python scripts/archive_records.py --weekend-zip ZIP          # 週末一括分析のZIP（records/predictions/** だけを取り込む）
   python scripts/archive_records.py --fixed-csv CSV --label L  # 事前固定の予想CSV（順位・点数列だけを取り出す）
+  python scripts/archive_records.py --comparisons DIR --label L  # 結果照合CSV（レース単位の指標だけ）
 既存ファイルは上書きしない（同名があれば内容一致を確認して終了）。
 """
 import argparse
@@ -40,6 +41,20 @@ def from_weekend_zip(zip_path):
     return added
 
 
+def comparisons_from_weekend_zip(zip_path, label):
+    """週末出力ZIP（またはフォルダ）の結果照合CSV（レース単位の指標・モデル別まとめ）だけを records/comparisons/ へ。"""
+    added = 0
+    source = Path(zip_path)
+    if source.is_dir():
+        items = [(p.name, p.read_bytes()) for p in sorted(source.glob('*_結果照合_*.csv'))]
+    else:
+        with zipfile.ZipFile(source) as z:
+            items = [(Path(n).name, z.read(n)) for n in z.namelist() if '_結果照合_' in n and n.endswith('.csv')]
+    for name, data in items:
+        added += write_once(ROOT / 'comparisons' / label / name, data)
+    return added
+
+
 def from_fixed_csv(csv_path, label):
     raw = Path(csv_path).read_bytes()
     table = pd.read_csv(io.BytesIO(raw), dtype={'レースID': str, '馬ID': str})
@@ -57,7 +72,10 @@ if __name__ == '__main__':
     ap.add_argument('--weekend-zip')
     ap.add_argument('--fixed-csv')
     ap.add_argument('--label')
+    ap.add_argument('--comparisons', help='結果照合CSVのあるフォルダまたはZIP（--label 必須）')
     args = ap.parse_args()
+    if args.comparisons:
+        print('追加', comparisons_from_weekend_zip(args.comparisons, args.label))
     if args.weekend_zip:
         print('追加', from_weekend_zip(args.weekend_zip))
     if args.fixed_csv:

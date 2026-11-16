@@ -8,6 +8,8 @@ ROOT = Path('/tmp/keiba_analysis_v141/weekend')
 
 def upcoming_weekend(today=None):
     today = today or datetime.now(JST).date()
+    if today.weekday() == 6:  # 日曜は「今週末」＝前日の土曜から（レース後の照合を当日に行うため）
+        return today - timedelta(days=1), today
     saturday = today + timedelta(days=(5 - today.weekday()) % 7)
     return saturday, saturday + timedelta(days=1)
 
@@ -53,7 +55,8 @@ def render_weekend_batch():
                 st.caption('結果：' + str(status['結果']))
             if status.get('照合'):
                 st.caption('結果照合：' + str(status['照合']))
-        if status and not running:
+        from keiba_shadow import repo_records_for
+        if (status or repo_records_for(keys)) and not running:
             if st.button('レース後：結果を取得して照合', key='weekend_results_v54', width='stretch',
                          help='保存済みの予想（主予測・影の予測）を結果と照合します。結果ページを1レース1回だけ取得します。'):
                 import threading
