@@ -90,18 +90,47 @@ def from_prepared(data):
     return d.sort_values(['馬ID', '日付'], ascending=[True, False])
 
 
-STATUS_NOTE = '展開予測（ルール方式v1）は検証中のため暫定です。'
+STATUS_NOTE = '展開予測は暫定の目安です。'
 
 
-def describe(data, horses, race_date, status_note=None):
-    """主画面用：想定展開の暫定判定と根拠。判定できない場合は保留。"""
+def describe(data, horses, race_date, status_note=None, distance=None):
+    """主画面用：想定展開の暫定判定と根拠。判定できない場合は保留。
+    models/pace_v2.json があり距離が分かれば pace-v2（多項ロジット）、なければ pace-v1（しきい値）。"""
     h = from_prepared(data)
     by = {k: g for k, g in h.groupby('馬ID')}
     field = pd.DataFrame({'馬ID': [str(x) for x in horses]})
-    res, _ = predict_pace(field, by, race_date, load_params())
+    res, positions = predict_pace(field, by, race_date, load_params())
+    model = load_v2()
+    if model is not None and distance and res['独自判定'] is not None:
+        pressure, front, known, total = race_pressure(positions, PaceParams())
+        res['独自判定'] = v2_label(model, pressure, front, known, total, float(distance))
+        res['版'] = 'pace-v2'
     names = {'S': 'スロー寄り', 'M': 'ミドル寄り', 'H': 'ハイ寄り'}
     head = f"想定展開（暫定）：{names[res['独自判定']]}" if res['独自判定'] else '想定展開：判定保留'
     return f"{head}。{res['根拠']}。{status_note or STATUS_NOTE}最初に記録されたコーナーの位置を目安にしており、発走直後の位置とは限りません。"
+
+
+V2_PATH = __import__('pathlib').Path(__file__).resolve().parent / 'models' / 'pace_v2.json'
+V2_LABELS = ['S', 'M', 'H']
+
+
+def load_v2(path=None):
+    import json
+    from pathlib import Path
+    try:
+        data = json.loads(Path(path or V2_PATH).read_text(encoding='utf-8'))
+        return data if data.get('種類') == '多項ロジット' else None
+    except (OSError, ValueError):
+        return None
+
+
+def v2_label(model, pressure, front, known, total, distance):
+    """pace-v2：先行圧力・前に行く頭数・根拠ありの割合・出走頭数・距離の多項ロジットで最も高い判定。"""
+    values = {'先行圧力': pressure, '前に行く頭数': front, '根拠ありの割合': known / max(total, 1), '出走頭数': total,
+              '距離': distance}
+    x = np.array([values[f] for f in model['特徴量']], float)
+    z = np.r_[1.0, (x - np.array(model['平均'])) / np.array(model['標準偏差'])]
+    return V2_LABELS[int((z @ np.array(model['係数'])).argmax())]
 
 
 PARAMS_PATH = __import__('pathlib').Path(__file__).resolve().parent / 'models' / 'pace_v1.json'
