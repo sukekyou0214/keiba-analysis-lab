@@ -51,7 +51,8 @@ def render_condition_context():
             from keiba_pace_v1 import describe
             from keiba_validation_status import load_status
             note = load_status().get('展開予測')
-            st.caption(describe(st.session_state['auto_df'], st.session_state.get('auto_horses', {}), context['race_date'], note))
+            st.caption(describe(st.session_state['auto_df'], st.session_state.get('auto_horses', {}), context['race_date'], note,
+                                context.get('distance')))
         except Exception as exc:  # noqa: BLE001 - 想定展開が出せなくても主画面は止めない
             st.caption(f'想定展開：判定保留（{type(exc).__name__}）')
     else:

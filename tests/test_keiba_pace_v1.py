@@ -60,7 +60,7 @@ class DescribeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             low_path = Path(root) / 'p.json'
             low_path.write_text(json.dumps({'low': 1.5, 'high': 3.0}))
-            with patch('keiba_pace_v1.PARAMS_PATH', low_path):
+            with patch('keiba_pace_v1.PARAMS_PATH', low_path), patch('keiba_pace_v1.V2_PATH', Path(root) / 'none.json'):
                 text = pv.describe(data, horses, '2026-11-15')
         self.assertIn('想定展開（暫定）：ハイ寄り', text)
         self.assertIn('発走直後の位置とは限りません', text)
@@ -69,5 +69,36 @@ class DescribeTests(unittest.TestCase):
             path = Path(root) / 'p.json'
             path.write_text(json.dumps({'low': 0.5, 'high': 9.0}))
             self.assertEqual((pv.load_params(path).low, pv.load_params(path).high), (0.5, 9.0))
-            with patch('keiba_pace_v1.PARAMS_PATH', path):
+            with patch('keiba_pace_v1.PARAMS_PATH', path), patch('keiba_pace_v1.V2_PATH', Path(root) / 'none.json'):
                 self.assertIn('ミドル寄り', pv.describe(data, horses, '2026-11-15'))
+
+
+class PaceV2Tests(unittest.TestCase):
+    def model(self, bias):
+        return {'種類': '多項ロジット', '特徴量': ['先行圧力', '前に行く頭数', '根拠ありの割合', '出走頭数', '距離'],
+                '平均': [0, 0, 0, 0, 0], '標準偏差': [1, 1, 1, 1, 1],
+                '係数': [list(bias)] + [[0.0, 0.0, 0.0]] * 5}
+
+    def test_v2_label_takes_highest_score(self):
+        self.assertEqual(pv.v2_label(self.model((0.0, 0.0, 1.0)), 1, 1, 8, 16, 1600), 'H')
+        self.assertEqual(pv.v2_label(self.model((1.0, 0.0, 0.0)), 1, 1, 8, 16, 1600), 'S')
+
+    def test_describe_uses_v2_with_distance_and_keeps_hold(self):
+        import json, tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        rows = [{'馬ID': f'20200000{h:02d}', '日付': f'2026-{10 - i:02d}-01', '通過順': '1-1', '頭数': 12, '着順_数値': 3}
+                for h in range(8) for i in range(3)]
+        data = pd.DataFrame(rows)
+        horses = {f'20200000{h:02d}': str(h) for h in range(8)}
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'v2.json'
+            path.write_text(json.dumps(self.model((1.0, 0.0, 0.0))), encoding='utf-8')
+            with patch('keiba_pace_v1.V2_PATH', path):
+                self.assertIn('スロー寄り', pv.describe(data, horses, '2026-11-15', distance=1600))
+                self.assertIn('判定保留', pv.describe(data.iloc[:0], horses, '2026-11-15', distance=1600))
+
+    def test_repository_model_is_valid(self):
+        m = pv.load_v2()
+        self.assertIsNotNone(m)
+        self.assertIn(pv.v2_label(m, 2.0, 2, 10, 14, 1800), ('S', 'M', 'H'))
