@@ -502,8 +502,9 @@ def report(infos, entries_all, cache, paces, out, work, status, dates):
             from keiba_shadow import save_weekend_records
             raws = [cache.load(h) for h in ent['馬ID'].drop_duplicates()]
             raws = [r for r in raws if not r.empty]
-            norm = normalize_history(pd.concat(raws, ignore_index=True)) if raws else pd.DataFrame()
-            save_weekend_records(work, info, ent, per_pace, common, norm)
+            raw_all = pd.concat(raws, ignore_index=True) if raws else pd.DataFrame()
+            norm = normalize_history(raw_all) if raws else pd.DataFrame()
+            save_weekend_records(work, info, ent, per_pace, common, norm, raw_all)
         except Exception as exc:  # noqa: BLE001 - 記録の保存失敗で集計を止めない（注意点に残す）
             info['記録の保存'] = f'失敗：{type(exc).__name__}: {str(exc)[:120]}'
         wanted = pace_targets(history, info['開催日'], graded)
