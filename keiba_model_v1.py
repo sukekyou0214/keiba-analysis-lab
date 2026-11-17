@@ -157,6 +157,24 @@ def rank_race(features, beta, params, debut_race=False):
 
 
 # ---------------------------------------------------------------- 学習済み設定（影の予測用）
+ENTRY_FEATURES = ('斤量差', '牝馬', '年齢差')
+
+
+def entry_features(field):
+    """出走表の基本項目（v6）：斤量差・牝馬（牡・セン馬もいるレース）・年齢差。field: 馬ID・性齢・斤量（出走する馬だけ）。"""
+    import re
+    out = pd.DataFrame({'馬ID': field['馬ID'].astype(str).to_numpy()})
+    weight = pd.to_numeric(field.get('斤量', pd.Series(np.nan, index=field.index)), errors='coerce').to_numpy(float)
+    sexage = field.get('性齢', pd.Series('', index=field.index)).fillna('').astype(str).to_numpy()
+    sex = np.array([s[:1] for s in sexage])
+    age = np.array([float(m[0]) if (m := re.search(r'\d+', s)) else np.nan for s in sexage])
+    out['斤量差'] = weight - np.nanmean(weight) if np.isfinite(weight).any() else np.nan
+    mixed = bool(np.isin(sex, ('牡', 'セ')).any())
+    out['牝馬'] = np.where(sex == '牝', float(mixed), np.where(np.isin(sex, ('牡', 'セ')), 0.0, np.nan))
+    out['年齢差'] = age - np.nanmean(age) if np.isfinite(age).any() else np.nan
+    return out
+
+
 def rank_average(ranking, common_rank):
     """v2（C2）：全馬共通（ペース項目なし）と v1 の順位の平均で並べ直す。共通の順位がない馬は v1 の順位で補う。
     同点は v1 の点数、さらに馬ID（再現可能）。"""
