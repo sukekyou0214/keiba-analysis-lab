@@ -94,7 +94,10 @@ def render_weekend_picker(tap_choice):
                         format_func=lambda rid: labels.get(rid, rid))
     if choice != '選択しない':
         import keiba_debut_reference
-        keiba_debut_reference.render(races.set_index('レースID').loc[choice, '作業フォルダ'], choice)
+        folder = races.set_index('レースID').loc[choice, '作業フォルダ']
+        if not keiba_debut_reference.render(folder, choice):
+            import keiba_v5_reference
+            keiba_v5_reference.render(folder, choice)
     if st.button('このレースを開く', disabled=choice == '選択しない', key='weekend_race_open_v44', width='stretch'):
         open_weekend_race(races.set_index('レースID').loc[choice], choice)
         st.rerun()
