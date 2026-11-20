@@ -51,6 +51,11 @@ def reference_table(work, race_id):
     if table.empty:
         return None
     table['順位'] = pd.to_numeric(table['順位']).astype(int)
+    entries = Path(work) / 'entries' / f'{race_id}.csv'
+    if entries.exists():  # 予想の保存後に枠順が出た場合も、最新の出走表の馬番を出す（予想の中身は変えない）
+        latest = pd.read_csv(entries, dtype={'馬ID': str})
+        numbers = latest.set_index('馬ID')['馬番']
+        table['馬番'] = table['馬ID'].map(numbers).where(table['馬ID'].isin(numbers.index), table['馬番'])
     table['馬番'] = pd.to_numeric(table['馬番'], errors='coerce').astype('Int64')
     return table.sort_values('順位')[['順位', '馬番', '馬名', '判定']].reset_index(drop=True)
 
