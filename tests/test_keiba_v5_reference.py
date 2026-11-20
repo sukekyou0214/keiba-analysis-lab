@@ -32,3 +32,12 @@ class V5ReferenceTests(unittest.TestCase):
     def test_validation_text(self):
         self.assertIn('勝つ確率ではありません', ref.VALIDATION)
         self.assertIn('56.2%', ref.VALIDATION)
+
+
+class V5NumberTests(unittest.TestCase):
+    def test_numbers_come_from_latest_entries(self):
+        with tempfile.TemporaryDirectory() as root:
+            V5ReferenceTests().save(root, 'shadow-v5-x', 'R1', [1, 2, 3])
+            (Path(root) / 'entries').mkdir()
+            pd.DataFrame({'馬ID': ['a', 'b', 'c'], '馬番': [7, 3, 5]}).to_csv(Path(root) / 'entries' / 'R1.csv', index=False)
+            self.assertEqual(list(ref.reference_table(root, 'R1')['馬番']), [7, 3, 5])
