@@ -1,0 +1,15 @@
+{
+ "種別": "予想",
+ "レースID": "202608050611",
+ "作成日時": "2026-11-20T21:50:32+09:00",
+ "対象日時": "2026-11-22T15:40:00+09:00",
+ "取得元": "https://race.netkeiba.com/race/shutuba.html?race_id=202608050611",
+ "コード版": "ceb60d9dc1b2b67a012b251b40e1b661225e3156",
+ "データ版": "data-v1",
+ "特徴量版": "feat-v1",
+ "モデル版": "shadow-v1-d3136b5a37",
+ "入力ハッシュ": "c44d3db2f6dd4c1aee1d9cd834c6acee88278dc124cb1f98f1ca5bf2124404f1",
+ "予想sha256": "aa39dc2a438ec05540ed5f62bb87776627d0131eec7051fb40aa80fa828c1919",
+ "出走構成": "c44d3db2f6dd4c1aee1d9cd834c6acee88278dc124cb1f98f1ca5bf2124404f1",
+ "影の予測": true
+}
