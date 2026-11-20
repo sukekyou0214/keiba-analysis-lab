@@ -1,0 +1,14 @@
+{
+ "種別": "予想",
+ "レースID": "202603030507",
+ "作成日時": "2026-11-20T21:49:28+09:00",
+ "対象日時": "2026-11-21T13:10:00+09:00",
+ "取得元": "https://race.netkeiba.com/race/shutuba.html?race_id=202603030507",
+ "コード版": "ceb60d9dc1b2b67a012b251b40e1b661225e3156",
+ "データ版": "data-v1",
+ "特徴量版": "frozen",
+ "モデル版": "old-M@ceb60d9",
+ "入力ハッシュ": "31dfc93efbe461a5815ab2109ff250d7e92f23d2eac133ca8522f60611c88f8b",
+ "予想sha256": "0cd4dc26a514888edebc8048b97ae6a52e0e9d5b4a7fcdd4ba331a6f9f1ceb68",
+ "出走構成": "31dfc93efbe461a5815ab2109ff250d7e92f23d2eac133ca8522f60611c88f8b"
+}
