@@ -103,7 +103,7 @@ def table(rows, cols):
     return f'<div class="scroll"><table><thead><tr>{head}</tr></thead><tbody>\n{body}</tbody></table></div>'
 
 
-def race_article(race, horses, pace, work):
+def race_article(race, horses, pace, work, main='old'):
     rid = str(race['レースID'])
     h = horses.loc[horses['レースID'].astype(str).eq(rid)]
     parts = [f"<article id='{rid}'><h3>{e(race['競馬場'])}{num(race['R'])}R {e(race['レース名'])}</h3>",
@@ -112,13 +112,15 @@ def race_article(race, horses, pace, work):
              f"<p>データ充足度：{grade(race)}　戦績確認{num(race['戦績あり'])}/{num(race['頭数'])}頭・平均項目充足"
              f"{float(race['平均項目充足率(%)']):.1f}%。近5走平均有効数{float(race['近5走平均有効数']):.2f}走。</p>"
              if pd.notna(race.get('平均項目充足率(%)')) else f"<p>データ充足度：{grade(race)}</p>"]
+    head, old = parts, []
     held, gaps = {}, []
     for p in 'SMH':
         ranked = h.loc[pd.to_numeric(h[f'{p}順位'], errors='coerce').notna()].sort_values(f'{p}順位')
         rows = [(num(r[f'{p}順位']), num(r['馬番']), e(r['馬名']), f"{float(r[f'{p}参考点']):.1f}")
                 for _, r in ranked.head(5).iterrows()]
-        opened = ' open' if p == 'M' else ''
-        parts.append(f'<details{opened}><summary>{p}想定の上位5頭</summary>\n' +
+        opened = ' open' if p == 'M' and main == 'old' else ''
+        label = f'{p}想定の上位5頭' if main == 'old' else f'旧S/M/H方式：{p}想定の上位5頭'
+        old.append(f'<details{opened}><summary>{label}</summary>\n' +
                      (table(rows, ['順位', '馬番', '馬名', '参考点']) if rows else '<p class="muted">順位表示なし</p>') +
                      '\n</details>')
         hold = h.loc[pd.to_numeric(h[f'{p}順位'], errors='coerce').isna() & h['状態'].eq('出走予定')]
@@ -126,25 +128,30 @@ def race_article(race, horses, pace, work):
         pts = pd.to_numeric(ranked[f'{p}参考点'], errors='coerce').tolist()
         gaps.append((p, f'{pts[0] - pts[1]:.1f}' if len(pts) >= 2 else '—'))
     holds = ' ／ '.join(f"{p}：{'・'.join(num(x) for x in held[p]['馬番']) or 'なし'}" for p in 'SMH')
-    parts.append(f"<p class='muted'>{e(race.get('比較対象', ''))}比較（相手・格差未補正）。順位保留（馬番） {holds}</p>")
+    old.append(f"<p class='muted'>{e(race.get('比較対象', ''))}比較（相手・格差未補正）。順位保留（馬番） {holds}</p>")
     reasons = []
     for p, gap in gaps:
         detail = ' ／ '.join(f"{num(r['馬番'])} {e(r['馬名'])}：{e(r[f'{p}判定'])}" for _, r in held[p].iterrows()) or '保留なし'
         reasons.append(f'<p>{p}首位と次位の点差：{gap}</p>\n<p class="muted">{detail}</p>')
-    parts.append('<details><summary>順位保留の理由・点差</summary>\n' + '\n'.join(reasons) + '\n</details>')
+    old.append('<details><summary>順位保留の理由・点差（旧S/M/H方式）</summary>\n' + '\n'.join(reasons) + '\n</details>')
+    common_block, v5_block = [], []
     common = h.loc[pd.to_numeric(h['全馬共通M順位'], errors='coerce').notna()].sort_values('全馬共通M順位').head(5)
     if len(common):
         rows = [(num(r['全馬共通M順位']), num(r['馬番']), e(r['馬名']), f"{float(r['全馬共通M参考点']):.1f}")
                 for _, r in common.iterrows()]
-        parts.append('<details><summary>主予測（全馬共通・M想定）の上位5頭</summary>\n' +
+        common_block.append('<details><summary>主予測（全馬共通・M想定）の上位5頭</summary>\n' +
                      table(rows, ['順位', '馬番', '馬名', '参考点']) + '\n</details>')
     v5 = shadow_top(work, rid, 'shadow-v5-')
     if v5 is not None and len(v5):
         v5 = v5.assign(馬番=v5['馬名'].map(h.drop_duplicates('馬名').set_index('馬名')['馬番']))  # 最新の出走表の馬番
         rows = [(num(r['順位']), num(r['馬番']), e(r['馬名']), e(r['判定'])) for _, r in v5.iterrows()]
-        parts.append('<details><summary>参考：v5（検証中）の上位5頭</summary>\n' +
-                     table(rows, ['順位', '馬番', '馬名', '判定']) +
-                     '\n<p class="muted">結果前に保存した影の予測。過去検証863Rで上位3に勝ち馬56.2%（主予測48.1%）。勝つ確率ではありません。</p></details>')
+        opened = ' open' if main == 'v5' else ''
+        v5_block.append(f'<details{opened}><summary>v5（検証中）の上位5頭</summary>\n' +
+                        table(rows, ['順位', '馬番', '馬名', '判定']) +
+                        '\n<p class="muted">結果前に保存した予想。過去検証863Rで上位3に勝ち馬56.2%（主予測48.1%）。勝つ確率ではありません。</p></details>')
+    elif main == 'v5':
+        v5_block.append('<p class="muted">v5の記録なし</p>')
+    parts = head + (v5_block + common_block + old if main == 'v5' else old + common_block + v5_block)
     day = str(race['日付']).replace('-', '')
     parts.append(f'<p><a href="#day{day}">この日の一覧へ戻る</a></p></article>')
     return '\n'.join(parts)
@@ -155,6 +162,7 @@ def main(argv=None):
     ap.add_argument('--out-dir', nargs='+', required=True, help='週末出力フォルダ（複数可：土日＋月曜など）')
     ap.add_argument('--work', nargs='+', required=True, help='対応する作業フォルダ（--out-dir と同じ順）')
     ap.add_argument('--save', required=True)
+    ap.add_argument('--main', choices=('old', 'v5'), default='old', help='各レースで最初に開く表（v5：v5 の上位5頭）')
     args = ap.parse_args(argv)
     if len(args.out_dir) != len(args.work):
         raise SystemExit('--out-dir と --work の数をそろえてください')
@@ -189,9 +197,17 @@ def main(argv=None):
             '<p>主予測（全馬共通）と v5（影の予測）は別方式なので、S/M/H別の順位と混ぜていません。'
             '過去検証では、上位3頭に勝ち馬が入った割合は旧S/M/H方式 25〜32%・全馬共通 45〜53%・v5 56%（2026年夏・春）。</p></details></div>',
             '<h2>データ充足度の上位</h2>']
+    if args.main == 'v5':
+        body.insert(3, '<p class="key">各レースの最初の表は v5（新馬戦は騎手点、それ以外は戦績＋近走人気と全馬共通の順位平均）。'
+                       '主予測（全馬共通）と旧S/M/H方式は折りたたみで残しています。</p>')
     for i, (_, r) in enumerate(top.iterrows(), 1):
         d = pd.Timestamp(r['日付'])
-        lines = '<br>'.join(f"{p}：" + ' ／ '.join(
+        if args.main == 'v5':
+            v5 = shadow_top(work_of[r['レースID']], r['レースID'], 'shadow-v5-', 3)
+            hh = horses.loc[horses['レースID'].eq(r['レースID'])].drop_duplicates('馬名').set_index('馬名')['馬番']
+            lines = 'v5：' + (' ／ '.join(f"{num(hh.get(x['馬名']))} {e(x['馬名'])}" for _, x in v5.iterrows()) if v5 is not None else '記録なし')
+        else:
+          lines = '<br>'.join(f"{p}：" + ' ／ '.join(
             f"{num(x['馬番'])} {e(x['馬名'])}" for _, x in horses.loc[horses['レースID'].eq(r['レースID'])]
             .assign(_r=lambda t, p=p: pd.to_numeric(t[f'{p}順位'], errors='coerce')).dropna(subset=['_r'])
             .sort_values('_r').head(3).iterrows()) for p in 'SMH')
@@ -213,8 +229,8 @@ def main(argv=None):
         body.append(f'<h2 id="day{d.replace("-", "")}">{ts.month}-{ts.day} 全{len(day)}レース一覧</h2><nav>\n{nav}\n</nav>' +
                     table(rows, ['開催場', 'R', '発走時刻', 'レース名', '芝距離', '想定展開', 'データ充足度']) +
                     f'<details><summary>この日のデータ充足度ランキング</summary>\n{ranking}\n</details>')
-        articles += [race_article(r, horses, pace, work_of[r['レースID']]) for _, r in day.iterrows()]
-        body.append('<h2>展開別上位5頭</h2>\n' + '\n'.join(articles))
+        articles += [race_article(r, horses, pace, work_of[r['レースID']], args.main) for _, r in day.iterrows()]
+        body.append(('<h2>v5の上位5頭</h2>\n' if args.main == 'v5' else '<h2>展開別上位5頭</h2>\n') + '\n'.join(articles))
         articles = []
     body.append('<div class="box"><h2>計算方法と確認範囲</h2>'
                 f'<p>{e(meta.get("参考点", ""))}</p><p>{e(meta.get("S/M/H", ""))}</p>'
