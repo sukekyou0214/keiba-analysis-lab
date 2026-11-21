@@ -252,3 +252,25 @@ class V3DebutTests(unittest.TestCase):
             f = list((Path(root) / 'work' / 'records' / 'predictions').glob('shadow-v3-*/202608050305.csv'))[0]
             pred = pd.read_csv(f, dtype={'馬ID': str}).set_index('馬ID')
             self.assertEqual(int(pred.loc['2024100002', '順位']), 1)
+
+
+class ArchiveConflictTests(unittest.TestCase):
+    def test_conflicting_record_is_kept_alongside(self):
+        import importlib.util, zipfile
+        spec = importlib.util.spec_from_file_location('archive_records', Path(__file__).resolve().parents[1] / 'scripts' / 'archive_records.py')
+        ar = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ar)
+        with tempfile.TemporaryDirectory() as root:
+            def make(name, body):
+                path = Path(root) / name
+                with zipfile.ZipFile(path, 'w') as z:
+                    z.writestr('records/predictions/m1/R1.json', body)
+                    z.writestr('records/predictions/m1/R1.csv', body + 'csv')
+                return path
+            with patch.object(ar, 'ROOT', Path(root) / 'records'):
+                self.assertEqual(ar.from_weekend_zip(make('a.zip', '{"a":1}')), 2)
+                self.assertEqual(ar.from_weekend_zip(make('b.zip', '{"a":1}')), 0)  # 同じ中身は何もしない
+                self.assertEqual(ar.from_weekend_zip(make('c.zip', '{"a":2}')), 2)  # 違う中身は別名で並べる
+            files = sorted(p.name for p in (Path(root) / 'records' / 'predictions' / 'm1').iterdir())
+            self.assertEqual(len(files), 4)
+            self.assertEqual(Path(root, 'records', 'predictions', 'm1', 'R1.json').read_text(), '{"a":1}')
