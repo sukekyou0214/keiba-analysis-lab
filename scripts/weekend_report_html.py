@@ -152,16 +152,27 @@ def race_article(race, horses, pace, work):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument('--out-dir', required=True)
-    ap.add_argument('--work', required=True)
+    ap.add_argument('--out-dir', nargs='+', required=True, help='週末出力フォルダ（複数可：土日＋月曜など）')
+    ap.add_argument('--work', nargs='+', required=True, help='対応する作業フォルダ（--out-dir と同じ順）')
     ap.add_argument('--save', required=True)
     args = ap.parse_args(argv)
-    out = Path(args.out_dir)
-    races = pd.read_csv(glob.glob(str(out / '*_全芝レース一覧.csv'))[0], dtype={'レースID': str})
-    horses = pd.read_csv(glob.glob(str(out / '*_全頭展開別順位.csv'))[0], dtype={'レースID': str})
-    meta = json.loads(Path(glob.glob(str(out / '*_条件と取得状況.json'))[0]).read_text(encoding='utf-8'))
-    top = pd.read_csv(glob.glob(str(out / '*_分析信頼度上位.csv'))[0], dtype={'レースID': str})
-    pace = pace_estimates(args.work)
+    if len(args.out_dir) != len(args.work):
+        raise SystemExit('--out-dir と --work の数をそろえてください')
+    races, horses, tops, pace, metas, work_of = [], [], [], {}, [], {}
+    for out_dir, work in zip(args.out_dir, args.work):
+        out = Path(out_dir)
+        r = pd.read_csv(glob.glob(str(out / '*_全芝レース一覧.csv'))[0], dtype={'レースID': str})
+        races.append(r)
+        horses.append(pd.read_csv(glob.glob(str(out / '*_全頭展開別順位.csv'))[0], dtype={'レースID': str}))
+        tops.append(pd.read_csv(glob.glob(str(out / '*_分析信頼度上位.csv'))[0], dtype={'レースID': str}))
+        metas.append(json.loads(Path(glob.glob(str(out / '*_条件と取得状況.json'))[0]).read_text(encoding='utf-8')))
+        pace.update(pace_estimates(work))
+        work_of.update({rid: work for rid in r['レースID']})
+    races = pd.concat(races, ignore_index=True).drop_duplicates('レースID', keep='last')
+    horses = pd.concat(horses, ignore_index=True).drop_duplicates(['レースID', '馬名'], keep='last')
+    meta = metas[0] | {'作成日時': '・'.join(m.get('作成日時', '') for m in metas)}
+    top = (pd.concat(tops, ignore_index=True).assign(_p=lambda d: pd.to_numeric(d['データ充足度点'], errors='coerce'))
+           .sort_values(['_p', '近5走平均有効数', 'レースID'], ascending=[False, False, True]).head(3))
     races = races.sort_values(['日付', '発走', '競馬場'])
     days = list(dict.fromkeys(races['日付']))
     dt = [pd.Timestamp(d) for d in days]
@@ -202,7 +213,7 @@ def main(argv=None):
         body.append(f'<h2 id="day{d.replace("-", "")}">{ts.month}-{ts.day} 全{len(day)}レース一覧</h2><nav>\n{nav}\n</nav>' +
                     table(rows, ['開催場', 'R', '発走時刻', 'レース名', '芝距離', '想定展開', 'データ充足度']) +
                     f'<details><summary>この日のデータ充足度ランキング</summary>\n{ranking}\n</details>')
-        articles += [race_article(r, horses, pace, args.work) for _, r in day.iterrows()]
+        articles += [race_article(r, horses, pace, work_of[r['レースID']]) for _, r in day.iterrows()]
         body.append('<h2>展開別上位5頭</h2>\n' + '\n'.join(articles))
         articles = []
     body.append('<div class="box"><h2>計算方法と確認範囲</h2>'

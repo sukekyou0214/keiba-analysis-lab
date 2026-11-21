@@ -18,6 +18,24 @@ const URL = 'https://keiba-analysis-lab2026.streamlit.app/';
   await F().getByText('🧰 管理・検証').first().click(); await p.waitForTimeout(8000);
   await F().locator('[data-testid="stExpander"] summary', { hasText: '週末の全芝レース一括分析' }).first().click(); await p.waitForTimeout(3000);
   const box = F().locator('[data-testid="stExpander"]', { hasText: '週末の全芝' });
+  // 対象日を変える場合：WK_D1=2026/11/23（1日目）、WK_SINGLE=1（2日目を対象にしない）
+  if (process.env.WK_D1) {
+    // 年・月・日の入力欄（react-aria）に順に入力する
+    const [y, m, dd] = process.env.WK_D1.split('/');
+    const field = box.locator('[data-testid="stDateInput"]').first();
+    for (const [type, value] of [['year', y], ['month', m], ['day', dd]]) {
+      const seg = field.locator(`[role="spinbutton"][data-type="${type}"]`);
+      await seg.focus(); await p.keyboard.type(String(Number(value))); await p.waitForTimeout(300);
+    }
+    await p.keyboard.press('Tab'); await p.waitForTimeout(5000);
+    console.log('1日目', await field.locator('[role="spinbutton"]').allInnerTexts());
+  }
+  if (process.env.WK_SINGLE) {
+    const c = box.locator('[data-testid="stCheckbox"]', { hasText: '2日目も対象' }).first();
+    const input = c.locator('input[type="checkbox"]');
+    if (await input.isChecked()) { await input.focus(); await p.keyboard.press('Space'); await p.waitForTimeout(5000); }
+    console.log('2日目', await input.isChecked());
+  }
   if (action === 'start') {
     const btn = box.getByRole('button', { name: /一括分析を開始|続きから再開/ });
     const disabled = await btn.isDisabled(); console.log('start disabled', disabled);
@@ -39,6 +57,6 @@ const URL = 'https://keiba-analysis-lab2026.streamlit.app/';
   }
   await F().getByRole('button', { name: '状況を更新' }).first().click().catch(() => {}); await p.waitForTimeout(4000);
   const t = await F().locator('body').innerText(); const i = t.indexOf('週末の全芝');
-  console.log((t.slice(i, i + 1500).match(/(1日目[^\n]*|\d{4}\/\d{2}\/\d{2}|状態：[^\n]*|結果：[^\n]*|結果照合：[^\n]*|対象レース：[^\n]*|取得先の制限[^\n]*)/g) || []).join('\n'));
+  console.log((t.slice(i, i + 1500).match(/(1日目[^\n]*|\d{4}\/\d{1,2}\/\d{1,2}|\d{4}\/\d{2}\/\d{2}|状態：[^\n]*|結果：[^\n]*|結果照合：[^\n]*|対象レース：[^\n]*|取得先の制限[^\n]*)/g) || []).join('\n'));
   await b.close();
 })();
