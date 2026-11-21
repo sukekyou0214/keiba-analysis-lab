@@ -33,11 +33,26 @@ def write_once(path, data):
 
 
 def from_weekend_zip(zip_path):
+    """records/predictions/** を取り込む。同じ名前で中身が違う記録（サーバー再起動後の作り直しなど）は、
+    上書きせず「_s<sha先頭8桁>」を付けた別名で並べて保存する（照合では発走前に作られた最後の版を使う）。"""
     added = 0
     with zipfile.ZipFile(zip_path) as z:
-        for name in z.namelist():
-            if name.startswith('records/predictions/') and not name.endswith('/') and '..' not in name:
-                added += write_once(ROOT / 'predictions' / name[len('records/predictions/'):], z.read(name))
+        names = [n for n in z.namelist() if n.startswith('records/predictions/') and not n.endswith('/') and '..' not in n]
+        stems = sorted({n.rsplit('.', 1)[0] for n in names})
+        for stem in stems:
+            parts = {ext: z.read(f'{stem}.{ext}') for ext in ('json', 'csv') if f'{stem}.{ext}' in names}
+            rel = stem[len('records/predictions/'):]
+            target = ROOT / 'predictions' / rel
+            same = all((target.parent / f'{target.name}.{ext}').exists() and
+                       (target.parent / f'{target.name}.{ext}').read_bytes() == data for ext, data in parts.items())
+            if same:
+                continue
+            exists = any((target.parent / f'{target.name}.{ext}').exists() for ext in parts)
+            if exists:
+                digest = hashlib.sha256(parts.get('json', b'') + parts.get('csv', b'')).hexdigest()[:8]
+                target = target.parent / f'{target.name}_s{digest}'
+            for ext, data in parts.items():
+                added += write_once(target.parent / f'{target.name}.{ext}', data)
     return added
 
 
