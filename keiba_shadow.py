@@ -170,11 +170,20 @@ def restore_from_repo(work, dates, root=None):
         if not csv_path.exists():
             continue
         rel = f'predictions/{meta_path.parent.name}/{meta_path.stem}'
-        for suffix, path in (('.json', meta_path), ('.csv', csv_path)):
-            try:
-                store.write_new(rel + suffix, path.read_bytes())
-            except RecordExists:
-                pass
+        data = {'.json': meta_path.read_bytes(), '.csv': csv_path.read_bytes()}
+        current = {s: store.read(rel + s) for s in data}
+        if all(current[s] is None for s in data):
+            for s, body in data.items():
+                store.write_new(rel + s, body)
+        elif any(current[s] != body for s, body in data.items()):
+            # 作業フォルダに同名・別内容の記録（再起動後の作り直しなど）があっても、結果前の記録を別名で並べて戻す
+            import hashlib
+            alt = rel + '_s' + hashlib.sha256(data['.json'] + data['.csv']).hexdigest()[:8]
+            for s, body in data.items():
+                try:
+                    store.write_new(alt + s, body)
+                except RecordExists:
+                    pass
         restored.add(json.loads(meta_path.read_text(encoding='utf-8'))['レースID'])
     return sorted(restored)
 

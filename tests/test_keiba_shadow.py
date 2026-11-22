@@ -274,3 +274,27 @@ class ArchiveConflictTests(unittest.TestCase):
             files = sorted(p.name for p in (Path(root) / 'records' / 'predictions' / 'm1').iterdir())
             self.assertEqual(len(files), 4)
             self.assertEqual(Path(root, 'records', 'predictions', 'm1', 'R1.json').read_text(), '{"a":1}')
+
+
+class RestoreConflictTests(unittest.TestCase):
+    def test_restore_keeps_pre_race_record_when_work_has_post_race_rebuild(self):
+        import keiba_shadow as sh
+        from keiba_registry import LocalStore, compare, save_prediction, save_result
+        with tempfile.TemporaryDirectory() as root:
+            repo = RestartRecoveryTests().repo(root)
+            work = Path(root) / 'work'
+            ranking = pd.DataFrame({'レースID': '202608050510', '馬ID': ['2022100001', '2022100002', '2022100003'],
+                                    '馬番': [1, 2, 3], '馬名': ['ア', 'イ', 'ウ'], '順位': [3, 2, 1], '点数': [1.0, 2.0, 3.0],
+                                    '判定': '作り直し'})
+            store = LocalStore(work / 'records')
+            save_prediction(store, '202608050510', ranking, target_time='2026-11-14T15:40:00+09:00', source='試験',
+                            model_version='common-M@test', feature_version='frozen', data_version='data-v1',
+                            created_at='2026-11-15T08:00:00+09:00', code='test')  # 発走後の作り直し
+            sh.restore_from_repo(work, ['20261114'], repo)
+            result = pd.DataFrame({'レースID': '202608050510', '馬ID': ['2022100001', '2022100002', '2022100003'],
+                                   '馬番': [1, 2, 3], '馬名': ['ア', 'イ', 'ウ'], '着順原文': ['1', '2', '3'],
+                                   '状態': '完走', '着順': [1, 2, 3]})
+            save_result(store, '202608050510', result, confirmed_at='2026-11-14T16:00:00+09:00', source='試験')
+            merged = compare(store, 'common-M@test')
+            self.assertTrue(bool(merged['事前保存'].iloc[0]))
+            self.assertEqual(int(merged.set_index('馬ID').loc['2022100001', '順位']), 1)  # 結果前の版（アが1位）を使う
