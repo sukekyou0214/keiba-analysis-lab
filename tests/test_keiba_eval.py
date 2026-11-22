@@ -46,3 +46,16 @@ class EvalTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BoxMetricTests(unittest.TestCase):
+    def test_box_hits(self):
+        from keiba_eval import race_metrics
+        field = pd.DataFrame({'馬ID': list('abcdefg'), '状態': '完走', '着順': [1, 2, 3, 4, 5, 6, 7], '実出走': True})
+        pred = pd.DataFrame({'馬ID': list('abcdefg'), '順位': [1, 5, 4, 2, 3, 6, 7]})
+        m = race_metrics(pred, field)
+        self.assertFalse(m['三連複4頭'])   # 上位4＝a,d,e,c → b(2着)なし
+        self.assertTrue(m['三連複5頭'])    # 上位5＝a,d,e,c,b
+        self.assertFalse(m['馬連4頭'])
+        self.assertTrue(m['馬連5頭'])
+        self.assertTrue(m['ワイド4頭'])    # a・c の2頭

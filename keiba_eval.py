@@ -107,6 +107,9 @@ def frozen_rank(bt, info, mode, pace='M', past_paces=None):
                          '点数': r['総合参考点'], '判定': r['判定']})
 
 
+BOX_SIZES = (3, 4, 5, 6)
+
+
 def race_metrics(pred, field):
     """1レース分の指標。pred: 馬ID・順位（NA可）。field: 結果（状態・着順・実出走）。"""
     m = field.merge(pred[['馬ID', '順位']], on='馬ID', how='left')
@@ -121,6 +124,13 @@ def race_metrics(pred, field):
            '上位3勝ち馬': bool(winners & in_top(3)), '上位5勝ち馬': bool(winners & in_top(5)),
            '上位3の3着内数': len(top3_actual & in_top(3)), '実3着内数': len(top3_actual),
            '首位数': len(firsts), '首位勝利': int(firsts['着順'].eq(1).sum()), '首位3着内': int(firsts['着順'].le(3).sum())}
+    # ボックス買いの的中（予想上位N頭の中に実際の着順の馬がそろったか）。1〜3着が確定しないレースは False
+    top2_actual = set(starters.loc[starters['着順'].le(2), '馬ID'])
+    for n in BOX_SIZES:
+        top = in_top(n)
+        out[f'三連複{n}頭'] = len(top3_actual) == 3 and top3_actual <= top
+        out[f'馬連{n}頭'] = len(top2_actual) == 2 and top2_actual <= top
+        out[f'ワイド{n}頭'] = len(top3_actual & top) >= 2
     if len(ranked_starters) >= 2 and len(starters) > 1:
         pr = pd.to_numeric(ranked_starters['順位']).rank(method='average')
         ac = ranked_starters['着順'].rank(method='average')
@@ -140,7 +150,9 @@ def summarize(rows):
                       '首位3着内率': r['首位3着内'].sum() / max(r['首位数'].sum(), 1),
                       '上位3の3着内捕捉率': r['上位3の3着内数'].sum() / max(r['実3着内数'].sum(), 1),
                       '順位誤差': r['順位誤差'].mean(), '相関': r['相関'].mean(),
-                      '無作為の上位3期待': (3 / r['頭数'].clip(lower=3)).mean()})
+                      '無作為の上位3期待': (3 / r['頭数'].clip(lower=3)).mean(),
+                      **{f'{k}{n}頭的中率': r[f'{k}{n}頭'].mean() for n in BOX_SIZES for k in ('三連複', '馬連', 'ワイド')
+                         if f'{k}{n}頭' in r}})
 
 
 def bootstrap_diff(a, b, column='上位3勝ち馬', n=2000, seed=0):
