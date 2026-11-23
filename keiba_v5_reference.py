@@ -42,6 +42,21 @@ def _current_version():
         return None
 
 
+def points_label(table):
+    """表示用の点数。新馬戦（騎手点）は騎手の3着内率（%）、それ以外はレース内で 0〜100 に直した v5 の能力点。
+    並び順は能力点と全馬共通の順位の平均で決めるので、点数の大小と順位が前後することがある。勝つ確率ではない。"""
+    score = pd.to_numeric(table['点数'], errors='coerce')
+    jockey = table['判定'].astype(str).str.startswith('騎手点')
+    out = pd.Series('', index=table.index, dtype=object)
+    out[jockey] = (score[jockey] * 100).round(1).astype(str) + '%'
+    rest = score[~jockey]
+    if rest.notna().any():
+        lo, hi = rest.min(), rest.max()
+        scaled = (rest - lo) / (hi - lo) * 100 if hi > lo else rest * 0 + 100
+        out[~jockey] = scaled.round(1).astype(str)
+    return out
+
+
 def reference_table(work, race_id):
     path = latest_record(work, race_id)
     if path is None:
@@ -57,7 +72,8 @@ def reference_table(work, race_id):
         numbers = latest.set_index('馬ID')['馬番']
         table['馬番'] = table['馬ID'].map(numbers).where(table['馬ID'].isin(numbers.index), table['馬番'])
     table['馬番'] = pd.to_numeric(table['馬番'], errors='coerce').astype('Int64')
-    return table.sort_values('順位')[['順位', '馬番', '馬名', '判定']].reset_index(drop=True)
+    table['v5点'] = points_label(table)
+    return table.sort_values('順位')[['順位', '馬番', '馬名', 'v5点', '判定']].reset_index(drop=True)
 
 
 def render(work, race_id):
@@ -70,6 +86,7 @@ def render(work, race_id):
     if table is None:
         return False
     st.markdown('##### 参考：v5順位（検証中）')
-    st.caption('主予測（全馬共通）とは別の候補モデルです。' + VALIDATION)
+    st.caption('主予測（全馬共通）とは別の候補モデルです。' + VALIDATION +
+               'v5点はレース内で0〜100に直した能力点（新馬戦は騎手の3着内率）。順位は能力点と全馬共通の順位の平均で決めるため、点数と順位が前後することがあります。')
     st.dataframe(table, hide_index=True, width='stretch')
     return True

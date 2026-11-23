@@ -94,6 +94,8 @@ def shadow_top(work, rid, prefix, n=5):
     t = pd.read_csv(files[-1][2], dtype={'馬ID': str})
     t = t.loc[pd.to_numeric(t['順位'], errors='coerce').notna()].copy()
     t['順位'] = pd.to_numeric(t['順位']).astype(int)
+    from keiba_v5_reference import points_label
+    t['v5点'] = points_label(t)  # レース全体で 0〜100 に直してから上位を切り出す
     return t.sort_values('順位').head(n)
 
 
@@ -144,11 +146,12 @@ def race_article(race, horses, pace, work, main='old'):
     v5 = shadow_top(work, rid, 'shadow-v5-')
     if v5 is not None and len(v5):
         v5 = v5.assign(馬番=v5['馬名'].map(h.drop_duplicates('馬名').set_index('馬名')['馬番']))  # 最新の出走表の馬番
-        rows = [(num(r['順位']), num(r['馬番']), e(r['馬名']), e(r['判定'])) for _, r in v5.iterrows()]
+        rows = [(num(r['順位']), num(r['馬番']), e(r['馬名']), e(r['v5点']), e(r['判定'])) for _, r in v5.iterrows()]
         opened = ' open' if main == 'v5' else ''
         v5_block.append(f'<details{opened}><summary>v5（検証中）の上位5頭</summary>\n' +
-                        table(rows, ['順位', '馬番', '馬名', '判定']) +
-                        '\n<p class="muted">結果前に保存した予想。過去検証863Rで上位3に勝ち馬56.2%（主予測48.1%）。勝つ確率ではありません。</p></details>')
+                        table(rows, ['順位', '馬番', '馬名', 'v5点', '判定']) +
+                        '\n<p class="muted">結果前に保存した予想。過去検証863Rで上位3に勝ち馬56.2%（主予測48.1%）。'
+                        'v5点はレース内で0〜100に直した能力点（新馬戦は騎手の3着内率）。順位は能力点と全馬共通の順位の平均なので、点数と前後することがあります。勝つ確率ではありません。</p></details>')
     elif main == 'v5':
         v5_block.append('<p class="muted">v5の記録なし</p>')
     parts = head + (v5_block + common_block + old if main == 'v5' else old + common_block + v5_block)
@@ -205,7 +208,7 @@ def main(argv=None):
         if args.main == 'v5':
             v5 = shadow_top(work_of[r['レースID']], r['レースID'], 'shadow-v5-', 3)
             hh = horses.loc[horses['レースID'].eq(r['レースID'])].drop_duplicates('馬名').set_index('馬名')['馬番']
-            lines = 'v5：' + (' ／ '.join(f"{num(hh.get(x['馬名']))} {e(x['馬名'])}" for _, x in v5.iterrows()) if v5 is not None else '記録なし')
+            lines = 'v5：' + (' ／ '.join(f"{num(hh.get(x['馬名']))} {e(x['馬名'])}（{e(x['v5点'])}）" for _, x in v5.iterrows()) if v5 is not None else '記録なし')
         else:
           lines = '<br>'.join(f"{p}：" + ' ／ '.join(
             f"{num(x['馬番'])} {e(x['馬名'])}" for _, x in horses.loc[horses['レースID'].eq(r['レースID'])]
