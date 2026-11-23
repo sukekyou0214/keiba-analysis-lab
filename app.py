@@ -2372,6 +2372,8 @@ if selected_page208 == '🧰 管理・検証':
     render_weekend_batch()
     from keiba_backtest import render_backtest_collector
     render_backtest_collector()
+    from keiba_nar import render_nar_single
+    render_nar_single()
     with st.expander('研究用ページ（オプション）',expanded=False):
         st.page_link('pages/2_過去レース相性_Ver21.py',label='過去レース相性・取得検証')
         st.page_link('pages/1_過去10年分析.py',label='過去10年の研究ページ')

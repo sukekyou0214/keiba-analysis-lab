@@ -33,6 +33,20 @@ class Params:
     band: int = 200            # 距離帯（±m）
     l2: float = 1.0            # 条件付きロジットのL2
     priors: dict = field(default_factory=dict)  # 学習期間で決める基準率・中央値
+    surface: str = '芝'        # 対象のコース（'芝' か 'ダ'）。特徴量はこのコースの戦績で作る
+
+
+def jpn_class(name):
+    """地方の交流重賞（JpnI〜III）の格。ダート版でだけ使う。分からなければ None。"""
+    import re
+    text = str(name or '')
+    if re.search(r'JpnIII|Jpn3|Ｊｐｎ３', text):
+        return 'G3'
+    if re.search(r'JpnII|Jpn2|Ｊｐｎ２', text):
+        return 'G2'
+    if re.search(r'JpnI|Jpn1|Ｊｐｎ１', text):
+        return 'G1'
+    return None
 
 
 def horse_rows(history, cutoff, info, params):
@@ -51,7 +65,7 @@ def horse_rows(history, cutoff, info, params):
             share = (1 - (pop - 1) / (field - 1)).where(field.gt(1)).dropna()
             if len(share):
                 out['近走人気'] = float(share.clip(0, 1).mean())
-    turf = started.loc[started['コース'].eq('芝')]
+    turf = started.loc[started['コース'].eq(params.surface)]
     if len(turf):
         out['最終芝出走日'] = turf['日付'].max()
         out['芝休養日数'] = (pd.Timestamp(cutoff) - out['最終芝出走日']).days
@@ -67,7 +81,8 @@ def horse_rows(history, cutoff, info, params):
         margin = comp['着差'].clip(lower=0, upper=3).to_numpy(float)
         ok = ~np.isnan(margin)
         out['着差'] = float(-np.average(margin[ok], weights=w[ok])) if ok.any() else np.nan
-    levels = win['クラス'].map(LEVELS).dropna()
+    levels = win['クラス'].where(win['クラス'].ne('不明'), win['レース名'].map(jpn_class) if params.surface == 'ダ' else win['クラス'])
+    levels = levels.map(LEVELS).dropna()
     if len(levels):
         out['クラス水準'] = float(levels.mean())
         target = LEVELS.get(info.get('クラス'))
@@ -194,7 +209,8 @@ def save_artifact(path, params, beta, extra=None):
     from pathlib import Path
     data = {'model_version': MODEL_VERSION, 'feature_version': FEATURE_VERSION, 'features': list(params.features),
             'window': params.window, 'half_life': params.half_life, 'shrink_k': params.shrink_k, 'band': params.band,
-            'l2': params.l2, 'priors': params.priors, 'beta': [float(b) for b in beta], **(extra or {})}
+            'l2': params.l2, 'priors': params.priors, 'beta': [float(b) for b in beta], 'surface': params.surface,
+            **(extra or {})}
     Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding='utf-8')
     return data
 
@@ -204,7 +220,8 @@ def load_artifact(path):
     from pathlib import Path
     data = json.loads(Path(path).read_text(encoding='utf-8'))
     params = Params(features=tuple(data['features']), window=data['window'], half_life=data['half_life'],
-                    shrink_k=data['shrink_k'], band=data['band'], l2=data['l2'], priors=data['priors'])
+                    shrink_k=data['shrink_k'], band=data['band'], l2=data['l2'], priors=data['priors'],
+                    surface=data.get('surface', '芝'))
     return params, np.array(data['beta'], float), data
 
 
