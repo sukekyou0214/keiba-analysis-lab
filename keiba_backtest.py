@@ -72,8 +72,8 @@ def parse_result_page(html, race_id):
     return info, runners
 
 
-def race_ids_for(list_html):
-    """レース一覧（race_list_sub）から芝・平地のレースIDと一覧表記を返す。"""
+def race_ids_for(list_html, surface='芝'):
+    """レース一覧（race_list_sub）から芝（または surface='ダ' でダート）・平地のレースIDと一覧表記を返す。"""
     soup = BeautifulSoup(list_html, 'html.parser')
     out = []
     for item in soup.select('li.RaceList_DataItem'):
@@ -81,7 +81,7 @@ def race_ids_for(list_html):
         hit = re.search(r'race_id=(\d{12})', link.get('href', '')) if link else None
         text = _text(item)
         course = re.search(r'(芝|ダ|障)\s*(\d{3,4})m', text)
-        if hit and course and course[1] == '芝' and '障害' not in text:
+        if hit and course and course[1] == surface and '障害' not in text:
             out.append({'レースID': hit[1], '一覧表記': text})
     return pd.DataFrame(out).drop_duplicates('レースID') if out else pd.DataFrame(columns=['レースID', '一覧表記'])
 
@@ -98,7 +98,7 @@ def read_status(work):
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
 
 
-def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, pace_loader=None):
+def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, pace_loader=None, surface=None):
     """収集を進める（未取得分のみ）。止まっても保存済みから再開できる。戻り値は状態の文字列。"""
     from keiba_fetch_policy import POLICY, PolicyStop, format_time
     from keiba_weekend_batch import HistoryCache, Stopped, LIST_URL, fetch_text as default_fetch
@@ -112,14 +112,15 @@ def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, 
     (work / 'races').mkdir(parents=True, exist_ok=True)
     cache = HistoryCache(work / 'horses')
     status = '完了'
-    write_status(work, 状態='実行中', 段階='レース一覧', 対象日=list(dates), 開始日時=now_text(), 形式=FORMAT)
+    surface = read_status(work).get('コース') or surface or '芝'  # 再開時は最初に決めたコースを使う
+    write_status(work, 状態='実行中', 段階='レース一覧', 対象日=list(dates), 開始日時=now_text(), 形式=FORMAT, コース=surface)
     try:
         with POLICY.budget(cap):
             targets = []
             for date in dates:
                 path = work / f'list_{date}.csv'
                 if not path.exists():
-                    race_ids_for(fetch_text(LIST_URL + date)).assign(日付=f'{date[:4]}-{date[4:6]}-{date[6:]}').to_csv(
+                    race_ids_for(fetch_text(LIST_URL + date), surface).assign(日付=f'{date[:4]}-{date[4:6]}-{date[6:]}').to_csv(
                         path, index=False, encoding='utf-8-sig')
                 targets.append(pd.read_csv(path, dtype={'レースID': str}))
             targets = pd.concat(targets, ignore_index=True) if targets else pd.DataFrame(columns=['レースID', '日付'])
@@ -214,11 +215,12 @@ def is_running(work):
 _LOCK = threading.Lock()
 
 
-def start_background(dates, work):
+def start_background(dates, work, surface='芝'):
     with _LOCK:
         if is_running(work):
             return False
-        threading.Thread(target=run, args=(list(dates), work), daemon=True, name=_thread_name(work)).start()
+        threading.Thread(target=run, args=(list(dates), work), kwargs={'surface': surface}, daemon=True,
+                         name=_thread_name(work)).start()
     return True
 
 
@@ -227,12 +229,13 @@ def render_backtest_collector():
     import streamlit as st
     from keiba_fetch_policy import POLICY, format_time
     with st.expander('過去レースの検証データ収集（研究用）', expanded=False):
-        st.caption('指定日のJRA芝レースについて、結果ページの全出走馬と各馬の戦績、対象レースの公表ペースを集めます。'
+        st.caption('指定日のJRA芝（またはダート）レースについて、結果ページの全出走馬と各馬の戦績、対象レースの公表ペースを集めます。'
                    '取得は共通ゲート（取得先ごと1件ずつ・最小間隔・拒否が続けば停止）を通し、サーバー上で進みます。'
                    'サーバーの再起動で保存データは消えるので、終わったらZIPを保存してください。')
         text = st.text_area('対象日（YYYYMMDD、カンマ区切り）', key='backtest_dates_v51', height=80)
         dates = [d for d in re.findall(r'20\d{6}', text)]
         name = st.text_input('作業名（英数字）', value='autumn2026', key='backtest_name_v51')
+        surface = {'芝': '芝', 'ダート': 'ダ'}[st.radio('コース', ['芝', 'ダート'], horizontal=True, key='backtest_surface_v77')]
         work = ROOT / re.sub(r'[^A-Za-z0-9_-]', '', name or 'default')
         running = is_running(work)
         until = POLICY.cooldown_until()
@@ -241,7 +244,7 @@ def render_backtest_collector():
             st.warning(f'取得先の制限のため {format_time(until)} まで開始できません。')
         if st.button('収集を開始／続きから再開', disabled=running or bool(until) or not dates, key='backtest_start_v51',
                      width='stretch'):
-            st.success('開始しました。' if start_background(dates, work) else 'すでに実行中です。')
+            st.success('開始しました。' if start_background(dates, work, surface) else 'すでに実行中です。')
             running = True
         st.button('状況を更新', key='backtest_refresh_v51')
         if status:

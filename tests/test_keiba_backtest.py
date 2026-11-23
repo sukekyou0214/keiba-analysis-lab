@@ -45,6 +45,7 @@ class ParseTests(unittest.TestCase):
     def test_list_keeps_turf_flat_only(self):
         ids = bt.race_ids_for(LIST)
         self.assertEqual(list(ids['レースID']), ['202608040210', '202608040205'])
+        self.assertEqual(list(bt.race_ids_for(LIST, 'ダ')['レースID']), ['202608040209'])
 
 
 class RunTests(unittest.TestCase):
