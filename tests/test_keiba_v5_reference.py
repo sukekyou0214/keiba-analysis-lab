@@ -41,3 +41,11 @@ class V5NumberTests(unittest.TestCase):
             (Path(root) / 'entries').mkdir()
             pd.DataFrame({'馬ID': ['a', 'b', 'c'], '馬番': [7, 3, 5]}).to_csv(Path(root) / 'entries' / 'R1.csv', index=False)
             self.assertEqual(list(ref.reference_table(root, 'R1')['馬番']), [7, 3, 5])
+
+
+class V5PointsTests(unittest.TestCase):
+    def test_points_scaled_within_race_and_jockey_percent(self):
+        t = pd.DataFrame({'点数': [2.0, 0.0, 1.0], '判定': ['基準モデル', '基準モデル', '基準モデル']})
+        self.assertEqual(list(ref.points_label(t)), ['100.0', '0.0', '50.0'])
+        j = pd.DataFrame({'点数': [0.385, 0.30], '判定': ['騎手点（新馬戦）', '騎手点（騎手名を対応できず全体の率）']})
+        self.assertEqual(list(ref.points_label(j)), ['38.5%', '30.0%'])
