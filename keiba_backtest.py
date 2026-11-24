@@ -130,7 +130,7 @@ def read_status(work):
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
 
 
-def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, pace_loader=None, surface=None):
+def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, pace_loader=None, surface=None, venues=None):
     """収集を進める（未取得分のみ）。止まっても保存済みから再開できる。戻り値は状態の文字列。"""
     from keiba_fetch_policy import POLICY, PolicyStop, format_time
     from keiba_weekend_batch import HistoryCache, Stopped, LIST_URL, fetch_text as default_fetch
@@ -145,7 +145,19 @@ def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, 
     cache = HistoryCache(work / 'horses')
     status = '完了'
     surface = read_status(work).get('コース') or surface or '芝'  # 再開時は最初に決めたコースを使う
-    write_status(work, 状態='実行中', 段階='レース一覧', 対象日=list(dates), 開始日時=now_text(), 形式=FORMAT, コース=surface)
+    venues = read_status(work).get('地方') or venues  # 地方（例：['浦和','大井']）。再開時は最初の指定を使う
+    write_status(work, 状態='実行中', 段階='レース一覧', 対象日=list(dates), 開始日時=now_text(), 形式=FORMAT, コース=surface,
+                 地方=venues or None)
+    result_url = RESULT_URL
+    if venues:
+        from keiba_nar import NAR_LIST_URL, NAR_RESULT_URL, venue_races
+        LIST_URL, result_url = NAR_LIST_URL, NAR_RESULT_URL
+
+        def race_ids_for(html, _surface, _v=tuple(venues)):  # noqa: F811 - 地方：指定した競馬場の全レース（ダート）
+            found = [venue_races(html, v).assign(競馬場=v) for v in _v]
+            return pd.concat(found, ignore_index=True)[['レースID', '一覧表記', '競馬場']] if found else pd.DataFrame(columns=['レースID', '一覧表記'])
+    else:
+        race_ids_for = globals()['race_ids_for']
     try:
         with POLICY.budget(cap):
             targets = []
@@ -162,11 +174,13 @@ def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, 
                 if (work / 'races' / f'{rid}.json').exists() or (work / 'races' / f'{rid}.error').exists():
                     continue
                 try:
-                    info, runners = parse_result_page(fetch_text(RESULT_URL + rid), rid)
+                    info, runners = parse_result_page(fetch_text(result_url + rid), rid)
                 except ValueError as exc:
                     (work / 'races' / f'{rid}.error').write_text(str(exc)[:300], encoding='utf-8')
                     continue
                 info.update(開催日=row.日付, 一覧表記=row.一覧表記)
+                if venues:
+                    info.update(取得元=result_url + rid, 地方=True, 競馬場=getattr(row, '競馬場', ''), コース='ダ')
                 runners.to_csv(work / 'races' / f'{rid}.csv', index=False, encoding='utf-8-sig')
                 (work / 'races' / f'{rid}.json').write_text(json.dumps(info, ensure_ascii=False, default=str), encoding='utf-8')
             infos = [json.loads(p.read_text(encoding='utf-8')) for p in sorted((work / 'races').glob('*.json'))]
@@ -201,7 +215,7 @@ def run(dates, work, cap=RUN_REQUEST_CAP, fetch_text=None, history_loader=None, 
             paces = pd.read_csv(pace_path, dtype=str) if pace_path.exists() else pd.DataFrame(columns=['レースID', '公表ペース', '状態', '理由'])
             done = set(paces['レースID'])
             write_status(work, 段階='対象レースの公表ペース')
-            for info in infos:
+            for info in ([] if venues else infos):  # 公表ペースは JRA だけ
                 rid = info['レースID']
                 if rid in done:
                     continue
@@ -247,11 +261,11 @@ def is_running(work):
 _LOCK = threading.Lock()
 
 
-def start_background(dates, work, surface='芝'):
+def start_background(dates, work, surface='芝', venues=None):
     with _LOCK:
         if is_running(work):
             return False
-        threading.Thread(target=run, args=(list(dates), work), kwargs={'surface': surface}, daemon=True,
+        threading.Thread(target=run, args=(list(dates), work), kwargs={'surface': surface, 'venues': venues}, daemon=True,
                          name=_thread_name(work)).start()
     return True
 
@@ -267,7 +281,11 @@ def render_backtest_collector():
         text = st.text_area('対象日（YYYYMMDD、カンマ区切り）', key='backtest_dates_v51', height=80)
         dates = [d for d in re.findall(r'20\d{6}', text)]
         name = st.text_input('作業名（英数字）', value='autumn2026', key='backtest_name_v51')
-        surface = {'芝': '芝', 'ダート': 'ダ'}[st.radio('コース', ['芝', 'ダート'], horizontal=True, key='backtest_surface_v77')]
+        kind = st.radio('コース', ['芝', 'ダート', '地方'], horizontal=True, key='backtest_surface_v77')
+        surface = {'芝': '芝', 'ダート': 'ダ', '地方': 'ダ'}[kind]
+        venues = None
+        if kind == '地方':
+            venues = [v for v in re.split(r'[,、\s]+', st.text_input('競馬場（カンマ区切り）', value='浦和', key='backtest_venues_v83')) if v]
         work = ROOT / re.sub(r'[^A-Za-z0-9_-]', '', name or 'default')
         running = is_running(work)
         until = POLICY.cooldown_until()
@@ -276,7 +294,7 @@ def render_backtest_collector():
             st.warning(f'取得先の制限のため {format_time(until)} まで開始できません。')
         if st.button('収集を開始／続きから再開', disabled=running or bool(until) or not dates, key='backtest_start_v51',
                      width='stretch'):
-            st.success('開始しました。' if start_background(dates, work, surface) else 'すでに実行中です。')
+            st.success('開始しました。' if start_background(dates, work, surface, venues) else 'すでに実行中です。')
             running = True
         st.button('状況を更新', key='backtest_refresh_v51')
         if status:

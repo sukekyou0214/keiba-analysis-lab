@@ -100,3 +100,37 @@ class RunTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+NAR_LIST = ('<dl class="RaceList_DataList"><dt>浦和競馬場TOP 8回 浦和 2日目</dt>'
+            '<li><a href="../race/result.html?race_id=202642112509">9R C2 16:35 ダ1500m 3頭</a></li></dl>'
+            '<dl class="RaceList_DataList"><dt>大井競馬場TOP</dt>'
+            '<li><a href="../race/result.html?race_id=202644112501">1R C3 15:00 ダ1200m 3頭</a></li></dl>')
+
+
+class NarRunTests(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+
+    def fetch(self, url):
+        self.calls.append(url)
+        if 'race_list_sub' in url:
+            self.assertIn('nar.netkeiba.com', url)
+            return NAR_LIST
+        self.assertIn('nar.netkeiba.com/race/result.html?race_id=202642112509', url)
+        return result_page('C2', '8回 浦和 2日目')
+
+    def history(self, hid, name):
+        return pd.DataFrame([{'日付': '2026/09/01', '馬名': name, '馬ID': hid}])
+
+    def pace(self, rid):
+        raise AssertionError('地方では公表ペースを取らない')
+
+    def test_nar_collects_only_given_venue_without_pace(self):
+        with tempfile.TemporaryDirectory() as root:
+            status = bt.run(['20261125'], Path(root) / 'w', fetch_text=self.fetch, history_loader=self.history,
+                            pace_loader=self.pace, venues=['浦和'])
+            self.assertEqual(status, '完了')
+            info = json.loads((Path(root) / 'w' / 'races' / '202642112509.json').read_text(encoding='utf-8'))
+            self.assertEqual((info['競馬場'], info['地方'], info['開催日']), ('浦和', True, '2026-11-25'))
+            self.assertFalse((Path(root) / 'w' / 'races' / '202644112501.json').exists())
