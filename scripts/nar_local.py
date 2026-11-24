@@ -18,6 +18,7 @@ import pandas as pd  # noqa: E402
 
 FEATURES = ['着順点平均', '前走着順点', '着差平均', '近走人気', '先行度', '同場3着内率', '距離差', '休養日数', 'log頭数']
 V2_EXTRA = ['内枠点', '騎手3着内率']
+V3_EXTRA = ['地方格平均', '格差', '前走格']
 JOCKEY_K = 20.0
 TRAIN_END = '2026-07-31'
 TEST = ('2026-08-01', '2026-11-23')
@@ -43,10 +44,12 @@ def prepare(hist):
     h['人気点'] = 1 - (h['人気'] - 1) / n
     h['先行'] = [first_corner(t, f) for t, f in zip(h['通過_原文'], h['頭数'])]
     h['3着内'] = h['着順'].le(3).astype(float)
+    from keiba_nar_class import nar_class_level
+    h['格'] = np.where(h['JRA'].isin([True, 'True']), np.nan, h['レース名'].map(nar_class_level))
     return h.drop_duplicates(['馬ID', 'レースID']).sort_values(['馬ID', '日付'])
 
 
-def features_for(prior, venue, distance, day, field, number=None, jockey_rate=np.nan):
+def features_for(prior, venue, distance, day, field, number=None, jockey_rate=np.nan, cls=np.nan):
     """prior：その馬の、対象より前の走（日付順）。"""
     last = prior.tail(5)
     if last.empty:
@@ -58,7 +61,9 @@ def features_for(prior, venue, distance, day, field, number=None, jockey_rate=np
             '同場3着内率': (same['3着内'].sum() + SHRINK * base) / (len(same) + SHRINK),
             '距離差': abs(distance - last['距離'].mean()) if pd.notna(distance) else np.nan,
             '休養日数': (day - last['日付'].iloc[-1]).days, 'log頭数': np.log(field) if field and field > 0 else np.nan,
-            '内枠点': 1 - (number - 1) / (field - 1) if number and field and field > 1 and number <= field else np.nan, '騎手3着内率': jockey_rate}
+            '内枠点': 1 - (number - 1) / (field - 1) if number and field and field > 1 and number <= field else np.nan, '騎手3着内率': jockey_rate,
+            '地方格平均': local_cls.mean() if len(local_cls := prior.loc[~prior['JRA'].isin([True, 'True'])].tail(5)['格'].dropna()) else np.nan,
+            '前走格': last['格'].iloc[-1], '格差': np.nan if pd.isna(cls) else cls - (local_cls.mean() if len(local_cls) else np.nan)}
 
 
 def jockey_table(h):
@@ -90,7 +95,7 @@ def training_rows(h):
             if r['JRA'] in (True, 'True'):
                 continue  # 学習の対象は地方の走だけ
             jr = rate.get((r['騎手'], r['日付']), base) if pd.notna(r.get('騎手')) else np.nan
-            f = features_for(g.iloc[:i], r['競馬場'], r['距離'], r['日付'], r['頭数'], pd.to_numeric(r.get('馬番'), errors='coerce'), jr)
+            f = features_for(g.iloc[:i], r['競馬場'], r['距離'], r['日付'], r['頭数'], pd.to_numeric(r.get('馬番'), errors='coerce'), jr, r['格'])
             if f:
                 rows.append({'馬ID': hid, 'レースID': r['レースID'], '日付': r['日付'], '3着内': r['3着内'], **f})
     return pd.DataFrame(rows)
@@ -121,6 +126,27 @@ def auc(score, y):
     pos = y == 1
     n1, n0 = pos.sum(), (~pos).sum()
     return float((ranks[pos].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)) if n1 and n0 else np.nan
+
+
+def load_normalized(works):
+    """戦績（正規化しただけ。芝・取消も含む。条件付きロジットのモデル用）。"""
+    from keiba_model_data import normalize_history
+    raws = [pd.read_csv(f, dtype=str) for w in works for f in (Path(w) / 'horses').glob('horse_*.csv') if f.name != 'horse_log.csv']
+    return normalize_history(pd.concat(raws, ignore_index=True))
+
+
+MODELS = Path(__file__).resolve().parents[1] / 'models'
+
+
+def model_scores(path, ent, norm, info, rid, distance, day, extras):
+    """採用済みの条件付きロジットのモデル（nar_backtest_test で作ったもの）で、出走馬の点を出す。"""
+    import keiba_model_v1 as v1
+    p, beta, data = v1.load_artifact(path)
+    race = {'レースID': rid, '開催日': day.strftime('%Y-%m-%d'), '競馬場': info.get('競馬場', ''), '距離': distance,
+            'クラス': '不明', '馬場': None}
+    f = v1.build_features(ent, norm.loc[pd.to_datetime(norm['日付'], errors='coerce') < day], race, p)
+    f = f.merge(extras, on='馬ID', how='left')
+    return pd.Series(v1.design(f, p) @ beta, index=f['馬ID'].astype(str)), data
 
 
 def load_pool(works):
@@ -184,15 +210,22 @@ def main(argv=None):
         log['AUC']['nar-local-v2'] = auc(v2s, y)
         log['AUC差（v2−v1）'] = dict(zip(('差', '下限', '上限'), boot_diff(v2s, v1s, y)))
         log['AUC差（v2−近走人気）'] = dict(zip(('差', '下限', '上限'), boot_diff(v2s, pop, y)))
-        if log['AUC差（v2−v1）']['下限'] > 0:
-            cols, name = FEATURES + V2_EXTRA, 'nar-local-v2'
-    used = log['AUC差（v2−近走人気）' if name == 'nar-local-v2' else 'AUC差（v1−近走人気）']
+        v3s = eval_auc(train, test, FEATURES + V3_EXTRA)
+        log['AUC']['nar-local-v3'] = auc(v3s, y)
+        log['AUC差（v3−v1）'] = dict(zip(('差', '下限', '上限'), boot_diff(v3s, v1s, y)))
+        log['AUC差（v3−近走人気）'] = dict(zip(('差', '下限', '上限'), boot_diff(v3s, pop, y)))
+        ok = [(log['AUC'][k], -i, k, c) for i, (k, c) in enumerate((('nar-local-v2', FEATURES + V2_EXTRA), ('nar-local-v3', FEATURES + V3_EXTRA)))
+              if log[f"AUC差（{k[-2:]}−v1）"]['下限'] > 0]
+        if ok:
+            _, _, name, cols = max(ok)
+    used = log[f'AUC差（{name[-2:]}−近走人気）']
     log['使う方式'] = name
     log['判定'] = '参考（地方の走で検証済み）' if used['下限'] > 0 else '根拠不足'
     allw = fit(standardize(rows, rows, cols), rows['3着内'].to_numpy(float))
     log['係数（全期間）'] = dict(zip(['切片'] + cols, map(float, allw)))
     daily, base = jockey_table(h)
     shorts = set(daily['騎手'].dropna())
+    norm = load_normalized(a.nar_work)
     tables, races = [], []
     for info_path in sorted(work.glob('info_*.json')):
         info = json.loads(info_path.read_text(encoding='utf-8'))
@@ -202,16 +235,32 @@ def main(argv=None):
         listed = str(info.get('一覧表記', ''))
         dist = re.search(r'ダ(\d{3,4})m', listed)
         distance = float(dist[1]) if dist else np.nan
+        from keiba_nar_class import nar_class_level
+        paren = re.findall(r'\(([^)]*)\)', listed + ' ' + str(info.get('レース名', '')))
+        race_cls = next((v for v in map(nar_class_level, paren + [listed]) if pd.notna(v)), np.nan)
         feats = []
         for _, e in ent.iterrows():
             prior = h.loc[h['馬ID'].eq(str(e['馬ID']))]
             jn = match_jockey(str(e.get('騎手', '')), shorts)
             jr = jockey_rate_at(daily, base, jn, day) if jn else np.nan
-            f = features_for(prior, info.get('競馬場', '浦和'), distance, day, len(ent), pd.to_numeric(e.get('馬番'), errors='coerce'), jr)
+            f = features_for(prior, info.get('競馬場', '浦和'), distance, day, len(ent), pd.to_numeric(e.get('馬番'), errors='coerce'), jr, race_cls)
             local_runs = int((~prior['JRA'].isin([True, 'True'])).sum())
-            feats.append({'馬ID': str(e['馬ID']), **(f or {c: np.nan for c in FEATURES + V2_EXTRA}), '戦績なし': f is None, '地方走数': local_runs})
+            feats.append({'馬ID': str(e['馬ID']), **(f or {c: np.nan for c in FEATURES + V2_EXTRA + V3_EXTRA}), '戦績なし': f is None, '地方走数': local_runs})
         f = pd.DataFrame(feats)
         s = np.c_[np.ones(len(f)), standardize(rows, f, cols)] @ allw
+        venue = info.get('競馬場', '浦和')
+        main_path = MODELS / ('nar_v1.json' if venue == '浦和' else f'nar_{venue}.json')
+        f['方式'] = name
+        if main_path.exists():
+            ms, art = model_scores(main_path, ent, norm, info, rid, distance, day, f.drop(columns=['地方点'], errors='ignore'))
+            if art.get('採用'):
+                s = ms.reindex(f['馬ID']).to_numpy()
+                f['方式'] = art.get('版', main_path.stem)
+        if venue == '浦和' and (MODELS / 'nar_v1s.json').exists():
+            vs, _ = model_scores(MODELS / 'nar_v1s.json', ent, norm, info, rid, distance, day, f)
+            vs = vs.reindex(f['馬ID']).to_numpy()
+            f['nar-v1S点'] = ((vs - vs.min()) / (vs.max() - vs.min()) * 100).round(1) if vs.max() > vs.min() else 100.0
+            f['nar-v1S順位'] = pd.Series(vs).rank(ascending=False, method='first').astype(int).to_numpy()
         lo_, hi_ = s.min(), s.max()
         f['地方点'] = ((s - lo_) / (hi_ - lo_) * 100).round(1) if hi_ > lo_ else 100.0
         f = f.merge(ent[['馬ID', '馬番', '馬名', '騎手']], on='馬ID')
