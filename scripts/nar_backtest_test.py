@@ -143,7 +143,8 @@ def popularity_rank(nd, ids, p):
     out = []
     for rid in ids:
         f = nd.features(rid, p)
-        s = pd.to_numeric(f['近走人気'], errors='coerce').fillna(-1)
+        # 出走馬の誰にも過去の人気がないレースでは列ができない → 全頭「なし」
+        s = pd.to_numeric(f.get('近走人気', pd.Series(np.nan, index=f.index)), errors='coerce').fillna(-1)
         order = f.assign(_s=s).sort_values(['_s', '馬ID'], ascending=[False, True]).index
         r = f[['レースID', '馬ID']].copy()
         r['順位'] = pd.Series(range(1, len(f) + 1), index=order).reindex(f.index)
