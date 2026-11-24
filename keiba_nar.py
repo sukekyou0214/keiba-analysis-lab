@@ -34,6 +34,26 @@ def find_race(list_html, keyword):
     return pd.DataFrame(hits).drop_duplicates('レースID') if hits else pd.DataFrame(columns=['レースID', '一覧表記'])
 
 
+def venue_races(list_html, venue):
+    """一覧のHTMLから、その競馬場の全レース（レースID・一覧表記・発走）を返す。"""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(list_html, 'html.parser')
+    hits = []
+    for box in soup.select('dl.RaceList_DataList'):
+        head = ' '.join(box.get_text(' ', strip=True).split())[:40]
+        if f'{venue}競馬場' not in head:
+            continue
+        for item in box.select('li'):
+            link = item.select_one('a[href*="race_id="]')
+            rid = re.search(r'race_id=(\d{12})', link.get('href', '')) if link else None
+            if not rid:
+                continue
+            whole = ' '.join(item.get_text(' ', strip=True).split())
+            time = re.search(r'(\d{1,2}:\d{2})', whole)
+            hits.append({'レースID': rid[1], '一覧表記': whole, '発走': time[1] if time else ''})
+    return pd.DataFrame(hits).drop_duplicates('レースID') if hits else pd.DataFrame(columns=['レースID', '一覧表記', '発走'])
+
+
 def parse_entries(html, race_id):
     """出走表（地方）を読む。JRA と同じ表の作りなら parse_entry_page を使う。"""
     from bs4 import BeautifulSoup
@@ -58,6 +78,41 @@ def parse_entries(html, race_id):
         return {'レースID': race_id, 'レース名': title.get_text(strip=True) if title else ''}, entries
 
 
+def run_venue(work, date, venue, list_html, fetch_text):
+    """その競馬場の、まだ発走していない全レース：出走表を先に全部、そのあと発走の早い順に各馬の戦績。"""
+    from datetime import datetime, timedelta, timezone
+    from keiba_weekend_batch import HistoryCache, fetch_histories
+    races = venue_races(list_html, venue)
+    now = datetime.now(timezone(timedelta(hours=9)))
+    today = now.strftime('%Y%m%d')
+    if date == today:
+        races = races.loc[races['発走'].map(lambda t: not t or t.zfill(5) > now.strftime('%H:%M'))]
+    if races.empty:
+        write_status(work, 結果=f'{date} {venue} の対象レースがありません')
+        return
+    races = races.sort_values('発走')
+    write_status(work, 段階=f'出走表 0/{len(races)}', 対象レース=len(races))
+    loaded = []
+    for i, row in enumerate(races.itertuples(), 1):
+        path = work / f'entry_{row.レースID}.html'
+        if not path.exists():
+            path.write_text(fetch_text(NAR_ENTRY_URL + row.レースID), encoding='utf-8')
+        info, entries = parse_entries(path.read_text(encoding='utf-8'), row.レースID)
+        if entries.empty:
+            continue
+        entries.to_csv(work / f'entries_{row.レースID}.csv', index=False, encoding='utf-8-sig')
+        (work / f'info_{row.レースID}.json').write_text(json.dumps({**info, '一覧表記': row.一覧表記, '発走': row.発走, '競馬場': venue,
+                                                                  '開催日': f'{date[:4]}-{date[4:6]}-{date[6:]}'},
+                                                                 ensure_ascii=False, default=str), encoding='utf-8')
+        loaded.append((row.レースID, info, entries))
+        write_status(work, 段階=f'出走表 {i}/{len(races)}')
+    cache = HistoryCache(work / 'horses')
+    for i, (rid, info, entries) in enumerate(loaded, 1):
+        write_status(work, 段階=f'戦績 {i}/{len(loaded)}（{rid}）')
+        fetch_histories(entries.loc[entries['状態'].eq('出走予定')], cache,
+                        pd.DataFrame({'レースID': [rid], 'レース名': [info.get('レース名', '')]}))
+
+
 def write_status(work, **fields):
     from keiba_backtest import now_text
     path = Path(work) / 'status.json'
@@ -79,10 +134,14 @@ def run(date, keyword, work, fetch_text=None):
     work.mkdir(parents=True, exist_ok=True)
     write_status(work, 状態='実行中', 段階='レース一覧', 対象日=date, キーワード=keyword)
     try:
-        with POLICY.budget(300):
+        with POLICY.budget(1500):
             list_path = work / f'list_{date}.html'
             if not list_path.exists():
                 list_path.write_text(fetch_text(NAR_LIST_URL + date), encoding='utf-8')
+            if keyword.startswith('場:'):
+                run_venue(work, date, keyword[2:], list_path.read_text(encoding='utf-8'), fetch_text)
+                write_status(work, 状態='完了', 段階='終了', 結果='完了')
+                return
             found = find_race(list_path.read_text(encoding='utf-8'), keyword)
             if found.empty:
                 write_status(work, 状態='停止', 段階='終了', 結果=f'{date} の地方の一覧に「{keyword}」が見つかりません')
@@ -134,7 +193,7 @@ def render_nar_single():
         st.caption('地方競馬の1レース（浦和記念など）の出走表と各馬の戦績を、共通ゲートを通して集めます。予想はここでは作りません。'
                    'サーバーの再起動で消えるので、終わったらZIPを保存してください。')
         date = st.text_input('開催日（YYYYMMDD）', value='20261125', key='nar_date_v78')
-        keyword = st.text_input('レース名（一部）', value='浦和記念', key='nar_keyword_v78')
+        keyword = st.text_input('レース名（一部）。競馬場の全レースは「場:浦和」', value='浦和記念', key='nar_keyword_v78')
         work = ROOT / re.sub(r'\D', '', date)
         running = is_running(work)
         until = POLICY.cooldown_until()
