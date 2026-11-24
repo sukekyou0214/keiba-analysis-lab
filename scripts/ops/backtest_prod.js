@@ -1,5 +1,5 @@
 // 本番サイトの「過去レースの検証データ収集」を操作する運用補助（取得は本番アプリの共通ゲートを通る）。
-// 使い方: BT_WORK=名前 BT_DATES=YYYYMMDD,... [BT_SURFACE=ダート] node scripts/ops/backtest_prod.js start|status|zip <保存先>
+// 使い方: BT_WORK=名前 BT_DATES=YYYYMMDD,... [BT_SURFACE=ダート|地方 BT_VENUE=浦和,大井] node scripts/ops/backtest_prod.js start|status|zip <保存先>
 const { chromium } = require('playwright');
 const action = process.argv[2] || 'status';
 (async () => {
@@ -16,6 +16,7 @@ const action = process.argv[2] || 'status';
   const area = box.getByLabel('対象日（YYYYMMDD、カンマ区切り）'); await area.fill(process.env.BT_DATES || ''); await area.press('Tab'); await p.waitForTimeout(3000);
   if (process.env.BT_WORK) { const nm = box.getByLabel('作業名（英数字）'); await nm.fill(process.env.BT_WORK); await nm.press('Tab'); await p.waitForTimeout(3000); }
   if (process.env.BT_SURFACE) { await box.locator('[data-testid="stRadio"] label', { hasText: process.env.BT_SURFACE }).first().click(); await p.waitForTimeout(3000); }
+  if (process.env.BT_VENUE) { const v = box.getByLabel('競馬場（カンマ区切り）'); await v.fill(process.env.BT_VENUE); await v.press('Tab'); await p.waitForTimeout(3000); }
   if (action === 'start') { const btn = box.getByRole('button', { name: /収集を開始/ }); console.log('disabled', await btn.isDisabled()); if (!(await btn.isDisabled())) { await btn.click(); await p.waitForTimeout(8000); } }
   if (action === 'zip') { const dir = process.argv[3]; await box.getByRole('button', { name: 'ZIPを作成' }).click(); await p.waitForTimeout(20000);
     const dl = box.locator('[data-testid="stDownloadButton"] button', { hasText: '.zip' }); const name = (await dl.first().innerText()).trim();
