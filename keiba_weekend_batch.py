@@ -742,6 +742,11 @@ def collect_and_compare(work, out):
         stamp = work.parent.name
         per_race.to_csv(out / f'{stamp}_結果照合_レース別.csv', index=False, encoding='utf-8-sig')
         summary.to_csv(out / f'{stamp}_結果照合_モデル別.csv', index=False, encoding='utf-8-sig')
+        pays = []
+        for f in sorted((work / 'records' / 'results').glob('*_払戻.json')):
+            pays += [{'レースID': f.name.split('_')[0], **r} for r in json.loads(f.read_text(encoding='utf-8'))]
+        if pays:
+            pd.DataFrame(pays).to_csv(out / f'{stamp}_払戻.csv', index=False, encoding='utf-8-sig')
         write_status(work, 照合=f'完了：結果{len(saved)}件を新たに保存、取得できず{len(errors)}件')
     except Exception as exc:  # noqa: BLE001
         write_status(work, 照合=f'停止：{type(exc).__name__}: {str(exc)[:150]}')

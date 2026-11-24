@@ -69,7 +69,39 @@ def parse_result_page(html, race_id):
     if runners.empty or runners['馬ID'].duplicated().any():
         raise ValueError(f'{race_id}: 出走馬の件数または重複に問題があります')
     info['頭数'] = len(runners)
+    info['払戻'] = parse_payouts(html)
     return info, runners
+
+
+BET_TYPES = ('単勝', '複勝', '枠連', '馬連', 'ワイド', '馬単', '三連複', '三連単')
+BET_SIZE = {'単勝': 1, '複勝': 1, '枠連': 2, '馬連': 2, 'ワイド': 2, '馬単': 2, '三連複': 3, '三連単': 3}
+
+
+def parse_payouts(html):
+    """結果ページの払戻表を読む。[{券種, 組番, 払戻}]（払戻は100円あたりの円）。読めなければ空のリスト。
+    同じページの中身なので、取得の回数は増えない。原文も残す（形が変わったときに確かめるため）。"""
+    soup = BeautifulSoup(html, 'html.parser')
+    out = []
+    for tr in soup.select('table.Payout_Detail_Table tr, .Result_Pay_Back table tr'):
+        kind = re.sub(r'\s+', '', _text(tr.select_one('th')))
+        kind = {'3連複': '三連複', '3連単': '三連単'}.get(kind, kind)
+        if kind not in BET_TYPES:
+            continue
+        nums = re.findall(r'\d+', _text(tr.select_one('td.Result')))
+        pays = [int(x.replace(',', '')) for x in re.findall(r'([\d,]+)\s*円', _text(tr.select_one('td.Payout')))]
+        k = BET_SIZE[kind]
+        combos = ['-'.join(nums[i:i + k]) for i in range(0, len(nums) - len(nums) % k, k)]
+        if kind in ('単勝', '複勝') or len(combos) != len(pays):
+            combos = combos[:len(pays)] if len(combos) >= len(pays) else combos + [''] * (len(pays) - len(combos))
+        for c, y in zip(combos, pays):
+            out.append({'券種': kind, '組番': c, '払戻': y, '原文': _text(tr)[:120]})
+    seen, unique = set(), []
+    for row in out:
+        key = (row['券種'], row['組番'], row['払戻'])
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    return unique
 
 
 def race_ids_for(list_html, surface='芝'):

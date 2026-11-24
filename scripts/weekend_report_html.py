@@ -160,6 +160,38 @@ def race_article(race, horses, pace, work, main='old'):
     return '\n'.join(parts)
 
 
+def box_section(races, horses, work_of):
+    """ボックス向き上位3R（各日）。models/box.json で採用された選び方があるときだけ出す（00 の 2026-11-24 追記）。"""
+    import keiba_box as kb
+    path = Path(__file__).resolve().parents[1] / 'models' / 'box.json'
+    if not path.exists():
+        return []
+    spec = json.loads(path.read_text(encoding='utf-8'))
+    if spec.get('判定') != '採用':
+        return []
+    rows = []
+    for _, r in races.iterrows():
+        t = shadow_top(work_of[r['レースID']], r['レースID'], 'shadow-v5-', 99)
+        if t is None or len(t) < 5 or str(t['判定'].iloc[0]).startswith('騎手点'):
+            continue  # 新馬戦（騎手点）は対象外
+        rows.append({'日付': r['日付'], 'レースID': r['レースID'], **kb.race_values(t), '_t': t, '_r': r})
+    if not rows:
+        return []
+    chosen = kb.top3(pd.DataFrame(rows), spec['選択']).sort_values(['日付', 'ボックス向き順'])
+    out = ['<h2>ボックス向き上位3R（各日・検証中）</h2>',
+           f"<p class='muted'>v5の上位5頭で1〜3着が決まりやすい順（{e(spec['説明'])}）。"
+           f"過去の確認（2026年春）：各日上位3Rでの三連複5頭ボックス的中 {spec['春の的中率']*100:.0f}%（全レース {spec['春の全レース']*100:.0f}%）。"
+           '的中の保証ではなく、回収率は未検証です。</p>']
+    for _, x in chosen.iterrows():
+        r, t = x['_r'], x['_t']
+        d = pd.Timestamp(r['日付'])
+        hh = horses.loc[horses['レースID'].eq(r['レースID'])].drop_duplicates('馬名').set_index('馬名')['馬番']
+        five = ' ／ '.join(f"{num(hh.get(h['馬名']))} {e(h['馬名'])}" for _, h in t.head(5).iterrows())
+        out.append(f"<article><h3>{d.month}-{d.day} {x['ボックス向き順']}. {e(r['競馬場'])}{num(r['R'])}R {e(r['レース名'])} "
+                   f"{e(r['発走'])}（{int(x['頭数'])}頭）</h3><p>v5上位5頭：{five}</p></article>")
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--out-dir', nargs='+', required=True, help='週末出力フォルダ（複数可：土日＋月曜など）')
@@ -217,6 +249,7 @@ def main(argv=None):
         body.append(f"<article><h3>{i}. {d.month}-{d.day} {e(r['競馬場'])}{num(r['R'])}R {e(r['レース名'])} {e(r['発走'])}</h3>"
                     f"<p class='key'>{grade(r)}</p><p>{lines}</p><p class='muted'>想定展開：{e(pace.get(r['レースID'], '—'))}。"
                     f"{e(r.get('比較対象', ''))}比較（相手・格差未補正）。</p></article>")
+    body += box_section(races, horses, work_of)
     body.append('<nav>' + ''.join(f'<a href="#day{d.replace("-", "")}">{WEEK[pd.Timestamp(d).weekday()]}曜の一覧</a>' for d in days) + '</nav>')
     articles = []
     for d in days:

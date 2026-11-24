@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -206,6 +207,8 @@ def collect_results(work, race_ids, fetch_text):
         runners['状態'] = parsed.map(lambda x: x[0])
         runners['着順'] = parsed.map(lambda x: x[1])
         save_result(store, rid, runners, confirmed_at=_now(), source=info['取得元'])
+        if info.get('払戻'):
+            store.write_new(f'results/{rid}_払戻.json', json.dumps(info['払戻'], ensure_ascii=False).encode('utf-8'))
         saved.append(rid)
     return saved, errors
 
