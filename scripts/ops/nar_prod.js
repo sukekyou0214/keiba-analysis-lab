@@ -14,7 +14,7 @@ const action = process.argv[2] || 'status';
   await F().locator('[data-testid="stExpander"] summary', { hasText: '地方の1レース取得' }).first().click(); await p.waitForTimeout(3000);
   const box = F().locator('[data-testid="stExpander"]', { hasText: '地方の1レース取得' });
   if (process.env.NAR_DATE) { const d = box.getByLabel('開催日（YYYYMMDD）'); await d.fill(process.env.NAR_DATE); await d.press('Tab'); await p.waitForTimeout(3000); }
-  if (process.env.NAR_KEY) { const k = box.getByLabel('レース名（一部）'); await k.fill(process.env.NAR_KEY); await k.press('Tab'); await p.waitForTimeout(3000); }
+  if (process.env.NAR_KEY) { const k = box.getByLabel(/レース名（一部）/); await k.fill(process.env.NAR_KEY); await k.press('Tab'); await p.waitForTimeout(3000); }
   if (action === 'start') { const btn = box.getByRole('button', { name: '地方の1レースを取得' }); console.log('disabled', await btn.isDisabled()); if (!(await btn.isDisabled())) { await btn.click(); await p.waitForTimeout(8000); } }
   if (action === 'zip') { const dir = process.argv[3]; await box.getByRole('button', { name: 'ZIPを作成' }).click(); await p.waitForTimeout(15000);
     const dl = box.locator('[data-testid="stDownloadButton"] button', { hasText: '.zip' }); const name = (await dl.first().innerText()).trim();
