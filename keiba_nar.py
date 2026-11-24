@@ -17,6 +17,7 @@ import pandas as pd
 ROOT = Path('/tmp/keiba_analysis_v141/nar')
 NAR_LIST_URL = 'https://nar.netkeiba.com/top/race_list_sub.html?kaisai_date='
 NAR_ENTRY_URL = 'https://nar.netkeiba.com/race/shutuba.html?race_id='
+NAR_RESULT_URL = 'https://nar.netkeiba.com/race/result.html?race_id='
 
 
 def find_race(list_html, keyword):
@@ -113,6 +114,31 @@ def run_venue(work, date, venue, list_html, fetch_text):
                         pd.DataFrame({'レースID': [rid], 'レース名': [info.get('レース名', '')]}))
 
 
+def run_results(work, fetch_text):
+    """取得済みの各レース（info_*.json）の結果ページ：着順と払戻を保存（1レース1回）。"""
+    from keiba_backtest import parse_result_page
+    ids = sorted(json.loads(f.read_text(encoding='utf-8'))['レースID'] for f in work.glob('info_*.json'))
+    (work / 'results').mkdir(exist_ok=True)
+    done = 0
+    for i, rid in enumerate(ids, 1):
+        write_status(work, 段階=f'結果 {i}/{len(ids)}')
+        path = work / 'results' / f'{rid}.csv'
+        if path.exists():
+            done += 1
+            continue
+        html = fetch_text(NAR_RESULT_URL + rid)
+        try:
+            info, runners = parse_result_page(html, rid)
+        except ValueError as exc:
+            (work / 'results' / f'{rid}.error').write_text(str(exc)[:300], encoding='utf-8')
+            (work / 'results' / f'{rid}.html').write_text(html, encoding='utf-8')
+            continue
+        runners.to_csv(path, index=False, encoding='utf-8-sig')
+        (work / 'results' / f'{rid}_払戻.json').write_text(json.dumps(info.get('払戻', []), ensure_ascii=False), encoding='utf-8')
+        done += 1
+    write_status(work, 結果件数=done)
+
+
 def write_status(work, **fields):
     from keiba_backtest import now_text
     path = Path(work) / 'status.json'
@@ -138,6 +164,10 @@ def run(date, keyword, work, fetch_text=None):
             list_path = work / f'list_{date}.html'
             if not list_path.exists():
                 list_path.write_text(fetch_text(NAR_LIST_URL + date), encoding='utf-8')
+            if keyword.startswith('結果'):
+                run_results(work, fetch_text)
+                write_status(work, 状態='完了', 段階='終了', 結果='結果取得 完了')
+                return
             if keyword.startswith('場:'):
                 run_venue(work, date, keyword[2:], list_path.read_text(encoding='utf-8'), fetch_text)
                 write_status(work, 状態='完了', 段階='終了', 結果='完了')
@@ -193,7 +223,7 @@ def render_nar_single():
         st.caption('地方競馬の1レース（浦和記念など）の出走表と各馬の戦績を、共通ゲートを通して集めます。予想はここでは作りません。'
                    'サーバーの再起動で消えるので、終わったらZIPを保存してください。')
         date = st.text_input('開催日（YYYYMMDD）', value='20261125', key='nar_date_v78')
-        keyword = st.text_input('レース名（一部）。競馬場の全レースは「場:浦和」', value='浦和記念', key='nar_keyword_v78')
+        keyword = st.text_input('レース名（一部）。競馬場の全レースは「場:浦和」、取得済みレースの結果は「結果」', value='浦和記念', key='nar_keyword_v78')
         work = ROOT / re.sub(r'\D', '', date)
         running = is_running(work)
         until = POLICY.cooldown_until()
