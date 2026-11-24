@@ -177,7 +177,7 @@ def box_section(races, horses, work_of):
         rows.append({'日付': r['日付'], 'レースID': r['レースID'], **kb.race_values(t), '_t': t, '_r': r})
     if not rows:
         return []
-    chosen = kb.top3(pd.DataFrame(rows), spec['選択'])
+    chosen = kb.top3(pd.DataFrame(rows), spec['選択']).sort_values(['日付', 'ボックス向き順'])
     out = ['<h2>ボックス向き上位3R（各日・検証中）</h2>',
            f"<p class='muted'>v5の上位5頭で1〜3着が決まりやすい順（{e(spec['説明'])}）。"
            f"過去の確認（2026年春）：各日上位3Rでの三連複5頭ボックス的中 {spec['春の的中率']*100:.0f}%（全レース {spec['春の全レース']*100:.0f}%）。"
