@@ -128,6 +128,27 @@ def auc(score, y):
     return float((ranks[pos].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)) if n1 and n0 else np.nan
 
 
+def load_normalized(works):
+    """戦績（正規化しただけ。芝・取消も含む。条件付きロジットのモデル用）。"""
+    from keiba_model_data import normalize_history
+    raws = [pd.read_csv(f, dtype=str) for w in works for f in (Path(w) / 'horses').glob('horse_*.csv') if f.name != 'horse_log.csv']
+    return normalize_history(pd.concat(raws, ignore_index=True))
+
+
+MODELS = Path(__file__).resolve().parents[1] / 'models'
+
+
+def model_scores(path, ent, norm, info, rid, distance, day, extras):
+    """採用済みの条件付きロジットのモデル（nar_backtest_test で作ったもの）で、出走馬の点を出す。"""
+    import keiba_model_v1 as v1
+    p, beta, data = v1.load_artifact(path)
+    race = {'レースID': rid, '開催日': day.strftime('%Y-%m-%d'), '競馬場': info.get('競馬場', ''), '距離': distance,
+            'クラス': '不明', '馬場': None}
+    f = v1.build_features(ent, norm.loc[pd.to_datetime(norm['日付'], errors='coerce') < day], race, p)
+    f = f.merge(extras, on='馬ID', how='left')
+    return pd.Series(v1.design(f, p) @ beta, index=f['馬ID'].astype(str)), data
+
+
 def load_pool(works):
     from keiba_model_data import normalize_history
     raws = [pd.read_csv(f, dtype=str) for w in works for f in (Path(w) / 'horses').glob('horse_*.csv') if f.name != 'horse_log.csv']
@@ -204,6 +225,7 @@ def main(argv=None):
     log['係数（全期間）'] = dict(zip(['切片'] + cols, map(float, allw)))
     daily, base = jockey_table(h)
     shorts = set(daily['騎手'].dropna())
+    norm = load_normalized(a.nar_work)
     tables, races = [], []
     for info_path in sorted(work.glob('info_*.json')):
         info = json.loads(info_path.read_text(encoding='utf-8'))
@@ -226,6 +248,19 @@ def main(argv=None):
             feats.append({'馬ID': str(e['馬ID']), **(f or {c: np.nan for c in FEATURES + V2_EXTRA + V3_EXTRA}), '戦績なし': f is None, '地方走数': local_runs})
         f = pd.DataFrame(feats)
         s = np.c_[np.ones(len(f)), standardize(rows, f, cols)] @ allw
+        venue = info.get('競馬場', '浦和')
+        main_path = MODELS / ('nar_v1.json' if venue == '浦和' else f'nar_{venue}.json')
+        f['方式'] = name
+        if main_path.exists():
+            ms, art = model_scores(main_path, ent, norm, info, rid, distance, day, f.drop(columns=['地方点'], errors='ignore'))
+            if art.get('採用'):
+                s = ms.reindex(f['馬ID']).to_numpy()
+                f['方式'] = art.get('版', main_path.stem)
+        if venue == '浦和' and (MODELS / 'nar_v1s.json').exists():
+            vs, _ = model_scores(MODELS / 'nar_v1s.json', ent, norm, info, rid, distance, day, f)
+            vs = vs.reindex(f['馬ID']).to_numpy()
+            f['nar-v1S点'] = ((vs - vs.min()) / (vs.max() - vs.min()) * 100).round(1) if vs.max() > vs.min() else 100.0
+            f['nar-v1S順位'] = pd.Series(vs).rank(ascending=False, method='first').astype(int).to_numpy()
         lo_, hi_ = s.min(), s.max()
         f['地方点'] = ((s - lo_) / (hi_ - lo_) * 100).round(1) if hi_ > lo_ else 100.0
         f = f.merge(ent[['馬ID', '馬番', '馬名', '騎手']], on='馬ID')

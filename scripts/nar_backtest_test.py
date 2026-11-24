@@ -249,21 +249,35 @@ def tier_check(t, pay, seed=0):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('--urawa', required=True)
-    ap.add_argument('--others')
+    ap.add_argument('--others', nargs='*', default=[])
+    ap.add_argument('--venue', default='浦和', help='予想の対象にする競馬場')
+    ap.add_argument('--set', choices=('C1', 'C2', 'C3'), help='fit-only：特徴量の組（第1段階で選んだ組）')
+    ap.add_argument('--train-venues', default='all', help='fit-only：all（集めた全場）か、対象の競馬場だけ（venue）')
+    ap.add_argument('--save', help='fit-only：保存先（models/nar_v1s.json など）')
     ap.add_argument('--out', required=True)
-    ap.add_argument('--stage', choices=('select', 'final'), default='final',
+    ap.add_argument('--stage', choices=('select', 'final', 'fit-only'), default='final',
                     help='select：選択の期間まで（検証の期間は見ない）。final：事前登録どおり検証の期間を1回見る')
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    dirs = [a.urawa] + ([a.others] if a.others else [])
+    dirs = [a.urawa] + list(a.others)
     nd = NarData(merged_dir(dirs, out / '_merged'))
-    venues_s = ['浦和', '大井', '川崎', '船橋'] if a.others else None
-    log = {'データ': {'浦和': a.urawa, 'その他': a.others}, '使える組み合わせ': [k for k in ORDER if k.endswith('U') or venues_s]}
-    sel_ids = ids_between(nd, ['浦和'], *SELECT)
+    target = a.venue
+    have = sorted(set(nd.data.races['競馬場'].dropna()) - {''})
+    venues_s = have if len(have) > 1 else None
+    if a.stage == 'fit-only':
+        venues = have if a.train_venues == 'all' else [target]
+        ids = ids_between(nd, venues, '2000-01-01', TEST[1])
+        p, beta = fit(nd, ids, SETS[a.set])
+        v1.save_artifact(a.save, p, beta, {'版': Path(a.save).stem, '特徴量の組': a.set, '学習の競馬場': venues, '学習レース': len(ids),
+                                          '学習期間の終わり': TEST[1], '対象': target})
+        print(json.dumps({'保存': a.save, '学習レース': len(ids), '競馬場': venues}, ensure_ascii=False))
+        return
+    log = {'データ': {'対象': target, 'フォルダ': dirs, '集めた競馬場': have}, '使える組み合わせ': [k for k in ORDER if k.endswith('U') or venues_s]}
+    sel_ids = ids_between(nd, [target], *SELECT)
     scores = {}
     for key in log['使える組み合わせ']:
-        venues = ['浦和'] if key.endswith('U') else venues_s
+        venues = [target] if key.endswith('U') else venues_s
         train = ids_between(nd, venues, '2000-01-01', SELECT_TRAIN_END)
         p, beta = fit(nd, train, SETS[key[:2]])
         per = keiba_eval_races(nd, sel_ids, predict(nd, sel_ids, p, beta))
@@ -272,7 +286,7 @@ def main(argv=None):
     best = max(scores.items(), key=lambda kv: (kv[1]['上位3勝ち馬率'], -ORDER.index(kv[0])))[0]
     log['選んだ組み合わせ'] = best
     # 区分の選び方の予備（検証で A が確かめられなかった場合に使う）は、選択の期間だけで決めておく
-    venues = ['浦和'] if best.endswith('U') else venues_s
+    venues = [target] if best.endswith('U') else venues_s
     p_sel, b_sel = fit(nd, ids_between(nd, venues, '2000-01-01', SELECT_TRAIN_END), SETS[best[:2]])
     pred_sel = predict(nd, sel_ids, p_sel, b_sel)
     pay_sel = payouts(nd, pred_sel, sel_ids)
@@ -286,7 +300,7 @@ def main(argv=None):
         return
     # 最終：〜8/31 で学習し直して、検証の期間（浦和）で1回だけ評価
     train = ids_between(nd, venues, '2000-01-01', FINAL_TRAIN_END)
-    test = ids_between(nd, ['浦和'], *TEST)
+    test = ids_between(nd, [target], *TEST)
     p, beta = fit(nd, train, SETS[best[:2]])
     mine = predict(nd, test, p, beta)
     preds = {best: mine, '近走人気だけ': popularity_rank(nd, test, p), 'nar-local-v1': local_v1_rank(nd, test, FINAL_TRAIN_END),
@@ -303,7 +317,7 @@ def main(argv=None):
                  f'{best}−近走人気だけ': keiba_eval.bootstrap_diff(by[best], by['近走人気だけ']),
                  f'{best}−nar-local-v1': keiba_eval.bootstrap_diff(by[best], by['nar-local-v1']),
                  f'{best}−無作為': {'差': float(rand.mean()), '下限': float(np.percentile(samp, 2.5)), '上限': float(np.percentile(samp, 97.5))}}
-    log['判定'] = '浦和の主予測を替える' if log['最終'][f'{best}−近走人気だけ']['下限'] > 0 else '替えない（根拠不足）'
+    log['判定'] = f'{target}の主予測を替える' if log['最終'][f'{best}−近走人気だけ']['下限'] > 0 else '替えない（根拠不足）'
     pay = payouts(nd, mine, test)
     t = tiers(nd, mine, test, 'both')
     tt = tier_table(t, pay)
@@ -319,12 +333,13 @@ def main(argv=None):
         if c2.get('下限', -1) > 0:
             log['信頼度の判定'] = f"地方で確かめ済み（予備の区分：{log['区分の予備']}）"
     log['信頼度別'] = tt.to_dict('records')
-    if log['判定'].startswith('浦和の主予測を替える'):
+    if log['判定'].endswith('主予測を替える'):
         all_train = ids_between(nd, venues, '2000-01-01', TEST[1])
         pf, bf = fit(nd, all_train, SETS[best[:2]])
-        v1.save_artifact(Path(__file__).resolve().parents[1] / 'models' / 'nar_v1.json', pf, bf,
-                         {'版': 'nar-v1', '組み合わせ': best, '学習レース': len(all_train)}) if hasattr(v1, 'save_artifact') else None
-        log['保存'] = 'models/nar_v1.json'
+        name = 'nar_v1.json' if target == '浦和' else f'nar_{target}.json'
+        v1.save_artifact(Path(__file__).resolve().parents[1] / 'models' / name, pf, bf,
+                         {'版': name[:-5], '組み合わせ': best, '学習レース': len(all_train), '対象': target, '採用': True})
+        log['保存'] = f'models/{name}'
     from keiba_registry import code_version
     log['コード版'] = code_version()
     (out / 'run_log.json').write_text(json.dumps(log, ensure_ascii=False, indent=1, default=str), encoding='utf-8')
