@@ -43,9 +43,10 @@ def tier_note(venue, tiers):
     rates = '・'.join(f"{k} {pct(t[k]['的中率'])}（{t[k]['レース数']}R）" for k in ('A', 'B', 'C') if k in t)
     src = f"（{t['方式']}の順位に区分を当てはめた結果）" if t.get('方式') else ''
     head = f"過去の{venue}（{t['期間']}）での5頭ボックス的中{src}：{rates}、全レース {pct(t['全レース']['的中率'])}"
+    note = f"（{t['注記']}）" if t.get('注記') else ''
     if t.get('確認済み'):
-        return head + '。過去の検証での実績で、当たる確率ではありません。'
-    return head + f"。ただし A と全レースの差ははっきりせず（95%区間の下限 {t['下限'] * 100:+.1f}pt）、区分は未確認です。"
+        return head + '。過去の検証での実績で、当たる確率ではありません。' + note
+    return head + f"。ただし A と全レースの差ははっきりせず（95%区間の下限 {t['下限'] * 100:+.1f}pt）、区分は未確認です。" + note
 
 
 def build(out, venue, date, tiers=None):
