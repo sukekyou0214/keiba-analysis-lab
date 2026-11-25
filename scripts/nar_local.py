@@ -188,6 +188,8 @@ def main(argv=None):
     ap.add_argument('--out', required=True)
     ap.add_argument('--date', default='2026-11-24')
     ap.add_argument('--version', choices=('v1', 'auto'), default='v1', help='auto：事前登録どおり v2 を判定して使う')
+    ap.add_argument('--ref', action='append', default=[], metavar='名前=モデルのパス',
+                    help='参考の順位を並べるモデル（主予測には使わない）。例：C3U=models/nar_urawa_c3u_ref.json')
     a = ap.parse_args(argv)
     work, out = Path(a.nar_work[0]), Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -256,11 +258,15 @@ def main(argv=None):
             if art.get('採用'):
                 s = ms.reindex(f['馬ID']).to_numpy()
                 f['方式'] = art.get('版', main_path.stem)
+        refs = [tuple(r.split('=', 1)) for r in a.ref]
         if venue == '浦和' and (MODELS / 'nar_v1s.json').exists():
-            vs, _ = model_scores(MODELS / 'nar_v1s.json', ent, norm, info, rid, distance, day, f)
+            refs.append(('nar-v1S', str(MODELS / 'nar_v1s.json')))
+        for ref_name, ref_path in refs:
+            vs, _ = model_scores(Path(ref_path), ent, norm, info, rid, distance, day, f)
             vs = vs.reindex(f['馬ID']).to_numpy()
-            f['nar-v1S点'] = ((vs - vs.min()) / (vs.max() - vs.min()) * 100).round(1) if vs.max() > vs.min() else 100.0
-            f['nar-v1S順位'] = pd.Series(vs).rank(ascending=False, method='first').astype(int).to_numpy()
+            f[f'{ref_name}点'] = ((vs - vs.min()) / (vs.max() - vs.min()) * 100).round(1) if vs.max() > vs.min() else 100.0
+            f[f'{ref_name}順位'] = pd.Series(vs).rank(ascending=False, method='first').astype(int).to_numpy()
+        log['参考のモデル'] = [n for n, _ in refs]
         lo_, hi_ = s.min(), s.max()
         f['地方点'] = ((s - lo_) / (hi_ - lo_) * 100).round(1) if hi_ > lo_ else 100.0
         f = f.merge(ent[['馬ID', '馬番', '馬名', '騎手']], on='馬ID')

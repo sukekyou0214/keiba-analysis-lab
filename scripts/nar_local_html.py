@@ -15,6 +15,13 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 TIERS = ROOT / 'models' / 'nar_tiers.json'
 WEEK = '月火水木金土日'
+REF_LABEL = {'nar-v1S': '4場版'}
+REF_NOTE = {
+    'nar-v1S': ('参考：南関東4場版（検証中）', 'nar-v1S（浦和・大井・川崎・船橋で学習）の順位を並べています。'
+                '11/26 以降の浦和で前向きに確かめている途中で、主予測ではありません。'),
+    'C3U': ('参考：C3U（検証で不採用）', '浦和だけで学習し、地方の4つと格付けの3つを足した組です。9/1〜11/24 の浦和118レースで'
+            '近走人気だけを +9.3pt 上回りましたが、95%区間の下限が 0.0 で採用の条件に届きませんでした。主予測ではありません。'),
+}
 
 CSS = """:root{--bg:#fff;--fg:#1a1a1a;--mut:#666;--line:#ddd;--hi:#eef4ff;--bar:#3b6fd8;--a:#1f7a3d;--b:#a86b00;--c:#777}
 @media (prefers-color-scheme:dark){:root{--bg:#16181c;--fg:#eee;--mut:#aaa;--line:#333;--hi:#1e2a40;--bar:#6c9cff;--a:#5fd08a;--b:#f0b44c;--c:#999}}
@@ -49,7 +56,7 @@ def build(out, venue, date, tiers=None):
     log = json.loads((out / 'run_log.json').read_text(encoding='utf-8'))
     day = pd.Timestamp(date)
     method = ranks['方式'].iloc[0] if '方式' in ranks and len(ranks) else log.get('使う方式', 'nar-local-v1')
-    has_s = 'nar-v1S順位' in ranks
+    refs = [c[:-2] for c in ranks.columns if c.endswith('順位') and c != '順位']
     tier = tier.sort_values(['信頼度', 'ボックス向き順'])
     auc = log.get('AUC', {})
     d = log.get(f"AUC差（{log.get('使う方式', 'nar-local-v1')[-2:]}−近走人気）", log.get('AUC差（v1−近走人気）', {}))
@@ -62,28 +69,29 @@ def build(out, venue, date, tiers=None):
          + (f"使う方式 − 近走人気だけ：{d.get('差', float('nan')):+.3f}（95%区間 {d.get('下限', float('nan')):+.3f}〜{d.get('上限', float('nan')):+.3f}）→ {html.escape(log.get('判定', ''))}" if d else '')
          + '</div>',
          f'<div class=box><b>信頼度について</b><br>{html.escape(tier_note(venue, tiers))}</div>',
-         '<h2>信頼度別（上位5頭の馬番）</h2><table><tr><th>信頼度</th><th>R</th><th>発走</th><th>頭数</th><th>上位5頭</th></tr>']
+         '<h2>信頼度別（上位5頭の馬番）</h2><table><tr><th>信頼度</th><th>R</th><th>発走</th><th>頭数</th><th>上位5頭</th>' + ''.join(f'<th>{html.escape(REF_LABEL.get(n, n))}上位5頭</th>' for n in refs) + '</tr>']
     for _, r in tier.iterrows():
         g = ranks.loc[ranks['レースID'].eq(r['レースID'])].sort_values('順位')
         top = '・'.join(g['馬番'].head(5).astype(str))
         rno = str(r['レース']).split()[0]
-        p.append(f"<tr><td class=t{r['信頼度']}>{r['信頼度']}</td><td>{html.escape(rno)}</td><td>{html.escape(str(r['発走']))}</td><td>{r['頭数']}</td><td>{top}</td></tr>")
+        ref_tops = ''.join('<td class=mut>' + '・'.join(g.sort_values(f'{n}順位')['馬番'].head(5).astype(str)) + '</td>' for n in refs)
+        p.append(f"<tr><td class=t{r['信頼度']}>{r['信頼度']}</td><td>{html.escape(rno)}</td><td>{html.escape(str(r['発走']))}</td><td>{r['頭数']}</td><td>{top}</td>{ref_tops}</tr>")
     p.append('</table><p class=mut>信頼度：ボックス向きの順（頭数の少ない順、同じなら上位5頭と6位以下の点差の大きい順）で A＝上位3、B＝4〜6、C＝7以下。'
              '地方の戦績が2走未満の馬が2頭以上いれば1段下げる。</p>')
-    if has_s:
-        p.append('<div class=box><b>参考：南関東4場版（検証中）</b><br>nar-v1S（浦和・大井・川崎・船橋で学習）の順位を各レースの表に並べています。'
-                 '11/26 以降の浦和で前向きに確かめている途中で、主予測ではありません。</div>')
+    for n in refs:
+        title, note = REF_NOTE.get(n, (f'参考：{n}', '参考として並べた順位で、主予測ではありません。'))
+        p.append(f'<div class=box><b>{html.escape(title)}</b><br>{html.escape(note)}</div>')
     p.append('<h2>各レース</h2>')
     for rid, g in ranks.groupby('レースID', sort=False):
         g = g.sort_values('順位')
         t = tier.loc[tier['レースID'].eq(rid), '信頼度']
         t = t.iloc[0] if len(t) else ''
         p.append(f"<details><summary><b class=t{t}>{t}</b> {html.escape(str(g['レース'].iloc[0]))}</summary><table><tr><th>順位</th><th>馬番</th><th>馬名</th><th>騎手</th><th>地方点</th>"
-                 + ('<th>4場版</th>' if has_s else '') + '</tr>')
+                 + ''.join(f'<th>{html.escape(REF_LABEL.get(n, n))}</th>' for n in refs) + '</tr>')
         for _, h in g.iterrows():
             w = max(0.0, min(100.0, float(h['地方点'])))
             cls = ' class=top' if h['順位'] <= 5 else ''
-            s = f"<td>{int(h['nar-v1S順位'])}</td>" if has_s and pd.notna(h.get('nar-v1S順位')) else ('<td>—</td>' if has_s else '')
+            s = ''.join(f"<td>{int(h[f'{n}順位'])}</td>" if pd.notna(h.get(f'{n}順位')) else '<td>—</td>' for n in refs)
             p.append(f"<tr{cls}><td>{h['順位']}</td><td>{html.escape(str(h['馬番']))}</td><td class=n>{html.escape(str(h['馬名']))}</td>"
                      f"<td>{html.escape(str(h['騎手']))}</td><td class=pt><span style='--w:{w:.1f}%'></span>{w:.0f}</td>{s}</tr>")
         p.append('</table></details>')
