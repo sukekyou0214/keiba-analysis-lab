@@ -283,7 +283,13 @@ def main(argv=None):
     if tables:
         allt = pd.concat(tables, ignore_index=True).sort_values(['発走', '順位'])
         allt.to_csv(out / f'地方参考順位_{a.date}.csv', index=False, encoding='utf-8-sig')
-        r = pd.DataFrame(races).sort_values(['頭数', '点差', 'レースID'], ascending=[True, False, True])
+        # 区分の選び方：検証で確かめた競馬場は、そのときの選び方（models/nar_tiers.json の「区分の選び方」）を使う
+        tiers_path = MODELS / 'nar_tiers.json'
+        rule = json.loads(tiers_path.read_text(encoding='utf-8')).get(venue, {}).get('区分の選び方', 'both') if tiers_path.exists() else 'both'
+        keys = {'both': (['頭数', '点差', 'レースID'], [True, False, True]), 'size': (['頭数', 'レースID'], [True, True]),
+                'gap': (['点差', 'レースID'], [False, True])}[rule]
+        r = pd.DataFrame(races).sort_values(keys[0], ascending=keys[1])
+        log['区分の選び方'] = rule
         r['ボックス向き順'] = range(1, len(r) + 1)
         tier = np.where(r['ボックス向き順'] <= 3, 0, np.where(r['ボックス向き順'] <= 6, 1, 2)) + (r['戦績少'] >= 2).astype(int)
         r['信頼度'] = np.array(['A', 'B', 'C', 'C'])[np.minimum(tier, 3)]

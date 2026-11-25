@@ -21,6 +21,8 @@ class TierNoteTests(unittest.TestCase):
         self.assertIn('当たる確率ではありません', s)
         t['確認済み'] = False
         self.assertIn('区分は未確認', nh.tier_note('大井', {'大井': t}))
+        t['注記'] = '頭数だけの区分で確かめたもの'
+        self.assertIn('（頭数だけの区分で確かめたもの）', nh.tier_note('大井', {'大井': t}))
 
 
 class BuildTests(unittest.TestCase):
