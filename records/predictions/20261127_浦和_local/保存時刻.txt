@@ -1,0 +1,2 @@
+保存時刻: 2026-11-26 18:45 JST（全12レースの発走前）
+主予測: nar_local.py --version auto（事前登録の規則で nar-local-v2 を選んだ）。影: nar-local-v1。参考: nar-v1S。
