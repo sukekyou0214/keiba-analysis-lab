@@ -144,7 +144,9 @@ def main(argv=None):
     pb = vc.spec(base, list(base.features) + ['近走人気', *A_SET, *B_SET])
     b5, ba, bb = (vc.fit([(s, s.ids) for s in trains], p) for p in (p5, pa, pb))
     test = v8_season(args.test_backtest)
-    ids = [r for r in test.ids if not test.data.debut(r)]
+    # 取得が壊れたレース（距離が読めない＝結果ページが文字化けして着順もない）は除く。結果を見る前に決めた除外で、件数は run_log に残す
+    broken = [r for r in test.ids if pd.isna(pd.to_numeric(test.data.races.loc[r, '距離'], errors='coerce'))]
+    ids = [r for r in test.ids if r not in broken and not test.data.debut(r)]
     preds = {'全馬共通': pd.concat([keiba_eval.frozen_rank(test.data.bt, test.data.races.loc[r].to_dict() | {'レースID': r}, 'common')
                                  for r in ids]),
              'v5': v4.predict(test, ids, p5, b5), 'v8a': v4.predict(test, ids, pa, ba), 'v8b': v4.predict(test, ids, pb, bb),
@@ -154,7 +156,7 @@ def main(argv=None):
     summary = per.groupby('モデル').apply(keiba_eval.summarize, include_groups=False).reset_index()
     summary.to_csv(out / 'summary.csv', index=False, encoding='utf-8-sig')
     by = {m: per.loc[per['モデル'].eq(m)] for m in preds}
-    log = {'学習レース': sum(len(s.ids) for s in trains), '評価レース（新馬戦以外）': len(ids),
+    log = {'学習レース': sum(len(s.ids) for s in trains), '評価レース（新馬戦以外）': len(ids), '取得が壊れて除いたレース': broken,
            '係数': {n: dict(zip(p.features, map(float, b))) for n, p, b in (('v5', p5, b5), ('v8a', pa, ba), ('v8b', pb, bb))}}
     for a, b in (('v8a', 'v5'), ('v8b', 'v8a'), ('v8b', 'v5'), ('v5', '全馬共通')):
         log[f'{a}−{b}'] = keiba_eval.bootstrap_diff(by[a], by[b])
