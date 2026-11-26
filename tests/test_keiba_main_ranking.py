@@ -27,6 +27,13 @@ class MainRankingTests(unittest.TestCase):
         self.assertEqual(out['評価項目充足率'],100)
         self.assertTrue(out['妙味'].startswith('中穴候補'))
 
+    def test_no_graded_history_keeps_coverage_columns(self):
+        data=self.data().assign(レース格='')
+        out=main_ranking(data,{'1':'参考順位の試験馬'},main_context('202608050411',{}),self.metadata(),graded_only=True)
+        self.assertIn('評価項目充足率',out)
+        self.assertIn('近5走有効数',out)
+        self.assertTrue(out['参考順位'].isna().all())
+
     def test_foreign_popularity_never_produces_candidate(self):
         out=self.run_rank(self.data(),self.metadata('https://race.netkeiba.com/race/shutuba.html?race_id=202605041111')).iloc[0]
         self.assertTrue(pd.isna(out['想定人気']))
