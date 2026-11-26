@@ -40,6 +40,9 @@ def main_ranking(data, horses, context, metadata=None, pace='M', graded_only=Tru
         result=rank_entries(pd.DataFrame(rows),selected,config=SimpleNamespace(**context),pace=pace)
     if result.empty:
         return result
+    for col in ('評価項目充足率','近5走有効数'):
+        if col not in result:  # 対象の戦績が全頭ない（重賞の2歳戦など）と列ができない
+            result[col]=float('nan')
     known=set(data['馬ID'].dropna().astype(str).str.replace(r'\.0$','',regex=True)) if '馬ID' in data else set()
     ids=result['馬ID'].astype(str)
     no_history=~ids.isin(known)
