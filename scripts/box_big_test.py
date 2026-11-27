@@ -57,7 +57,7 @@ def race_table(path):
         combo = '-'.join(sorted(top3['馬番'].astype(str), key=int)) if settled else ''
         hit = settled and set(top3['馬番'].astype(str)) <= top5
         pays = [p for p in (infos.get(rid, {}).get('払戻') or []) if p.get('券種') == '三連複']
-        paid = float(sum(p['払戻'] for p in pays if '-'.join(sorted(str(p['組番']).split('-'), key=int)) == combo)) * 10 if hit else 0.0
+        paid = float(sum(p['払戻'] for p in pays if '-'.join(sorted(str(p['組番']).split('-'), key=int)) == combo)) if hit else 0.0  # 当たりは10点のうち1点（100円）なので払戻はそのまま
         pop = pd.to_numeric(starters['人気'], errors='coerce') if '人気' in starters else pd.Series(dtype=float)
         pop5 = set(starters.loc[pop.le(5), '馬番'].astype(str))
         rows.append({'レースID': rid, '日付': season.data.races.loc[rid, '開催日'], '頭数': len(starters), 'B2': vals['B2'], 'B3': vals['B3'],
